@@ -1,0 +1,3587 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no"/>
+<title>Brush Manufacturing Tracker</title>
+<meta name="application-name" content="Brush Tracker"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="apple-mobile-web-app-title" content="Brush Tracker"/>
+<meta name="mobile-web-app-capable" content="yes"/>
+<meta name="theme-color" content="#5c3d1e"/>
+<link rel="manifest" id="manifestLink"/>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:system-ui,sans-serif;}
+body{background:#f5f0eb;color:#2d1f0f;min-height:100vh;}
+button,input,select{font-family:inherit;}
+.header{background:#5c3d1e;color:#fff;padding:16px 20px;display:flex;justify-content:space-between;align-items:center;}
+.header-title{font-size:20px;font-weight:700;}
+.header-sub{font-size:12px;opacity:0.8;}
+.tabs{display:flex;background:#7a5230;overflow-x:auto;}
+.tab{padding:10px 14px;border:none;cursor:pointer;white-space:nowrap;font-size:13px;font-weight:600;background:transparent;color:#f5e6d8;border-bottom:3px solid transparent;}
+.tab.active{background:#f5f0eb;color:#5c3d1e;border-bottom:3px solid #5c3d1e;}
+.content{padding:16px;max-width:600px;margin:0 auto;}
+.card{background:#fff;border-radius:10px;padding:16px;margin-bottom:14px;box-shadow:0 1px 4px rgba(0,0,0,0.08);}
+.label{font-size:11px;font-weight:700;color:#7a5230;text-transform:uppercase;margin-bottom:4px;}
+input,select{width:100%;padding:8px 10px;border:1px solid #d4b896;border-radius:6px;font-size:14px;background:#fff;margin-bottom:8px;}
+.btn{border:none;border-radius:6px;padding:9px 16px;cursor:pointer;font-weight:600;font-size:13px;color:#fff;}
+.btn:disabled{background:#ccc!important;cursor:not-allowed;}
+.btn-green{background:#27ae60;}
+.btn-red{background:#c0392b;}
+.btn-brown{background:#5c3d1e;}
+.btn-orange{background:#e67e22;}
+.btn-blue{background:#3498db;}
+.btn-gray{background:#888;}
+.btn-full{width:100%;font-size:14px;padding:12px;}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;}
+.row{display:flex;justify-content:space-between;align-items:center;}
+.msg{font-size:13px;margin-top:8px;padding:6px 10px;border-radius:6px;}
+.msg.ok{color:#27ae60;}
+.msg.err{color:#e74c3c;}
+.batch-item{display:flex;justify-content:space-between;font-size:12px;padding:6px 8px;background:#f9f5f0;border-radius:4px;margin-bottom:4px;}
+.scrap-item{padding:8px;background:#fff3cd;border-radius:6px;margin-bottom:8px;}
+.prod-item{font-size:12px;padding:8px 0;border-bottom:1px solid #f0e8de;}
+.select-batch-btn{display:flex;justify-content:space-between;align-items:center;width:100%;padding:10px 14px;margin-bottom:8px;border-radius:8px;cursor:pointer;border:2px solid #d4b896;background:#f9f5f0;font-size:14px;}
+.select-batch-btn.selected{border-color:#27ae60;background:#e8f5e9;font-weight:700;}
+.select-batch-btn.scrap{border-color:#f0c88a;background:#fffaf0;}
+.select-batch-btn.scrap.selected{border-color:#e67e22;background:#fff3cd;}
+.open-badge{position:absolute;top:4px;right:5px;font-size:9px;background:#27ae60;color:#fff;border-radius:4px;padding:1px 4px;}
+.size-btn{background:#fff;color:#5c3d1e;border:2px solid #d4b896;border-radius:8px;padding:12px 8px;cursor:pointer;font-size:13px;font-weight:600;text-align:center;position:relative;}
+.size-btn.active{background:#5c3d1e;color:#fff;border-color:#5c3d1e;}
+.calc-box{background:#f5f0eb;border-radius:8px;padding:12px;margin-bottom:12px;}
+.calc-num{font-weight:700;font-size:18px;}
+.rem-box{border-radius:6px;padding:8px;border-left:4px solid #27ae60;background:#e8f4e8;font-size:11px;margin-top:10px;}
+.rem-box.waste{border-color:#e67e22;background:#fff3cd;}
+.modal-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:100;display:flex;align-items:center;justify-content:center;padding:20px;}
+.modal{background:#fff;border-radius:12px;padding:24px;max-width:400px;width:100%;}
+.reset-bar{padding:12px 16px;display:flex;justify-content:space-between;align-items:center;color:#fff;}
+.wastage-card-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;font-size:11px;background:#f9f5f0;border-radius:6px;padding:10px;}
+.hidden{display:none;}
+.aaa{color:#aaa;}
+.green{color:#27ae60;}
+.orange{color:#e67e22;}
+.brown{color:#5c3d1e;}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <div class="header-title">🪥 Brush Manufacturing Tracker</div>
+    <div class="header-sub">Multi-Department with Smart Production</div>
+  </div>
+  <div style="display:flex;gap:6px;">
+    <button class="btn btn-orange" onclick="confirmResetProd()" style="font-size:11px;padding:7px 10px;">🗑️ Prod</button>
+    <button class="btn btn-red" onclick="confirmResetAll()" style="font-size:11px;padding:7px 10px;">🗑️ All</button>
+    <button onclick="logout()" style="background:#a0522d;color:#fff;border:none;border-radius:6px;padding:7px 10px;font-size:11px;font-weight:700;cursor:pointer;">🚪 Logout</button>
+  </div>
+</div>
+
+<!-- Admin Modal -->
+<div id="adminModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:200;align-items:center;justify-content:center;padding:20px;">
+  <div style="background:#fff;border-radius:12px;padding:24px;max-width:400px;width:100%;max-height:90vh;overflow-y:auto;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+      <div style="font-size:16px;font-weight:700;color:#5c3d1e;" id="adminModalTitle"></div>
+      <button onclick="document.getElementById('adminModal').style.display='none'" style="background:none;border:none;font-size:20px;cursor:pointer;color:#888;">✕</button>
+    </div>
+    <div id="adminModalBody"></div>
+  </div>
+</div>
+
+<!-- Login Screen -->
+<div id="loginScreen" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:#5c3d1e;z-index:998;flex-direction:column;align-items:center;justify-content:center;padding:20px;">
+  <div style="font-size:48px;margin-bottom:12px;">🪥</div>
+  <div style="font-size:22px;font-weight:700;color:#fff;margin-bottom:4px;">Brush Manufacturing</div>
+  <div style="font-size:14px;color:#d4b896;margin-bottom:32px;">Tracker</div>
+  <div style="background:#fff;border-radius:12px;padding:24px;width:100%;max-width:360px;">
+    <div style="font-size:16px;font-weight:700;color:#5c3d1e;margin-bottom:16px;text-align:center;">Sign In</div>
+    <div style="font-size:11px;font-weight:700;color:#7a5230;text-transform:uppercase;margin-bottom:4px;">Your Name</div>
+    <input id="loginName" type="text" placeholder="e.g. Ahmed" style="width:100%;padding:10px;border:1px solid #d4b896;border-radius:6px;font-size:14px;margin-bottom:12px;box-sizing:border-box;"/>
+    <div style="font-size:11px;font-weight:700;color:#7a5230;text-transform:uppercase;margin-bottom:4px;">Password</div>
+    <input id="loginPass" type="password" placeholder="Enter your password" style="width:100%;padding:10px;border:1px solid #d4b896;border-radius:6px;font-size:14px;margin-bottom:16px;box-sizing:border-box;" onkeydown="if(event.key==='Enter')doLogin()"/>
+    <button onclick="doLogin()" style="width:100%;background:#5c3d1e;color:#fff;border:none;border-radius:8px;padding:12px;font-size:15px;font-weight:700;cursor:pointer;">Sign In</button>
+    <div id="loginErr" style="color:#e74c3c;font-size:12px;margin-top:10px;text-align:center;display:none;"></div>
+  </div>
+</div>
+
+<!-- Loading Screen -->
+<div id="loadingScreen" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(92,61,30,0.95);z-index:999;flex-direction:column;align-items:center;justify-content:center;color:#fff;">
+  <div style="font-size:40px;margin-bottom:16px;">🪥</div>
+  <div style="font-size:18px;font-weight:700;margin-bottom:8px;">Brush Manufacturing Tracker</div>
+  <div style="font-size:13px;opacity:0.8;margin-bottom:24px;">Loading data from cloud...</div>
+  <div style="width:50px;height:50px;border:4px solid rgba(255,255,255,0.3);border-top:4px solid #fff;border-radius:50%;animation:spin 1s linear infinite;"></div>
+</div>
+<style>@keyframes spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}</style>
+
+<div id="resetProdBar" class="reset-bar hidden" style="background:#e67e22;">
+  <span style="font-size:13px;font-weight:600;">Delete all production & wastage data?</span>
+  <div style="display:flex;gap:8px;">
+    <button class="btn" style="background:#fff;color:#e67e22;" onclick="resetProduction()">Yes</button>
+    <button class="btn" style="background:transparent;border:2px solid #fff;" onclick="hideResetBars()">Cancel</button>
+  </div>
+</div>
+<div id="resetAllBar" class="reset-bar hidden" style="background:#c0392b;">
+  <span style="font-size:13px;font-weight:600;">Delete ALL data? Cannot be undone.</span>
+  <div style="display:flex;gap:8px;">
+    <button class="btn" style="background:#fff;color:#c0392b;" onclick="resetAll()">Yes</button>
+    <button class="btn" style="background:transparent;border:2px solid #fff;" onclick="hideResetBars()">Cancel</button>
+  </div>
+</div>
+
+<div class="tabs">
+  <button class="tab active" onclick="switchTab('Dashboard',this)">Dashboard</button>
+  <button class="tab" onclick="switchTab('Production',this)">Wood Finishing</button>
+  <button class="tab" onclick="switchTab('BrushDept',this)">🪥 Brush Dept</button>
+  <button class="tab" onclick="switchTab('SocketDept',this)">🔌 Socket Dept</button>
+  <button class="tab" onclick="switchTab('Inventory',this)">Inventory</button>
+  <button class="tab" onclick="switchTab('Wastage',this)">Wastage</button>
+  <button class="tab" onclick="switchTab('Materials',this)">Materials</button>
+  <button class="tab" onclick="switchTab('BOM',this)">🔩 BOM</button>
+  <button class="tab" onclick="switchTab('Ledger',this)">📒 Ledger</button>
+  <button class="tab" onclick="switchTab('Sales',this)">💰 Sales</button>
+  <button class="tab" id="adminTab" onclick="switchTab('Admin',this)">⚙️ Admin</button>
+</div>
+
+<div id="installBar" class="hidden" style="background:#5c3d1e;color:#fff;padding:10px 16px;display:flex;justify-content:space-between;align-items:center;">
+  <span style="font-size:13px;">📲 Add to Home Screen for app experience</span>
+  <button onclick="installApp()" style="background:#d4a84b;color:#fff;border:none;border-radius:6px;padding:6px 14px;font-weight:700;font-size:13px;cursor:pointer;">Install</button>
+</div>
+<div class="content">
+  <div id="tab-Dashboard"></div>
+  <div id="tab-Production" class="hidden"></div>
+  <div id="tab-BrushDept" class="hidden"></div>
+  <div id="tab-SocketDept" class="hidden"></div>
+  <div id="tab-Inventory" class="hidden"></div>
+  <div id="tab-Wastage" class="hidden"></div>
+  <div id="tab-Materials" class="hidden"></div>
+  <div id="tab-BOM" class="hidden"></div>
+  <div id="tab-Ledger" class="hidden"></div>
+  <div id="tab-Sales" class="hidden"></div>
+  <div id="tab-Admin" class="hidden"></div>
+</div>
+
+<div id="closeModal" class="modal-overlay hidden">
+  <div class="modal">
+    <div style="font-size:16px;font-weight:700;margin-bottom:4px;" id="modalTitle"></div>
+    <div style="font-size:12px;color:#666;margin-bottom:16px;" id="modalSub"></div>
+    <div style="background:#f5f0eb;border-radius:8px;padding:12px;margin-bottom:16px;" id="modalSummary"></div>
+    <div id="qcWastageDisplay" style="display:none;background:#fdecea;border-radius:8px;padding:10px;margin-bottom:12px;">
+      <div style="font-size:11px;color:#888;">Already recorded from rejected pieces (Quality Control)</div>
+      <div style="font-size:20px;font-weight:700;color:#e74c3c;" id="qcWastageDisplayValue">0 KG</div>
+    </div>
+    <div class="label">Add Extra Manual Wastage (KG)</div>
+    <input type="number" step="0.1" min="0" placeholder="0 (leave empty if none)" id="manualWastageKgInput" oninput="renderWasteTypeSplit('manualWasteTypeSplit','manualWastageKgInput')" style="margin-bottom:6px;"/>
+    <div style="font-size:11px;color:#888;margin-bottom:10px;">Enter any ADDITIONAL wastage you collected for this batch that wasn't already counted above (e.g. sawdust, offcuts). Leave at 0 if the QC amount above already covers everything.</div>
+    <div id="manualWasteTypeSplit" style="margin-bottom:14px;"></div>
+    <div id="wastageErr" class="msg err hidden"></div>
+    <div style="display:flex;gap:10px;">
+      <button class="btn btn-red" style="flex:1;" onclick="confirmClose()">🔒 Close & Save</button>
+      <button class="btn btn-gray" style="flex:1;" onclick="document.getElementById('closeModal').classList.add('hidden')">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const SK = {
+  materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
+  production:"wbt_production", scrapInventory:"wbt_scrap_inventory",
+  wastage:"wbt_wastage", openBatches:"wbt_open_batches", closedBatches:"wbt_closed_batches",
+  ledger:"wbt_ledger", sales:"wbt_sales", users:"wbt_users",
+  finishedInventory:"wbt_finished_inventory", reworkStock:"wbt_rework_stock",
+  finishedBrushes:"wbt_finished_brushes", brushScrapLog:"wbt_brush_scrap_log",
+  socketInventory:"wbt_socket_inventory", screwInventory:"wbt_screw_inventory",
+  socketTypes:"wbt_socket_types",
+  readyForSale:"wbt_ready_for_sale",
+  voidLog:"wbt_void_log"
+};
+
+const DEFAULT_USERS = [
+  { id:1, name:"Admin",              password:"admin123",   role:"admin",      tabs:["Dashboard","Wood Finishing","Brush Dept","Socket Dept","Inventory","Wastage","Materials","BOM","Ledger","Sales"], voidPermissions:{} },
+  { id:2, name:"Production Manager", password:"prod123",    role:"production", tabs:["Dashboard","Wood Finishing","Brush Dept","Socket Dept"], voidPermissions:{"Wood Finishing":{canVoid:true,maxVoids:2,canFlag:true}} },
+  { id:3, name:"Store Keeper",       password:"store123",   role:"store",      tabs:["Inventory","Materials","BOM","Ledger"], voidPermissions:{} },
+  { id:4, name:"Accountant",         password:"accounts123",role:"accountant", tabs:["Wastage","Sales"], voidPermissions:{"Wastage":{canVoid:false,maxVoids:0,canFlag:true},"Sales":{canVoid:false,maxVoids:0,canFlag:true}} },
+  { id:5, name:"Owner",              password:"owner123",   role:"owner",      tabs:["Dashboard","Wood Finishing","Brush Dept","Socket Dept","Inventory","Wastage","Materials","BOM","Ledger","Sales"], voidPermissions:{} },
+];
+const PLANK_SIZES = ["12","24","36"];
+const WASTE_TYPES = ["Bhusa", "Patti", "Gitta"];
+const DEFAULT_WOOD_PIECES = [
+  {id:1,name:"Commando Broom",size:11},
+  {id:2,name:"Commando Gittuk",size:5.5},
+  {id:3,name:"Rainbow Broom",size:17}
+];
+
+const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzu3TXN0zoqKwPQyMkwUY34D3yQOg3CX_kq8YLcBd7mahmySvsW1gMSEaWVP4AeocHd/exec';
+let syncTimeout = null;
+let syncStatus = 'idle'; // idle | saving | error
+
+// Local storage fallback functions
+function ld(k,fb){try{const v=localStorage.getItem(k);return v?JSON.parse(v):fb;}catch(e){return fb;}}
+function sv(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch(e){}}
+
+// Sync all state to Google Sheets (debounced 1.5s)
+function syncToSheets(){
+  clearTimeout(syncTimeout);
+  syncTimeout = setTimeout(async ()=>{
+    syncStatus='saving';
+    updateSyncIndicator();
+    const payload = {
+      [SK.materials]: JSON.stringify(state.materials),
+      [SK.woodPieces]: JSON.stringify(state.woodPieces),
+      [SK.production]: JSON.stringify(state.production),
+      [SK.scrapInventory]: JSON.stringify(state.scrapInventory),
+      [SK.wastage]: JSON.stringify(state.wastage),
+      [SK.openBatches]: JSON.stringify(state.openBatches),
+      [SK.closedBatches]: JSON.stringify(state.closedBatches),
+      [SK.ledger]: JSON.stringify(state.ledger),
+      [SK.sales]: JSON.stringify(state.sales),
+      [SK.users]: JSON.stringify(state.users),
+      [SK.finishedInventory]: JSON.stringify(state.finishedInventory),
+      [SK.reworkStock]: JSON.stringify(state.reworkStock),
+      [SK.finishedBrushes]: JSON.stringify(state.finishedBrushes),
+      [SK.brushScrapLog]: JSON.stringify(state.brushScrapLog),
+      [SK.socketInventory]: JSON.stringify(state.socketInventory),
+      [SK.socketTypes]: JSON.stringify(state.socketTypes),
+      [SK.screwInventory]: JSON.stringify(state.screwInventory),
+      [SK.readyForSale]: JSON.stringify(state.readyForSale),
+      [SK.voidLog]: JSON.stringify(state.voidLog),
+    };
+    try{
+      // Try normal fetch first (works on https)
+      let saved = false;
+      try{
+        const res = await fetch(SCRIPT_URL, {
+          method:'POST',
+          headers:{'Content-Type':'text/plain'},
+          body: JSON.stringify({action:'setAll', data:payload})
+        });
+        if(res.ok || res.type==='opaque') saved=true;
+      } catch(e){
+        // Fallback to no-cors
+        await fetch(SCRIPT_URL, {
+          method:'POST',
+          mode:'no-cors',
+          body: JSON.stringify({action:'setAll', data:payload})
+        });
+        saved=true;
+      }
+      syncStatus = saved ? 'saved' : 'error';
+    } catch(err){
+      syncStatus='error';
+      console.error('Sync error:',err);
+    }
+    updateSyncIndicator();
+    setTimeout(()=>{syncStatus='idle';updateSyncIndicator();},2000);
+  }, 1500);
+}
+
+function updateSyncIndicator(){
+  const el = document.getElementById('syncIndicator');
+  if(!el) return;
+  if(syncStatus==='saving') { el.textContent='⏳ Syncing...'; el.style.color='#e67e22'; }
+  else if(syncStatus==='saved') { el.textContent='✅ Synced'; el.style.color='#27ae60'; }
+  else if(syncStatus==='error') { el.textContent='❌ Sync failed'; el.style.color='#e74c3c'; }
+  else { el.textContent=''; }
+}
+
+// Load all data from Google Sheets using iframe trick (avoids CORS)
+function loadFromSheets(){
+  const loadingEl = document.getElementById('loadingScreen');
+  if(loadingEl) loadingEl.style.display='flex';
+
+  // Timeout fallback — use local data if sheets unreachable
+  const timer = setTimeout(()=>{
+    console.log('Sheets timeout, using local data');
+    if(loadingEl) loadingEl.style.display='none';
+    initApp();
+  }, 10000);
+
+  // Use fetch with no-cors for GET via a workaround:
+  // Append data as URL param to GET request using script tag
+  const cbName = 'btLoad'+Math.random().toString(36).slice(2);
+  window[cbName] = function(json){
+    clearTimeout(timer);
+    try{
+      if(json && json.success && json.data){
+        Object.entries(SK).forEach(([stateKey, sheetKey])=>{
+          if(json.data[sheetKey]){
+            try{ state[stateKey]=JSON.parse(json.data[sheetKey]); }catch(e){}
+          }
+        });
+        Object.entries(SK).forEach(([k,v])=>{ sv(v,state[k]); });
+        console.log('Loaded from Google Sheets successfully');
+      }
+    } catch(e){ console.log('Parse error:', e); }
+    delete window[cbName];
+    document.getElementById('btLoadScript')?.remove();
+    if(loadingEl) loadingEl.style.display='none';
+    initApp();
+  };
+
+  // Try fetch first (works when hosted on https)
+  fetch(SCRIPT_URL+'?action=getAll')
+    .then(r=>r.json())
+    .then(json=>{
+      clearTimeout(timer);
+      window[cbName](json);
+    })
+    .catch(()=>{
+      // Fallback to JSONP
+      const s=document.createElement('script');
+      s.id='btLoadScript';
+      s.src=SCRIPT_URL+'?action=getAll&callback='+cbName;
+      s.onerror=()=>{
+        clearTimeout(timer);
+        console.log('All load methods failed, using local data');
+        delete window[cbName];
+        if(loadingEl) loadingEl.style.display='none';
+        initApp();
+      };
+      document.head.appendChild(s);
+    });
+}
+function emptyMats(){return{"12":{name:'Wooden Planks 12"',size:12,low:50,batches:[]},"24":{name:'Wooden Planks 24"',size:24,low:30,batches:[]},"36":{name:'Wooden Planks 36"',size:36,low:20,batches:[]}};}
+
+let currentUser = null; // logged in user
+
+
+let state = {
+  materials: ld(SK.materials, emptyMats()),
+  woodPieces: ld(SK.woodPieces, DEFAULT_WOOD_PIECES),
+  production: ld(SK.production, []),
+  scrapInventory: ld(SK.scrapInventory, []),
+  wastage: ld(SK.wastage, []),
+  openBatches: ld(SK.openBatches, {}),
+  closedBatches: ld(SK.closedBatches, []),
+  ledger: ld(SK.ledger, []),
+  sales: ld(SK.sales, []),
+  users: ld(SK.users, DEFAULT_USERS),
+  finishedInventory: ld(SK.finishedInventory, []),
+  reworkStock: ld(SK.reworkStock, []),
+  finishedBrushes: ld(SK.finishedBrushes, []),
+  brushScrapLog: ld(SK.brushScrapLog, []),
+  socketInventory: ld(SK.socketInventory, []),
+  socketTypes: ld(SK.socketTypes, []),
+  screwInventory: ld(SK.screwInventory, []),
+  readyForSale: ld(SK.readyForSale, []),
+  voidLog: ld(SK.voidLog, []),
+  saleModal: null,
+  ledgerFilterFrom: '', ledgerFilterTo: '', ledgerFilterSection: 'all',
+  ledgerFilterSize: 'all', ledgerFilterBatch: 'all', ledgerFilterDirection: 'all',
+  currentTab: "Dashboard",
+  prodSelectedSize: "24",
+  prodSelectedBatch: "",
+  closingBatch: null,
+  wastageFilter: "all",
+  newBatchSize: "12",
+  newBatchQty: "",
+  newWoodName: "",
+  newWoodSize: "",
+};
+
+function saveAll(){
+  sv(SK.materials,state.materials); sv(SK.woodPieces,state.woodPieces);
+  sv(SK.production,state.production); sv(SK.scrapInventory,state.scrapInventory);
+  sv(SK.wastage,state.wastage); sv(SK.openBatches,state.openBatches);
+  sv(SK.closedBatches,state.closedBatches);
+  sv(SK.ledger,state.ledger);
+  sv(SK.sales,state.sales);
+  sv(SK.users,state.users);
+  sv(SK.finishedInventory,state.finishedInventory);
+  sv(SK.reworkStock,state.reworkStock);
+  sv(SK.finishedBrushes,state.finishedBrushes);
+  sv(SK.brushScrapLog,state.brushScrapLog);
+  sv(SK.socketInventory,state.socketInventory);
+  sv(SK.socketTypes,state.socketTypes);
+  sv(SK.screwInventory,state.screwInventory);
+  sv(SK.readyForSale,state.readyForSale);
+  sv(SK.voidLog,state.voidLog);
+  syncToSheets();
+}
+
+function addLedgerEntry(type, material, batchNo, qty, direction, note, size='', vendor=''){
+  const now = new Date();
+  const date = now.toISOString().slice(0,10);
+  const time = now.toTimeString().slice(0,5);
+  state.ledger = [...(state.ledger||[]), {
+    id: Date.now() + Math.random(),
+    type,        // 'plank' | 'scrap' | 'finished'
+    material,    // e.g. '24" Planks' or 'Commando Broom'
+    size,        // plank size key e.g. '24' or scrap size e.g. '7'
+    batchNo,
+    vendor,      // vendor/supplier name, only set for purchase (plank IN) entries
+    qty,
+    direction,   // 'IN' | 'OUT'
+    note,
+    date,
+    time,
+    datetime: now.toISOString()
+  }];
+}
+
+function getNextBatchNo(){
+  const all=[
+    ...Object.values(state.materials||{}).filter(m=>m&&m.batches).flatMap(m=>m.batches).map(b=>b.batchNo),
+    ...(state.closedBatches||[]).map(b=>b.batchNo),
+    ...Object.values(state.openBatches||{}).map(b=>b.batchNo),
+  ].map(n=>{const m=n?.match(/^B(\d+)$/);return m?parseInt(m[1],10):0;});
+  const next=all.length>0?Math.max(...all)+1:1;
+  return "B"+String(next).padStart(3,"0");
+}
+
+// ==================== VOID / FLAG PERMISSIONS ====================
+function isAdminOrOwner(){
+  return currentUser && (currentUser.role==='admin' || currentUser.role==='owner');
+}
+
+function getDeptPerm(dept){
+  if(!currentUser) return {canVoid:false, maxVoids:0, canFlag:false};
+  const p = (currentUser.voidPermissions||{})[dept];
+  return p || {canVoid:false, maxVoids:0, canFlag:false};
+}
+
+function canVoidInDept(dept){
+  if(isAdminOrOwner()) return true;
+  return !!getDeptPerm(dept).canVoid;
+}
+
+function canFlagInDept(dept){
+  if(isAdminOrOwner()) return true;
+  return !!getDeptPerm(dept).canFlag;
+}
+
+function getVoidsUsedToday(dept){
+  if(!currentUser) return 0;
+  const today = new Date().toISOString().slice(0,10);
+  return (state.voidLog||[]).filter(v=>v.userId===currentUser.id && v.dept===dept && v.date===today).length;
+}
+
+function hasVoidsRemaining(dept){
+  if(isAdminOrOwner()) return true;
+  const perm = getDeptPerm(dept);
+  if(!perm.canVoid) return false;
+  return getVoidsUsedToday(dept) < (perm.maxVoids||0);
+}
+
+function logVoidUsage(dept){
+  if(isAdminOrOwner()) return; // admin/owner voids don't count against any cap
+  state.voidLog=[...(state.voidLog||[]), {userId:currentUser.id, dept, date:new Date().toISOString().slice(0,10), datetime:new Date().toISOString()}];
+}
+
+function switchTab(name,el){
+  state.currentTab=name;
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  el.classList.add('active');
+  document.querySelectorAll('[id^="tab-"]').forEach(t=>t.classList.add('hidden'));
+  document.getElementById('tab-'+name).classList.remove('hidden');
+  renderTab(name);
+}
+
+function renderTab(name){
+  const el=document.getElementById('tab-'+name);
+  if(name==="Dashboard") el.innerHTML=renderDashboard();
+  else if(name==="Production") el.innerHTML=renderProduction();
+  else if(name==="BrushDept") el.innerHTML=renderBrushDept();
+  else if(name==="SocketDept") el.innerHTML=renderSocketDept();
+  else if(name==="Inventory") el.innerHTML=renderInventory();
+  else if(name==="Wastage") el.innerHTML=renderWastage();
+  else if(name==="Materials") el.innerHTML=renderMaterials();
+  else if(name==="BOM") el.innerHTML=renderBOM();
+  else if(name==="Ledger") el.innerHTML=renderLedger();
+  else if(name==="Sales") el.innerHTML=renderSales();
+  else if(name==="Admin") el.innerHTML=renderAdminPanel();
+}
+
+function re(){renderTab(state.currentTab);}
+
+// ---- DASHBOARD ----
+function renderDashboard(){
+  const sc=state.scrapInventory||[];
+  const totalScrap=sc.reduce((s,x)=>s+(x.quantity||0),0);
+  const prod=[...(state.production||[])].sort((a,b)=>(b.date||"").localeCompare(a.date||"")).slice(0,5);
+  const openList=Object.entries(state.openBatches||{});
+
+  let html='';
+
+  if(openList.length>0){
+    html+=`<div class="card" style="border:2px solid #27ae60;background:#f0fff4;">
+      <div class="label">🟢 Open Batches</div>`;
+    openList.forEach(([size,b])=>{
+      html+=`<div class="row" style="padding:8px;background:#e8f5e9;border-radius:6px;margin-bottom:6px;">
+        <span><b>${b.batchNo}</b> — ${state.materials[size]?.name}</span>
+        <span class="green" style="font-weight:700;">Since ${b.dateOpened}</span>
+      </div>`;
+    });
+    html+=`</div>`;
+  }
+
+  html+=`<div class="card"><div class="label">📦 Stock — Wooden Planks</div>`;
+  PLANK_SIZES.forEach(size=>{
+    const mat=state.materials?.[size]||{name:size+'" Planks',size:+size,low:50,batches:[]};
+    const total=(mat?.batches||[]).reduce((s,b)=>s+b.qty,0);
+    html+=`<div style="margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid #f0e8de;">
+      <div style="font-weight:700;font-size:13px;margin-bottom:6px;">${mat?.name}</div>`;
+    if(mat?.batches?.length>0){
+      mat.batches.forEach(b=>{
+        html+=`<div class="batch-item"><span><b>${b.batchNo}</b> (${b.dateAdded})</span><span class="green" style="font-weight:700;">${b.qty} pcs</span></div>`;
+      });
+    } else {
+      html+=`<div style="font-size:12px;color:#aaa;padding-left:8px;">No stock</div>`;
+    }
+    html+=`<div style="font-size:11px;color:#aaa;padding-left:8px;margin-top:4px;">Total: ${total} | Min: ${mat?.low} | ${total<=mat?.low?"⚠️ Low":"✅ OK"}</div>
+    </div>`;
+  });
+  html+=`</div>`;
+
+  html+=`<div class="card"><div class="label">♻️ Scrap Inventory</div>`;
+  if(totalScrap>0){
+    const grouped={};
+    sc.forEach(s=>{const k=`${s.size}-${s.batch}`;grouped[k]=grouped[k]?{...grouped[k],quantity:grouped[k].quantity+s.quantity}:{...s};});
+    Object.values(grouped).forEach(s=>{
+      html+=`<div class="batch-item"><span><b>${s.size}"</b> — ${s.batch}</span><span class="orange" style="font-weight:700;">${s.quantity} pcs</span></div>`;
+    });
+  } else {
+    html+=`<div style="color:#aaa;font-size:12px;">No scrap yet</div>`;
+  }
+  html+=`</div>`;
+
+  html+=`<div class="card"><div class="label">Recent Production</div>`;
+  if(prod.length===0){
+    html+=`<div style="color:#aaa;font-size:13px;">No production yet.</div>`;
+  } else {
+    prod.forEach(r=>{
+      html+=`<div class="prod-item">
+        <div style="font-weight:600;">${r.date} — ${r.woodPieceName} <span class="brown" style="font-size:11px;">(${r.batchNo})</span></div>
+        <div style="color:#666;font-size:11px;">Used ${r.planksUsed} × ${r.plankSize}" → ${r.piecesProduced} pieces</div>
+      </div>`;
+    });
+  }
+  html+=`</div>`;
+  return html;
+}
+
+// ---- PRODUCTION ----
+function renderProduction(){
+  const size=state.prodSelectedSize;
+  const mat=state.materials[size];
+  const openBatch=state.openBatches[size];
+  const wp=state.woodPieces||[];
+
+  let reworkHtml = '';
+  const rework = (state.reworkStock||[]).filter(r=>r.status==='pending');
+  if(rework.length>0){
+    reworkHtml = `<div class="card" style="border:2px solid #3498db;">
+      <div class="label" style="color:#3498db;">🎨 Rework Pending (Color / Regmal)</div>
+      <div style="font-size:11px;color:#888;margin-bottom:8px;">These pieces came back from Brush Department and need coloring or polishing before they can be used again.</div>`;
+    rework.forEach(r=>{
+      reworkHtml += `<div style="display:flex;justify-content:space-between;align-items:center;background:#e8f4fd;border-radius:6px;padding:8px 10px;margin-bottom:6px;">
+        <div>
+          <div style="font-size:12px;font-weight:700;">${r.productName} (${r.size}")</div>
+          <div style="font-size:10px;color:#888;">${r.category} · Batch ${r.batchNo} · ${r.qty} pcs · since ${r.dateAdded}</div>
+        </div>
+        <button class="btn btn-blue" style="font-size:11px;padding:6px 10px;" onclick="markReworkCompleted(${JSON.stringify(r.id)})">✅ Mark Done</button>
+      </div>`;
+    });
+    reworkHtml += `</div>`;
+  }
+
+  // scrap batches
+  const scrapBySize={};
+  (state.scrapInventory||[]).forEach(s=>{
+    if(!scrapBySize[s.size]) scrapBySize[s.size]={size:s.size,batches:{}};
+    if(!scrapBySize[s.size].batches[s.batch]) scrapBySize[s.size].batches[s.batch]={batchNo:s.batch,qty:0,dateAdded:s.dateCreated,scrapSize:s.size};
+    scrapBySize[s.size].batches[s.batch].qty+=s.quantity;
+  });
+  const allScrapBatches=Object.values(scrapBySize).flatMap(s=>Object.values(s.batches));
+  const minPieceSize=wp.length>0?Math.min(...wp.map(w=>w.size)):Infinity;
+
+  let html=reworkHtml+`<div class="card" style="background:#f5f0eb;"><div class="label">Select Plank Size</div>
+    <div class="grid3">`;
+  PLANK_SIZES.forEach(s=>{
+    const hasOpen=!!state.openBatches[s];
+    html+=`<button class="size-btn ${s===size?'active':''}" onclick="selectProdSize('${s}')">${s}"${hasOpen?'<span class="open-badge">OPEN</span>':''}</button>`;
+  });
+  html+=`</div></div>`;
+
+  if(!openBatch){
+    const avail=mat?.batches||[];
+    const validScraps=allScrapBatches.filter(b=>b.scrapSize>=minPieceSize);
+    html+=`<div class="card">
+      <div style="font-size:14px;font-weight:700;margin-bottom:4px;">No open batch for ${mat?.name}</div>
+      <div style="font-size:12px;color:#888;margin-bottom:16px;">Stock: ${(mat?.batches||[]).reduce((s,b)=>s+b.qty,0)} planks</div>`;
+
+    if(avail.length>0||validScraps.length>0){
+      html+=`<div class="label">Select Batch to Start Production</div>`;
+
+      if(avail.length>0){
+        html+=`<div style="font-size:11px;font-weight:700;color:#7a5230;margin-bottom:6px;text-transform:uppercase;">📦 Inventory Batches</div>`;
+        avail.forEach(b=>{
+          const sel=state.prodSelectedBatch===b.batchNo;
+          html+=`<button class="select-batch-btn ${sel?'selected':''}" onclick="selectProdBatch('${b.batchNo}')">
+            <span>${b.batchNo}</span>
+            <span class="green" style="font-weight:700;">${b.qty} pcs — ${b.dateAdded}</span>
+          </button>`;
+        });
+      }
+
+      if(validScraps.length>0){
+        html+=`<div style="font-size:11px;font-weight:700;color:#e67e22;margin-bottom:6px;margin-top:8px;text-transform:uppercase;">♻️ Scrap Batches</div>`;
+        validScraps.forEach(b=>{
+          const sel=state.prodSelectedBatch===b.batchNo;
+          const isRejected = b.batchNo.includes('-Rejected-');
+          html+=`<button class="select-batch-btn scrap ${sel?'selected':''}" onclick="selectProdBatch('${b.batchNo}')">
+            <span>${b.batchNo} <span style="font-size:11px;color:#e67e22;">(${isRejected?'rejected ':''}${b.scrapSize}" ${isRejected?'stock':'scrap'})</span></span>
+            <span class="orange" style="font-weight:700;">${b.qty} pcs — ${b.dateAdded}</span>
+          </button>`;
+        });
+      }
+
+      html+=`<button class="btn btn-green btn-full" onclick="openBatch()" ${!state.prodSelectedBatch?'disabled':''}>
+        🟢 Start Production from ${state.prodSelectedBatch||'...'}
+      </button>`;
+    } else {
+      html+=`<div style="color:#e74c3c;font-size:13px;text-align:center;padding:12px;">⚠️ No stock available. Add a batch in Materials tab first.</div>`;
+    }
+    html+=`<div id="prodMsg"></div></div>`;
+  } else {
+    const runs=openBatch.runs||[];
+    const totalPlanks=runs.filter(r=>!r.voided).reduce((s,r)=>s+r.planksUsed,0);
+    const totalPieces=runs.filter(r=>!r.voided).reduce((s,r)=>s+r.piecesProduced,0);
+    const effSize=openBatch.isScrap?(openBatch.scrapSize||parseInt(size)):parseInt(size);
+
+    // Get remaining stock for this specific batch
+    const specificBatchStock = openBatch.isScrap
+      ? (state.scrapInventory||[]).filter(s=>s.batch===(openBatch.sourceBatchTag||openBatch.batchNo)).reduce((s,x)=>s+x.quantity,0)
+      : ((state.materials[size]?.batches||[]).find(b=>b.batchNo===openBatch.batchNo)?.qty||0);
+    const stockColor = specificBatchStock===0?'#e74c3c':specificBatchStock<=10?'#e67e22':'#27ae60';
+
+    html+=`<div class="card" style="background:#e8f5e9;border:2px solid #27ae60;">
+      <div class="row" style="flex-wrap:wrap;gap:8px;">
+        <div>
+          <div style="font-weight:700;font-size:15px;">🟢 ${openBatch.batchNo} — ${mat?.name}${openBatch.isScrap?' (Scrap)':''}</div>
+          <div style="font-size:11px;color:#555;margin-top:2px;">Opened: ${openBatch.dateOpened} | Runs: ${runs.length} | Used: ${totalPlanks} | Pieces: ${totalPieces}</div>
+          <div style="font-size:12px;font-weight:700;color:${stockColor};margin-top:4px;">
+            ${specificBatchStock===0?'⛔ Stock fully consumed — please close this batch':`📦 Remaining in this batch: ${specificBatchStock} ${openBatch.isScrap?'scrap pcs':'planks'}`}
+          </div>
+        </div>
+        <button class="btn btn-red" style="font-size:12px;padding:8px 14px;" onclick="openCloseModal()">🔒 Close Batch</button>
+      </div>
+    </div>`;
+
+    // Warn if this batch's size is at-or-below the smallest defined product — nothing can be made from it
+    const overallMinSize = (state.woodPieces||[]).length>0 ? Math.min(...(state.woodPieces||[]).map(w=>w.size)) : 0;
+    const isDeadEnd = openBatch.isScrap && effSize<=overallMinSize;
+    if(isDeadEnd){
+      html+=`<div class="card" style="background:#fdecea;border:2px solid #e74c3c;">
+        <div style="font-weight:700;color:#e74c3c;margin-bottom:4px;">⛔ No products can be made from this batch</div>
+        <div style="font-size:12px;color:#666;">${effSize}" is at or below your smallest product size. This stock cannot be used in production. Please close this batch and record its quantity directly as wastage.</div>
+      </div>`;
+    }
+
+    html+=`<div class="card" style="border:2px solid #d4b896;${isDeadEnd?'opacity:0.5;pointer-events:none;':''}">
+      <div class="label">🪚 Record Production Run</div>
+      <div class="grid2">
+        <div>
+          <div class="label">Wood Piece Type</div>
+          <select id="wpSelect" onchange="calcProduction()">`;
+    const isRejectedStock = openBatch?.sourceBatchTag && openBatch.sourceBatchTag.includes('-Rejected-');
+    const anyEnabled = wp.some(w => isRejectedStock ? (effSize>w.size) : (effSize>=w.size));
+    if(!anyEnabled){
+      html += `<option value="" disabled selected>No products can be made from this size</option>`;
+    }
+    let firstEnabledFound = false;
+    wp.forEach(w=>{
+      // Rejected stock requires strictly smaller size; normal stock/scrap allows equal or smaller
+      const disabled = isRejectedStock ? (effSize<=w.size) : (effSize<w.size);
+      const shouldSelect = !disabled && !firstEnabledFound;
+      if(shouldSelect) firstEnabledFound = true;
+      html+=`<option value="${w.id}" ${disabled?'disabled':''} ${shouldSelect?'selected':''} data-size="${w.size}">${w.name} (${w.size}") ${disabled?'- TOO LARGE':''}</option>`;
+    });
+    html+=`</select></div>
+        <div><div class="label">Number of Planks</div>
+          <input type="number" min="1" placeholder="e.g. 50" id="planksInput" oninput="calcProduction()"/>
+        </div>
+        <div><div class="label">Date</div><input type="date" id="prodDate" value="${new Date().toISOString().slice(0,10)}"/></div>
+        <div><div class="label">Notes</div><input type="text" placeholder="e.g. morning shift" id="prodNotes"/></div>
+      </div>
+      <div id="calcBox" class="hidden calc-box"></div>
+      <button class="btn btn-brown" id="recordProdBtn" onclick="recordProduction()">Record Production Run</button>
+      <div id="prodMsg" class="msg"></div>
+    </div>`;
+
+    if(runs.length>0){
+      const canVoidHere = canVoidInDept('Wood Finishing');
+      const canFlagHere = canFlagInDept('Wood Finishing');
+      const voidsLeft = isAdminOrOwner() ? '∞' : Math.max(0,(getDeptPerm('Wood Finishing').maxVoids||0) - getVoidsUsedToday('Wood Finishing'));
+      html+=`<div class="card"><div class="label">📋 Runs in ${openBatch.batchNo}</div>`;
+      if(canVoidHere && !isAdminOrOwner()){
+        html+=`<div style="font-size:11px;color:#888;margin-bottom:8px;">Voids remaining today: ${voidsLeft}</div>`;
+      }
+      runs.forEach((r,ri)=>{
+        const isVoided = !!r.voided;
+        html+=`<div class="prod-item" style="${isVoided?'opacity:0.55;':''}">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+            <div style="font-weight:600;${isVoided?'text-decoration:line-through;':''}">${r.date} — ${r.woodPieceName}</div>
+            <div style="display:flex;gap:4px;">
+              ${isVoided?'<span style="font-size:10px;padding:2px 8px;border-radius:6px;background:#fdecea;color:#e74c3c;font-weight:700;">VOIDED</span>':''}
+              ${r.flagged&&!isVoided?'<span style="font-size:10px;padding:2px 8px;border-radius:6px;background:#e8f4fd;color:#3498db;font-weight:700;">🚩 FLAGGED</span>':''}
+            </div>
+          </div>
+          <div style="color:#666;font-size:11px;${isVoided?'text-decoration:line-through;':''}">${r.planksUsed} planks → <span style="color:#27ae60;font-weight:700;">${r.piecesProduced} good pcs</span>${r.theoreticalPieces&&r.theoreticalPieces!==r.piecesProduced?' (expected '+r.theoreticalPieces+')':''}${r.remainder>0?` | Rem: ${r.remainder}" → ${r.remainderType}`:''}</div>
+          ${r.rejectedPieces>0?`<div style="font-size:11px;margin-top:3px;${isVoided?'text-decoration:line-through;':''}">
+            <span style="color:#e74c3c;font-weight:700;">❌ ${r.rejectedPieces} rejected</span> — ${r.rejectionReason}
+            ${r.salvageQty>0?`<span style="color:#e67e22;"> | ♻️ ${r.salvageQty} → scrap (rejected ${r.salvageSize}")</span>`:''}
+            ${r.wastageQtyFromReject>0?`<span style="color:#e74c3c;"> | 🗑️ ${r.wastageQtyFromReject} pcs → wastage (${r.wastageKgFromReject} KG)</span>`:''}
+          </div>`:''}
+          ${r.notes?`<div style="font-size:11px;color:#aaa;margin-top:2px;">${r.notes}</div>`:''}
+          ${isVoided?`<div style="font-size:11px;color:#e74c3c;margin-top:6px;background:#fdecea;border-radius:6px;padding:6px 8px;">Voided by ${r.voidedBy} on ${r.voidedDate}<br/><span style="font-style:italic;">"${r.voidedReason}"</span></div>`:''}
+          ${r.flagged&&!isVoided?`<div style="font-size:11px;color:#3498db;margin-top:6px;background:#e8f4fd;border-radius:6px;padding:6px 8px;">Flagged by ${r.flaggedBy} on ${r.flaggedDate}<br/><span style="font-style:italic;">"${r.flagNote}"</span></div>`:''}
+          ${!isVoided?`<div style="display:flex;gap:6px;margin-top:8px;">
+            ${canVoidHere?`<button class="btn btn-red" style="font-size:10px;padding:5px 10px;" onclick="openVoidModal('${size}',${ri})">🚫 Void</button>`:''}
+            ${canFlagHere&&!isAdminOrOwner()?`<button class="btn" style="background:#3498db;font-size:10px;padding:5px 10px;" onclick="openFlagModal('${size}',${ri})">🚩 Flag</button>`:''}
+          </div>`:''}
+        </div>`;
+      });
+      html+=`</div>`;
+    }
+  }
+  return html;
+}
+
+function selectProdSize(size){
+  state.prodSelectedSize=size;
+  state.prodSelectedBatch="";
+  re();
+}
+function selectProdBatch(bno){
+  state.prodSelectedBatch=bno;
+  re();
+}
+
+function calcProduction(){
+  const wpSel=document.getElementById('wpSelect');
+  const planksInput=document.getElementById('planksInput');
+  const calcBox=document.getElementById('calcBox');
+  if(!wpSel||!planksInput||!calcBox) return;
+  const planksUsed=+planksInput.value;
+  const pieceSize=+wpSel.options[wpSel.selectedIndex]?.dataset?.size||0;
+  const size=state.prodSelectedSize;
+  const openBatch=state.openBatches[size];
+  const effSize=openBatch?.isScrap?(openBatch.scrapSize||parseInt(size)):parseInt(size);
+  if(!planksUsed||!pieceSize||!effSize){calcBox.classList.add('hidden');return;}
+  const ppp=Math.floor(effSize/pieceSize);
+  const theoretical=ppp*planksUsed;
+  const rem=effSize-ppp*pieceSize;
+  const minSize=Math.min(...(state.woodPieces||[]).map(w=>w.size));
+  const usable=rem>=minSize;
+  const smallerPieces=(state.woodPieces||[]).filter(w=>w.size<pieceSize);
+  calcBox.classList.remove('hidden');
+  calcBox.innerHTML=
+    '<div class="label">&#128202; Theoretical Calculation</div>'+
+    '<div class="grid3" style="font-size:13px;margin-bottom:10px;">'+
+      '<div><div class="aaa" style="font-size:11px;">Planks</div><div class="calc-num">'+planksUsed+'</div></div>'+
+      '<div><div class="aaa" style="font-size:11px;">Expected Pcs</div><div class="calc-num green">'+theoretical+'</div></div>'+
+      '<div><div class="aaa" style="font-size:11px;">Rem/Plank</div><div class="calc-num" style="color:#3498db;">'+rem.toFixed(1)+'"</div></div>'+
+    '</div>'+
+    (rem>0?('<div class="rem-box '+(usable?'':'waste')+'" style="margin-bottom:12px;">'+(usable?'&#9989; Remainder &rarr; Scrap (for: '+(state.woodPieces||[]).filter(w=>w.size<=rem).map(w=>w.name).join(', ')+')'  :'&#9888;&#65039; Remainder &rarr; Wastage (too small, min '+minSize+'")')+'</div>'):'') +
+    '<div style="border-top:2px dashed #d4b896;padding-top:12px;margin-top:4px;">'+
+    '<div class="label" style="color:#e74c3c;">&#9888;&#65039; Quality Control (Optional)</div>'+
+    '<div style="font-size:11px;color:#888;margin-bottom:10px;">If actual output differs from expected, fill in below</div>'+
+    '<div class="grid2">'+
+      '<div><div class="label">Actual Good Pieces</div>'+
+        '<input type="number" id="actualPieces" min="0" max="'+theoretical+'" placeholder="e.g. '+theoretical+'" oninput="updateRejected('+theoretical+')" style="margin-bottom:0;"/></div>'+
+      '<div><div class="label">Rejected Pieces</div>'+
+        '<input type="number" id="rejectedPieces" readonly placeholder="Auto" style="background:#f5f0eb;margin-bottom:0;"/></div>'+
+    '</div>'+
+
+    '<div id="rejectionSection" class="hidden" style="margin-top:12px;">'+
+
+      '<div class="label">Rejection Reason</div>'+
+      '<select id="rejectionReason" style="margin-bottom:12px;">'+
+        ['Foul Cut','Bad Wood Quality','Infected Wood','Broken','Other'].map(r=>'<option value="'+r+'">'+r+'</option>').join('')+
+      '</select>'+
+
+      (() => {
+        const minSizeOverall = (state.woodPieces||[]).length>0 ? Math.min(...(state.woodPieces||[]).map(w=>w.size)) : 0;
+        const isSmallest = pieceSize <= minSizeOverall;
+        if(isSmallest){
+          return '<div style="background:#f0e8de;border-radius:8px;padding:12px;margin-bottom:8px;opacity:0.7;">'+
+            '<div class="label" style="margin-bottom:6px;color:#aaa;">&#9851;&#65039; Scrap Inventory (Not Available)</div>'+
+            '<div style="font-size:11px;color:#888;">'+((state.woodPieces||[]).find(w=>w.size===pieceSize)?.name||'This piece')+' ('+pieceSize+'") is your smallest product size &mdash; rejected pieces cannot be salvaged into anything smaller. All rejected pieces must go to Wastage.</div>'+
+          '</div>';
+        }
+        return '<div style="background:#f9f5f0;border-radius:8px;padding:12px;margin-bottom:8px;">'+
+          '<div class="label" style="margin-bottom:8px;">&#9851;&#65039; Send to Scrap Inventory</div>'+
+          '<div class="label">Quantity</div>'+
+          '<input type="number" id="salvageQty" min="0" placeholder="0" oninput="updateRejectedSplit()" style="margin-bottom:6px;"/>'+
+          '<div style="font-size:11px;color:#888;">Stored as "Rejected '+pieceSize+'\" pieces" &mdash; usable for any product smaller than '+pieceSize+'\". You can decide the exact cut size later when using it in production.</div>'+
+        '</div>';
+      })()+
+
+      '<div style="background:#fdecea;border-radius:8px;padding:12px;">'+
+        '<div class="label" style="margin-bottom:8px;">&#128465;&#65039; Send to Wastage</div>'+
+        '<div class="grid2">'+
+          '<div><div class="label">Quantity (auto)</div>'+
+            '<input type="number" id="wastageQtyFromReject" readonly placeholder="Auto" style="background:#f5f0eb;margin-bottom:0;"/></div>'+
+          '<div><div class="label">Weight (KG)</div>'+
+            '<input type="number" id="wastageKgFromReject" step="0.1" min="0" placeholder="e.g. 1.5" oninput="renderWasteTypeSplit(\'rejectWasteTypeSplit\',\'wastageKgFromReject\')" style="margin-bottom:0;"/></div>'+
+        '</div>'+
+        '<div id="rejectWastageNote" style="font-size:11px;color:#e74c3c;margin-top:4px;display:none;"></div>'+
+        '<div id="rejectWasteTypeSplit" style="margin-top:10px;"></div>'+
+      '</div>'+
+
+    '</div>'+
+  '</div>';
+}
+
+// Renders a Bhusa/Patti/Gitta split widget under a given container, driven by a total-KG input field.
+// Auto-distributes evenly by default; user can adjust each type, with live validation that they sum to total.
+function renderWasteTypeSplit(containerId, totalInputId){
+  const container=document.getElementById(containerId);
+  const totalEl=document.getElementById(totalInputId);
+  if(!container||!totalEl) return;
+  const total=+totalEl.value||0;
+  if(total<=0){ container.innerHTML=''; return; }
+
+  // Preserve existing split values if the widget already exists, otherwise auto-distribute evenly
+  const existing={};
+  WASTE_TYPES.forEach(t=>{
+    const el=document.getElementById(containerId+'_'+t);
+    existing[t]= el ? +el.value||0 : null;
+  });
+  const hasExisting = WASTE_TYPES.some(t=>existing[t]!==null);
+  let defaults={};
+  if(hasExisting){
+    defaults = existing;
+  } else {
+    const each = +(total/3).toFixed(1);
+    defaults = {Bhusa: each, Patti: each, Gitta: +(total - each*2).toFixed(1)};
+  }
+
+  container.innerHTML =
+    '<div class="label" style="margin-bottom:6px;">Split by Wastage Type</div>'+
+    '<div class="grid3" style="gap:8px;">'+
+      WASTE_TYPES.map(t=>
+        '<div><div style="font-size:11px;color:#7a5230;font-weight:700;margin-bottom:2px;">'+t+'</div>'+
+        '<input type="number" id="'+containerId+'_'+t+'" step="0.1" min="0" value="'+(defaults[t]||0)+'" oninput="validateWasteTypeSplit(\''+containerId+'\',\''+totalInputId+'\')" style="margin-bottom:0;"/></div>'
+      ).join('')+
+    '</div>'+
+    '<div id="'+containerId+'_err" style="font-size:11px;color:#e74c3c;margin-top:4px;display:none;"></div>';
+}
+
+function validateWasteTypeSplit(containerId, totalInputId){
+  const total=+document.getElementById(totalInputId)?.value||0;
+  const sum=WASTE_TYPES.reduce((s,t)=>s+(+document.getElementById(containerId+'_'+t)?.value||0),0);
+  const errEl=document.getElementById(containerId+'_err');
+  if(errEl){
+    if(Math.abs(sum-total)>0.05){
+      errEl.textContent=`⚠️ Split totals ${sum.toFixed(1)} KG but weight entered is ${total.toFixed(1)} KG`;
+      errEl.style.display='block';
+    } else {
+      errEl.style.display='none';
+    }
+  }
+}
+
+function getWasteTypeSplit(containerId){
+  const split={};
+  WASTE_TYPES.forEach(t=>{
+    const el=document.getElementById(containerId+'_'+t);
+    split[t]= el ? +el.value||0 : 0;
+  });
+  return split;
+}
+
+function updateRejected(theoretical){
+  const actual=+document.getElementById('actualPieces')?.value||0;
+  const rejected=Math.max(0,theoretical-actual);
+  const rejEl=document.getElementById('rejectedPieces');
+  if(rejEl) rejEl.value=rejected||'';
+  const sec=document.getElementById('rejectionSection');
+  if(sec) sec.classList.toggle('hidden',rejected===0);
+  updateRejectedSplit();
+}
+
+function updateRejectedSplit(){
+  const rejected=+document.getElementById('rejectedPieces')?.value||0;
+  const salvageQtyEl=document.getElementById('salvageQty');
+  const wastageQtyEl=document.getElementById('wastageQtyFromReject');
+  const noteEl=document.getElementById('rejectWastageNote');
+  let salvage=+salvageQtyEl?.value||0;
+
+  // Cap salvage at rejected
+  if(salvage>rejected){
+    salvage=rejected;
+    if(salvageQtyEl) salvageQtyEl.value=rejected;
+    if(noteEl){noteEl.textContent='⚠️ Max '+rejected+' (cannot exceed rejected)';noteEl.style.display='block';}
+  } else {
+    if(noteEl) noteEl.style.display='none';
+  }
+
+  const wastage=Math.max(0,rejected-salvage);
+  if(wastageQtyEl) wastageQtyEl.value=wastage||'';
+}
+
+
+function openBatch(){
+  const size=state.prodSelectedSize;
+  const bno=state.prodSelectedBatch;
+  if(state.openBatches[size]){showProdMsg("⚠️ A batch is already open for this size!",false);return;}
+  if(!bno){showProdMsg("⚠️ Please select a batch",false);return;}
+
+  // find if it's scrap
+  const scrapBySize={};
+  (state.scrapInventory||[]).forEach(s=>{
+    if(!scrapBySize[s.size]) scrapBySize[s.size]={};
+    if(!scrapBySize[s.size][s.batch]) scrapBySize[s.size][s.batch]={qty:0,scrapSize:s.size};
+    scrapBySize[s.size][s.batch].qty+=s.quantity;
+  });
+  const allScraps=Object.values(scrapBySize).flatMap(s=>Object.values(s));
+  const isScrap=!!(state.materials[size]?.batches||[]).find(b=>b.batchNo===bno)===false && allScraps.find(b=>b.batchNo===bno||Object.keys(scrapBySize).some(sz=>scrapBySize[sz][bno]));
+
+  // simpler scrap check
+  const invBatch=(state.materials[size]?.batches||[]).find(b=>b.batchNo===bno);
+  let scrapBatchInfo=null;
+  (state.scrapInventory||[]).forEach(s=>{if(s.batch===bno) scrapBatchInfo={scrapSize:s.size};});
+
+  // Always use the ROOT batch number — never stack suffixes when reopening scrap/rejected stock
+  const rootBno = getRootBatchNo(bno);
+
+  state.openBatches[size]={
+    batchNo: rootBno,
+    sourceBatchTag: bno, // keep the full scrap batch tag for stock deduction reference
+    plankSize:size,
+    isScrap:!invBatch&&!!scrapBatchInfo,
+    scrapSize:scrapBatchInfo?.scrapSize||null,
+    dateOpened:new Date().toISOString().slice(0,10), runs:[]
+  };
+  state.prodSelectedBatch="";
+  saveAll(); re();
+}
+
+let isSubmittingProduction = false;
+function recordProduction(){
+  if(isSubmittingProduction) return; // prevent double-click/double-submission
+  isSubmittingProduction = true;
+  const btn=document.getElementById('recordProdBtn');
+  if(btn){btn.disabled=true;btn.style.opacity='0.6';btn.textContent='Recording...';}
+  setTimeout(()=>{
+    isSubmittingProduction=false;
+    const b=document.getElementById('recordProdBtn');
+    if(b){b.disabled=false;b.style.opacity='1';b.textContent='Record Production Run';}
+  }, 1000);
+
+  const size=state.prodSelectedSize;
+  const openBatch=state.openBatches[size];
+  if(!openBatch){showProdMsg("⚠️ Open a batch first!",false);return;}
+  const wpSel=document.getElementById('wpSelect');
+  const planksInput=document.getElementById('planksInput');
+  const prodDate=document.getElementById('prodDate');
+  const prodNotes=document.getElementById('prodNotes');
+  if(!wpSel||!planksInput){return;}
+  const planksUsed=+planksInput.value;
+  const wpId=+wpSel.value;
+  // Snapshot state BEFORE any mutation below, so a 15-second self-correction can cleanly roll back
+  const preSnapshot = takeSnapshot(['materials','finishedInventory','scrapInventory','wastage','openBatches','production']);
+  const pieceSize=+wpSel.options[wpSel.selectedIndex]?.dataset?.size||0;
+  if(!planksUsed||!wpId){showProdMsg("⚠️ Fill all fields",false);return;}
+  const effSize=openBatch.isScrap?(openBatch.scrapSize||parseInt(size)):parseInt(size);
+  const sourceTag = openBatch.sourceBatchTag||openBatch.batchNo;
+  const isRejectedStock = sourceTag&&sourceTag.includes('-Rejected-');
+  if(isRejectedStock ? (pieceSize>=effSize) : (pieceSize>effSize)){
+    showProdMsg(isRejectedStock ? "⚠️ Piece must be strictly smaller than rejected stock size!" : "⚠️ Piece too large for this batch!",false);
+    return;
+  }
+  const wp=(state.woodPieces||[]).find(w=>w.id===wpId);
+  if(!wp) return;
+
+  if(openBatch.isScrap){
+    const stock=(state.scrapInventory||[]).filter(s=>s.batch===sourceTag).reduce((s,x)=>s+x.quantity,0);
+    if(stock<planksUsed){showProdMsg(`⚠️ Not enough scrap in ${openBatch.batchNo}! Have ${stock}, need ${planksUsed}. This batch may already be consumed — try closing it and check Inventory tab.`,false);return;}
+    let toDeduct=planksUsed;
+    state.scrapInventory=(state.scrapInventory||[]).map(item=>{
+      if(item.batch!==sourceTag||toDeduct<=0) return item;
+      const d=Math.min(item.quantity,toDeduct); toDeduct-=d;
+      return {...item,quantity:item.quantity-d};
+    }).filter(item=>item.quantity>0);
+  } else {
+    // Only check and deduct from the specific batch that was opened for production
+    const specificBatch=(state.materials[size]?.batches||[]).find(b=>b.batchNo===openBatch.batchNo);
+    const stock=specificBatch?specificBatch.qty:0;
+    if(stock<=0){showProdMsg(`⚠️ Batch ${openBatch.batchNo} is fully consumed! Close this batch.`,false);return;}
+    if(stock<planksUsed){showProdMsg(`⚠️ Not enough in ${openBatch.batchNo}! Have ${stock} planks, need ${planksUsed}`,false);return;}
+    if(!state.materials[size]||!state.materials[size].batches){showProdMsg("⚠️ Material not found!",false);return;}
+    state.materials[size].batches=state.materials[size].batches.map(b=>{
+      if(b.batchNo!==openBatch.batchNo) return b;
+      return {...b,qty:b.qty-planksUsed};
+    }).filter(b=>b.qty>0);
+  }
+
+  const ppp=Math.floor(effSize/pieceSize);
+  const pieces=ppp*planksUsed;
+  const rem=effSize-ppp*pieceSize;
+  const minSize=(state.woodPieces||[]).length>0?Math.min(...(state.woodPieces||[]).map(w=>w.size)):Infinity;
+  const canUse=rem>=minSize;
+
+  if(rem>0&&canUse&&!openBatch.isScrap){
+    const scrapKey=`${openBatch.batchNo}-Scrap-${wp.name}`;
+    const idx=(state.scrapInventory||[]).findIndex(e=>e.size===rem&&e.batch===scrapKey);
+    if(idx>=0){state.scrapInventory[idx].quantity+=planksUsed;}
+    else{state.scrapInventory=[...(state.scrapInventory||[]),{size:rem,quantity:planksUsed,batch:scrapKey,dateCreated:prodDate?.value||new Date().toISOString().slice(0,10)}];}
+  }
+
+  // Read quality control fields
+  const actualPiecesEl = document.getElementById('actualPieces');
+  const rejectedEl = document.getElementById('rejectedPieces');
+  const rejReasonEl = document.getElementById('rejectionReason');
+  const salvageQtyEl = document.getElementById('salvageQty');
+  const wastageKgFromRejectEl = document.getElementById('wastageKgFromReject');
+
+  const actualPieces = actualPiecesEl?.value ? +actualPiecesEl.value : pieces;
+  const rejectedPieces = +rejectedEl?.value||0;
+  const rejectionReason = rejReasonEl?.value||'';
+  let salvageQty = +salvageQtyEl?.value||0;
+  const wastageQtyFromReject = Math.max(0, rejectedPieces - salvageQty);
+  const wastageKgFromReject = +wastageKgFromRejectEl?.value||0;
+
+  // Validate
+  if(actualPieces > pieces){
+    showProdMsg(`⚠️ Actual pieces (${actualPieces}) cannot exceed theoretical (${pieces})`,false);
+    return;
+  }
+  if(salvageQty > rejectedPieces){
+    showProdMsg(`⚠️ Scrap pieces (${salvageQty}) cannot exceed rejected (${rejectedPieces})`,false);
+    return;
+  }
+  if(wastageQtyFromReject>0 && !wastageKgFromReject){
+    showProdMsg('⚠️ Enter weight (KG) for wastage pieces',false);
+    return;
+  }
+
+  // Add rejected pieces to scrap inventory — stored using the ORIGINAL piece size
+  // (e.g. "Rejected 11" pieces" — usable for any product smaller than 11")
+  const salvageSize = pieceSize; // original size of the piece that was rejected
+  // openBatch.batchNo is always the clean root now (e.g. "B011")
+  const rootBatchNo = getRootBatchNo(openBatch.batchNo);
+  // Check if this is the smallest defined piece size — if so, scrap is a dead end, force wastage instead
+  const minPieceSizeOverall = (state.woodPieces||[]).length>0 ? Math.min(...(state.woodPieces||[]).map(w=>w.size)) : 0;
+  const isSmallestSize = pieceSize <= minPieceSizeOverall;
+
+  if(salvageQty>0 && !isSmallestSize){
+    const scrapKey = `${rootBatchNo}-Rejected-${wp.name}`;
+    const idx=(state.scrapInventory||[]).findIndex(e=>e.size===salvageSize&&e.batch===scrapKey);
+    if(idx>=0){state.scrapInventory[idx].quantity+=salvageQty;}
+    else{state.scrapInventory=[...(state.scrapInventory||[]),{size:salvageSize,quantity:salvageQty,batch:scrapKey,dateCreated:prodDate?.value||new Date().toISOString().slice(0,10),isRejectedStock:true}];}
+    addLedgerEntry('scrap',`Rejected ${salvageSize}" pieces`,scrapKey,salvageQty,'IN',`Rejected ${wp.name} (${rejectionReason}) — usable for products < ${salvageSize}"`,String(salvageSize));
+  } else if(salvageQty>0 && isSmallestSize){
+    // Cannot scrap from smallest size — redirect to wastage automatically
+    showProdMsg(`⚠️ ${wp.name} is the smallest product size — rejected pieces cannot be salvaged. Please use Wastage instead.`,false);
+    return;
+  }
+
+  // Add wastage KG from rejected pieces to open batch wastage log
+  if(wastageKgFromReject>0){
+    const typeSplit = getWasteTypeSplit('rejectWasteTypeSplit');
+    const splitSum = WASTE_TYPES.reduce((s,t)=>s+(typeSplit[t]||0),0);
+    if(Math.abs(splitSum - wastageKgFromReject) > 0.05){
+      showProdMsg(`⚠️ Wastage type split (${splitSum.toFixed(1)} KG) doesn't match weight entered (${wastageKgFromReject.toFixed(1)} KG). Please adjust the split.`,false);
+      return;
+    }
+    if(!state.openBatches[size].runWastageKg) state.openBatches[size].runWastageKg=0;
+    state.openBatches[size].runWastageKg += wastageKgFromReject;
+    // Also record immediately in wastage state so it shows in Wastage tab
+    state.wastage=[...(state.wastage||[]),{
+      date:prodDate?.value||new Date().toISOString().slice(0,10),
+      batchNo:openBatch.batchNo,
+      plankSizeName:state.materials[size]?.name||`${size}" Planks`,
+      woodPieceName:wp.name,
+      rejectedPieces:wastageQtyFromReject,
+      wastageKg:wastageKgFromReject,
+      typeSplit, // { Bhusa: x, Patti: y, Gitta: z }
+      reason:rejectionReason,
+      type:'QualityControl',
+      status:'open'
+    }];
+  }
+
+  const pureWastage = wastageQtyFromReject;
+
+  const run={
+    date:prodDate?.value||new Date().toISOString().slice(0,10),
+    woodPieceName:wp.name, planksUsed,
+    theoreticalPieces:pieces, piecesProduced:actualPieces,
+    rejectedPieces, rejectionReason,
+    salvageQty, salvageSize:salvageQty>0?pieceSize:0,
+    wastageQtyFromReject, wastageKgFromReject,
+    pureWastage,
+    remainder:rem, remainderType:canUse?"Scrap":"Wastage",
+    notes:prodNotes?.value||""
+  };
+  state.openBatches[size].runs=[...(state.openBatches[size].runs||[]),run];
+  state.production=[...(state.production||[]),{...run,batchNo:openBatch.batchNo,plankSize:effSize,department:"wood_finishing"}];
+
+  // Add finished wood pieces to inventory available for the Brush Department
+  if(actualPieces>0){
+    const finIdx=(state.finishedInventory||[]).findIndex(f=>f.productName===wp.name&&f.batchNo===openBatch.batchNo);
+    if(finIdx>=0){ state.finishedInventory[finIdx].qty += actualPieces; }
+    else{
+      state.finishedInventory=[...(state.finishedInventory||[]),{
+        id:Date.now()+Math.random(), productName:wp.name, size:pieceSize,
+        batchNo:openBatch.batchNo, qty:actualPieces, dateAdded:prodDate?.value||new Date().toISOString().slice(0,10)
+      }];
+    }
+  }
+
+  // Ledger entries
+  if(openBatch.isScrap){
+    addLedgerEntry('scrap',`${openBatch.scrapSize}" Scrap`,openBatch.batchNo,planksUsed,'OUT',`Used in production → ${wp.name}`,String(openBatch.scrapSize));
+  } else {
+    addLedgerEntry('plank',state.materials[size]?.name||`${size}" Planks`,openBatch.batchNo,planksUsed,'OUT',`Production → ${wp.name}`,size);
+  }
+  addLedgerEntry('finished',wp.name,openBatch.batchNo,actualPieces,'IN',`Produced: ${actualPieces}${rejectedPieces>0?' ('+rejectedPieces+' rejected - '+rejectionReason+')':''}`,'');
+  if(rem>0&&canUse&&!openBatch.isScrap){
+    addLedgerEntry('scrap',`${rem}" Scrap`,`${openBatch.batchNo}-Scrap-${wp.name}`,planksUsed,'IN',`Remainder from ${wp.name} production`,String(rem));
+  }
+
+  saveAll();
+  const scrapQtyThisRun = (rem>0&&canUse&&!openBatch.isScrap?planksUsed:0) + (salvageQty||0);
+  const rejMsg = rejectedPieces>0
+    ? ` | ${rejectedPieces} rejected (${rejectionReason})${salvageQty>0?' | ♻️ '+salvageQty+' → scrap (as rejected '+pieceSize+'")':''}${wastageQtyFromReject>0?' | 🗑️ '+wastageQtyFromReject+' → wastage ('+wastageKgFromReject+' KG)':''}`
+    : '';
+  showProdMsg(`✅ Recorded! ${actualPieces} good pieces${rejMsg}`,true);
+  setTimeout(()=>{
+    re();
+    showReviewPopup({
+      snapshot: preSnapshot,
+      subtitle: wp.name + ' — Batch ' + openBatch.batchNo,
+      field1Label: 'Planks Used', field1Value: planksUsed, field1Editable: true,
+      field2Label: 'Good Pieces', field2Value: actualPieces, field2Editable: true,
+      extraLabel: 'Sent to Scrap Inventory', extraValue: scrapQtyThisRun,
+      onUndo: function(newPlanks, newPieces){
+        state.prodSelectedSize = size;
+        re();
+        setTimeout(()=>{
+          const wpSelEl=document.getElementById('wpSelect');
+          const planksInputEl=document.getElementById('planksInput');
+          if(planksInputEl) planksInputEl.value = newPlanks;
+          if(wpSelEl) calcProduction();
+          showProdMsg('↩️ Entry undone — adjust the values below and record again.', true);
+        }, 80);
+      }
+    });
+  },100);
+}
+
+function showProdMsg(msg,ok){
+  const el=document.getElementById('prodMsg');
+  if(el){el.textContent=msg;el.className='msg '+(ok?'ok':'err');}
+}
+
+function openCloseModal(){
+  const size=state.prodSelectedSize;
+  const ob=state.openBatches[size];
+  if(!ob) return;
+  state.closingBatch={...ob,size};
+  const runs=ob.runs||[];
+  const tp=runs.filter(r=>!r.voided).reduce((s,r)=>s+r.planksUsed,0);
+  const tc=runs.filter(r=>!r.voided).reduce((s,r)=>s+r.piecesProduced,0);
+  document.getElementById('modalTitle').textContent=`🔒 Close Batch ${ob.batchNo}`;
+  document.getElementById('modalSub').textContent=`${state.materials[size]?.name} | Opened: ${ob.dateOpened}`;
+  const totalTheoretical=runs.reduce((s,r)=>s+(r.theoreticalPieces||r.piecesProduced),0);
+  const totalGood=runs.filter(r=>!r.voided).reduce((s,r)=>s+r.piecesProduced,0);
+  const totalRejected=runs.filter(r=>!r.voided).reduce((s,r)=>s+(r.rejectedPieces||0),0);
+  const totalSalvaged=runs.filter(r=>!r.voided).reduce((s,r)=>s+(r.salvageQty||0),0);
+  const totalPureWaste=runs.filter(r=>!r.voided).reduce((s,r)=>s+(r.pureWastage||0),0);
+  const efficiency=totalTheoretical>0?Math.round((totalGood/totalTheoretical)*100):100;
+  const effColor=efficiency>=90?'#27ae60':efficiency>=75?'#e67e22':'#e74c3c';
+  document.getElementById('modalSummary').innerHTML=
+    '<div style="font-size:12px;font-weight:700;margin-bottom:8px;">📊 Batch Summary</div>'+
+    '<div class="grid3" style="font-size:12px;margin-bottom:8px;">'+
+      '<div><span class="aaa">Runs: </span><b>'+runs.length+'</b></div>'+
+      '<div><span class="aaa">Planks: </span><b>'+tp+'</b></div>'+
+      '<div><span class="aaa">Expected: </span><b>'+totalTheoretical+'</b></div>'+
+      '<div><span class="aaa">Good Pcs: </span><b style="color:#27ae60;">'+totalGood+'</b></div>'+
+      '<div><span class="aaa">Rejected: </span><b style="color:#e74c3c;">'+totalRejected+'</b></div>'+
+      '<div><span class="aaa">Efficiency: </span><b style="color:'+effColor+';">'+efficiency+'%</b></div>'+
+    '</div>'+
+    (totalRejected>0?'<div style="background:#fdecea;border-radius:6px;padding:8px;font-size:11px;margin-top:4px;">'+
+      (totalSalvaged>0?'♻️ Salvaged: <b>'+totalSalvaged+' pcs</b> | ':'')+'🗑️ Pure wastage: <b>'+totalPureWaste+' pcs</b></div>':'');
+  // Show QC wastage as a separate read-only display, and leave manual entry field EMPTY
+  const runWastageKg = (state.wastage||[])
+    .filter(w=>w.batchNo===ob.batchNo&&w.type==='QualityControl')
+    .reduce((s,w)=>s+(w.wastageKg||0),0);
+  const qcDisplay = document.getElementById('qcWastageDisplay');
+  const qcDisplayValue = document.getElementById('qcWastageDisplayValue');
+  if(runWastageKg>0){
+    if(qcDisplay) qcDisplay.style.display='block';
+    if(qcDisplayValue) qcDisplayValue.textContent = runWastageKg.toFixed(1)+' KG';
+  } else {
+    if(qcDisplay) qcDisplay.style.display='none';
+  }
+  // Manual entry field always starts empty — no pre-fill, no confusion
+  document.getElementById('manualWastageKgInput').value = '';
+  // Clear any leftover waste-type split widget from a previously closed batch
+  const splitDiv = document.getElementById('manualWasteTypeSplit');
+  if(splitDiv) splitDiv.innerHTML = '';
+  document.getElementById('wastageErr').classList.add('hidden');
+  document.getElementById('closeModal').classList.remove('hidden');
+}
+
+let isSubmittingClose = false;
+function confirmClose(){
+  if(isSubmittingClose) return;
+  isSubmittingClose = true;
+  setTimeout(()=>{isSubmittingClose=false;}, 1000);
+
+  const manualKgEl=document.getElementById('manualWastageKgInput');
+  const manualKgRaw = manualKgEl?.value;
+  const err=document.getElementById('wastageErr');
+  // Empty or 0 is fine — that just means no extra manual wastage. Only reject genuinely invalid input.
+  const manualPortion = manualKgRaw ? +manualKgRaw : 0;
+  if(isNaN(manualPortion) || manualPortion<0){err.textContent="⚠️ Enter a valid number (0 if none)";err.classList.remove('hidden');return;}
+  const cb=state.closingBatch;
+  const runs=cb.runs||[];
+  const rootBno = getRootBatchNo(cb.batchNo);
+
+  // Store manual portion as its own permanent wastage record (same pattern as QC entries)
+  if(manualPortion>0){
+    const typeSplit = getWasteTypeSplit('manualWasteTypeSplit');
+    const splitSum = WASTE_TYPES.reduce((s,t)=>s+(typeSplit[t]||0),0);
+    if(Math.abs(splitSum - manualPortion) > 0.05){
+      err.textContent=`⚠️ Wastage type split (${splitSum.toFixed(1)} KG) doesn't match weight entered (${manualPortion.toFixed(1)} KG). Please adjust the split.`;
+      err.classList.remove('hidden');
+      return;
+    }
+    state.wastage=[...(state.wastage||[]),{
+      date:new Date().toISOString().slice(0,10),
+      batchNo:rootBno,
+      plankSizeName:state.materials[cb.size]?.name||`${cb.size}" Planks`,
+      woodPieceName:'',
+      rejectedPieces:0,
+      wastageKg:manualPortion,
+      typeSplit,
+      reason:'Manual entry at batch close',
+      type:'ManualClose',
+      status:'closed'
+    }];
+  }
+
+  const newClosed = {
+    ...cb, batchNo: rootBno, dateClosed:new Date().toISOString().slice(0,10),
+    plankSizeName:state.materials[cb.size]?.name||`${cb.size}" Planks`,
+    totalPlanksUsed:runs.filter(r=>!r.voided).reduce((s,r)=>s+r.planksUsed,0),
+    totalPiecesProduced:runs.filter(r=>!r.voided).reduce((s,r)=>s+r.piecesProduced,0),
+  };
+  // Merge into existing closed batch (matched by ROOT batch number) if it exists
+  const existingIdx = (state.closedBatches||[]).findIndex(x=>getRootBatchNo(x.batchNo)===rootBno);
+  if(existingIdx>=0){
+    const ex = state.closedBatches[existingIdx];
+    state.closedBatches[existingIdx] = {
+      ...ex, batchNo: rootBno,
+      totalPlanksUsed: (ex.totalPlanksUsed||0) + newClosed.totalPlanksUsed,
+      totalPiecesProduced: (ex.totalPiecesProduced||0) + newClosed.totalPiecesProduced,
+      runs: [...(ex.runs||[]), ...(newClosed.runs||[])],
+      dateClosed: newClosed.dateClosed,
+    };
+  } else {
+    state.closedBatches=[...(state.closedBatches||[]), newClosed];
+  }
+  delete state.openBatches[cb.size];
+  state.closingBatch=null;
+  // Mark QC wastage entries for this batch as closed (using root batch number)
+  state.wastage=(state.wastage||[]).map(w=>
+    w.batchNo===rootBno&&w.type==='QualityControl' ? {...w,status:'closed'} : w
+  );
+  document.getElementById('closeModal').classList.add('hidden');
+  saveAll(); re();
+}
+
+// ---- INVENTORY ----
+// ==================== BRUSH DEPARTMENT ====================
+function renderBrushDept(){
+  const finished = state.finishedInventory||[];
+  const selectedId = state.brushSelectedStock||null;
+  const selected = finished.find(f=>f.id===selectedId);
+
+  let html = `<div class="card" style="background:#f5f0eb;">
+    <div class="label">🪥 Brush Department — Drill &amp; Tuft</div>
+    <div style="font-size:11px;color:#888;">Select finished wood stock to process on the brush machine.</div>
+  </div>`;
+
+  // Available finished wood stock to select from
+  html += `<div class="card">
+    <div class="label">📦 Finished Wood Stock (from Wood Finishing)</div>`;
+  if(finished.length===0){
+    html += `<div style="font-size:12px;color:#aaa;">No finished stock available yet. Complete a Wood Finishing production run first.</div>`;
+  } else {
+    finished.forEach(f=>{
+      const sel = selectedId===f.id;
+      html += `<button class="select-batch-btn ${sel?'selected':''}" onclick="selectBrushStock(${JSON.stringify(f.id)})">
+        <span>${f.productName} (${f.size}") — ${f.batchNo}</span>
+        <span class="green" style="font-weight:700;">${f.qty} pcs</span>
+      </button>`;
+    });
+  }
+  html += `</div>`;
+
+  if(selected){
+    html += `<div class="card" style="border:2px solid #d4b896;">
+      <div class="label">⚙️ Process: ${selected.productName} (${selected.batchNo})</div>
+      <div style="font-size:11px;color:#888;margin-bottom:8px;">Available: ${selected.qty} pcs</div>
+      <div class="label">Quantity to Process</div>
+      <input type="number" id="brushProcessQty" min="1" max="${selected.qty}" placeholder="e.g. 100" oninput="calcBrushSplit()" style="margin-bottom:12px;"/>
+
+      <div id="brushSplitSection" class="hidden">
+        <div style="border-top:2px dashed #d4b896;padding-top:10px;margin-bottom:10px;">
+          <div class="label" style="margin-bottom:6px;">Sort Into Categories</div>
+        </div>
+
+        <div style="background:#e8f4fd;border-radius:8px;padding:10px;margin-bottom:8px;">
+          <div class="label" style="margin-bottom:6px;color:#3498db;">🎨 Color (needs coloring)</div>
+          <input type="number" id="catColor" min="0" placeholder="0" oninput="calcBrushSplit()" style="margin-bottom:0;"/>
+        </div>
+
+        <div style="background:#e8f4fd;border-radius:8px;padding:10px;margin-bottom:8px;">
+          <div class="label" style="margin-bottom:6px;color:#3498db;">✨ Regmal (needs polishing)</div>
+          <input type="number" id="catRegmal" min="0" placeholder="0" oninput="calcBrushSplit()" style="margin-bottom:0;"/>
+        </div>
+
+        <div style="background:#f0e8de;border-radius:8px;padding:10px;margin-bottom:8px;">
+          <div class="label" style="margin-bottom:6px;color:#7a5230;">⚠️ Kharab Maal (scrap)</div>
+          <input type="number" id="catScrap" min="0" placeholder="0" oninput="calcBrushSplit()" style="margin-bottom:0;"/>
+        </div>
+
+        <div style="background:#fdecea;border-radius:8px;padding:10px;margin-bottom:8px;">
+          <div class="label" style="margin-bottom:6px;color:#e74c3c;">🐛 Keere Wala (wastage)</div>
+          <div class="grid2">
+            <div><div class="label">Quantity</div><input type="number" id="catWastageQty" min="0" placeholder="0" oninput="calcBrushSplit()" style="margin-bottom:0;"/></div>
+            <div><div class="label">Weight (KG)</div><input type="number" id="catWastageKg" step="0.1" min="0" placeholder="0.0" style="margin-bottom:0;"/></div>
+          </div>
+        </div>
+
+        <div style="background:#e8f5e9;border-radius:8px;padding:10px;margin-bottom:10px;">
+          <div class="label" style="margin-bottom:4px;color:#27ae60;">🪥 Run on Brush Machine (auto)</div>
+          <input type="number" id="catBrushMachine" readonly placeholder="Auto" style="background:#f5f0eb;margin-bottom:0;"/>
+        </div>
+
+        <div id="brushSplitErr" style="font-size:12px;color:#e74c3c;margin-bottom:8px;display:none;"></div>
+        <button class="btn btn-brown" style="width:100%;" onclick="recordBrushProcessing()">Record Brush Processing</button>
+        <div id="brushMsg" class="msg"></div>
+      </div>
+    </div>`;
+  }
+
+  // Finished Brushes stock summary
+  const brushes = state.finishedBrushes||[];
+  if(brushes.length>0){
+    html += `<div class="card" style="border:2px solid #27ae60;">
+      <div class="label" style="color:#27ae60;">✅ Finished Brushes Ready</div>`;
+    brushes.forEach(b=>{
+      html += `<div style="display:flex;justify-content:space-between;font-size:12px;padding:5px 0;border-bottom:1px solid #f0e8de;">
+        <span>${b.productName} — ${b.batchNo}</span>
+        <span style="font-weight:700;color:#27ae60;">${b.qty} pcs</span>
+      </div>`;
+    });
+    html += `</div>`;
+  }
+
+  return html;
+}
+
+function selectBrushStock(id){
+  state.brushSelectedStock = id;
+  re();
+}
+
+function calcBrushSplit(){
+  const qtyEl = document.getElementById('brushProcessQty');
+  const splitSection = document.getElementById('brushSplitSection');
+  const total = +qtyEl?.value||0;
+  if(!splitSection) return;
+  if(total<=0){ splitSection.classList.add('hidden'); return; }
+  splitSection.classList.remove('hidden');
+
+  const color = +document.getElementById('catColor')?.value||0;
+  const regmal = +document.getElementById('catRegmal')?.value||0;
+  const scrap = +document.getElementById('catScrap')?.value||0;
+  const wastageQty = +document.getElementById('catWastageQty')?.value||0;
+
+  const sumOthers = color+regmal+scrap+wastageQty;
+  const brushMachine = Math.max(0, total-sumOthers);
+  const bmEl = document.getElementById('catBrushMachine');
+  if(bmEl) bmEl.value = brushMachine;
+
+  const errEl = document.getElementById('brushSplitErr');
+  if(errEl){
+    if(sumOthers>total){
+      errEl.textContent = `⚠️ Categories total (${sumOthers}) exceed quantity being processed (${total})`;
+      errEl.style.display='block';
+    } else {
+      errEl.style.display='none';
+    }
+  }
+}
+
+let isSubmittingBrush = false;
+function recordBrushProcessing(){
+  if(isSubmittingBrush) return;
+  isSubmittingBrush = true;
+  setTimeout(()=>{isSubmittingBrush=false;}, 1000);
+
+  const selectedId = state.brushSelectedStock;
+  const finished = state.finishedInventory||[];
+  const stock = finished.find(f=>f.id===selectedId);
+  const msgEl = document.getElementById('brushMsg');
+  if(!stock){ if(msgEl){msgEl.textContent="⚠️ Select finished stock first";msgEl.className="msg err";} return; }
+
+  const total = +document.getElementById('brushProcessQty')?.value||0;
+  const color = +document.getElementById('catColor')?.value||0;
+  const regmal = +document.getElementById('catRegmal')?.value||0;
+  const scrap = +document.getElementById('catScrap')?.value||0;
+  const wastageQty = +document.getElementById('catWastageQty')?.value||0;
+  const wastageKg = +document.getElementById('catWastageKg')?.value||0;
+  const brushMachine = Math.max(0, total-color-regmal-scrap-wastageQty);
+
+  if(!total||total<=0){ if(msgEl){msgEl.textContent="⚠️ Enter quantity to process";msgEl.className="msg err";} return; }
+  if(total>stock.qty){ if(msgEl){msgEl.textContent=`⚠️ Only ${stock.qty} pcs available`;msgEl.className="msg err";} return; }
+  if(color+regmal+scrap+wastageQty>total){ if(msgEl){msgEl.textContent="⚠️ Category totals exceed quantity being processed";msgEl.className="msg err";} return; }
+  if(wastageQty>0 && !wastageKg){ if(msgEl){msgEl.textContent="⚠️ Enter weight (KG) for Keere Wala wastage";msgEl.className="msg err";} return; }
+
+  const today = new Date().toISOString().slice(0,10);
+  const preSnapshot = takeSnapshot(['finishedInventory','reworkStock','brushScrapLog','wastage','finishedBrushes']);
+
+  // Deduct processed quantity from finished wood stock
+  state.finishedInventory = finished.map(f=>f.id===stock.id?{...f,qty:f.qty-total}:f).filter(f=>f.qty>0);
+
+  // Color / Regmal → rework stock (pending)
+  if(color>0){
+    state.reworkStock=[...(state.reworkStock||[]),{
+      id:Date.now()+Math.random(), category:'Color', productName:stock.productName,
+      size:stock.size, batchNo:stock.batchNo, qty:color, dateAdded:today, status:'pending'
+    }];
+  }
+  if(regmal>0){
+    state.reworkStock=[...(state.reworkStock||[]),{
+      id:Date.now()+Math.random()+1, category:'Regmal', productName:stock.productName,
+      size:stock.size, batchNo:stock.batchNo, qty:regmal, dateAdded:today, status:'pending'
+    }];
+  }
+
+  // Kharab Maal → scrap log (piece count only)
+  if(scrap>0){
+    state.brushScrapLog=[...(state.brushScrapLog||[]),{
+      date:today, productName:stock.productName, batchNo:stock.batchNo, qty:scrap, reason:'Kharab Maal'
+    }];
+  }
+
+  // Keere Wala → wastage (piece count + KG, no material type split — different from wood scrap)
+  if(wastageQty>0){
+    state.wastage=[...(state.wastage||[]),{
+      date:today, batchNo:stock.batchNo, plankSizeName:stock.productName,
+      woodPieceName:stock.productName, rejectedPieces:wastageQty, wastageKg:wastageKg,
+      reason:'Keere Wala (Brush Dept)', type:'BrushDeptWastage', status:'closed'
+    }];
+  }
+
+  // Brush Machine → finished brushes stock
+  if(brushMachine>0){
+    const idx=(state.finishedBrushes||[]).findIndex(b=>b.productName===stock.productName&&b.batchNo===stock.batchNo);
+    if(idx>=0){ state.finishedBrushes[idx].qty += brushMachine; }
+    else{
+      state.finishedBrushes=[...(state.finishedBrushes||[]),{
+        id:Date.now()+Math.random(), productName:stock.productName, batchNo:stock.batchNo,
+        qty:brushMachine, dateAdded:today
+      }];
+    }
+    addLedgerEntry('finished', stock.productName+' (Brush)', stock.batchNo, brushMachine, 'IN', `Brush machine output from ${total} processed`, '');
+  }
+
+  addLedgerEntry('finished', stock.productName, stock.batchNo, total, 'OUT', `Sent to Brush Dept for processing`, '');
+
+  saveAll();
+  state.brushSelectedStock = null;
+  if(msgEl){msgEl.textContent=`✅ Processed ${total} pcs! Brush machine: ${brushMachine}, Color: ${color}, Regmal: ${regmal}, Scrap: ${scrap}, Wastage: ${wastageQty}`;msgEl.className="msg ok";}
+  const stockNameForUndo = stock.productName, batchForUndo = stock.batchNo;
+  setTimeout(()=>{
+    re();
+    showReviewPopup({
+      snapshot: preSnapshot,
+      subtitle: stockNameForUndo + ' — Batch ' + batchForUndo,
+      field1Label: 'Quantity Processed', field1Value: total, field1Editable: true,
+      field2Label: 'Brush Machine Output', field2Value: brushMachine, field2Editable: false,
+      onUndo: function(){
+        const m=document.getElementById('brushMsg');
+        if(m){m.textContent='↩️ Entry undone — select stock and re-enter.';m.className='msg ok';}
+      }
+    });
+  },100);
+}
+
+function markReworkCompleted(id){
+  const rework = state.reworkStock||[];
+  const item = rework.find(r=>r.id===id);
+  if(!item) return;
+  // Move back into finished wood stock — usable again for same size or smaller product
+  const idx=(state.finishedInventory||[]).findIndex(f=>f.productName===item.productName&&f.batchNo===item.batchNo);
+  if(idx>=0){ state.finishedInventory[idx].qty += item.qty; }
+  else{
+    state.finishedInventory=[...(state.finishedInventory||[]),{
+      id:Date.now()+Math.random(), productName:item.productName, size:item.size,
+      batchNo:item.batchNo, qty:item.qty, dateAdded:new Date().toISOString().slice(0,10)
+    }];
+  }
+  state.reworkStock = rework.map(r=>r.id===id?{...r,status:'completed',completedDate:new Date().toISOString().slice(0,10)}:r);
+  saveAll();
+  re();
+}
+
+// ==================== SOCKET DEPARTMENT ====================
+function renderSocketDept(){
+  const brushes = state.finishedBrushes||[];
+  const selectedId = state.socketSelectedStock||null;
+  const selected = brushes.find(b=>b.id===selectedId);
+  const socketStockByType = (state.socketInventory||[]).reduce((acc,s)=>{acc[s.socketType]=(acc[s.socketType]||0)+s.qty;return acc;},{});
+  const totalScrews = (state.screwInventory||[]).reduce((s,x)=>s+x.qty,0);
+
+  let html = `<div class="card" style="background:#f5f0eb;">
+    <div class="label">🔌 Socket Department — Attach Socket &amp; Screws</div>
+    <div style="font-size:11px;color:#888;">Select finished brushes to attach plastic sockets and metal screws.</div>
+  </div>`;
+
+  // Current socket/screw stock summary
+  html += `<div class="card" style="border:2px solid #9b59b6;">
+    <div class="label" style="color:#9b59b6;">📦 Current Stock</div>
+    <div style="font-size:11px;font-weight:700;margin-bottom:6px;">Sockets:</div>
+    ${Object.keys(socketStockByType).length>0?Object.entries(socketStockByType).map(([t,q])=>`<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;"><span>${t}</span><span style="font-weight:700;">${q} pcs</span></div>`).join(''):`<div style="color:#aaa;font-size:12px;">No socket stock yet — add in Materials tab.</div>`}
+    <div style="font-size:11px;font-weight:700;margin-top:8px;">Screws: <span style="color:#7f8c8d;">${totalScrews}</span> available</div>
+  </div>`;
+
+  // Available finished brushes to select from
+  html += `<div class="card">
+    <div class="label">🪥 Finished Brushes (from Brush Dept)</div>`;
+  if(brushes.length===0){
+    html += `<div style="font-size:12px;color:#aaa;">No finished brushes available yet. Process some in Brush Dept first.</div>`;
+  } else {
+    brushes.forEach(b=>{
+      const sel = selectedId===b.id;
+      html += `<button class="select-batch-btn ${sel?'selected':''}" onclick="selectSocketStock(${JSON.stringify(b.id)})">
+        <span>${b.productName} — ${b.batchNo}</span>
+        <span class="green" style="font-weight:700;">${b.qty} pcs</span>
+      </button>`;
+    });
+  }
+  html += `</div>`;
+
+  if(selected){
+    const wp = (state.woodPieces||[]).find(w=>w.name===selected.productName);
+    const socketType = wp?.socketType||'';
+    const screwsPerPiece = wp?.screwsRequired||0;
+    const hasBOM = socketType && screwsPerPiece>0;
+
+    html += `<div class="card" style="border:2px solid #d4b896;">
+      <div class="label">⚙️ Process: ${selected.productName} (${selected.batchNo})</div>
+      <div style="font-size:11px;color:#888;margin-bottom:8px;">Available: ${selected.qty} pcs</div>`;
+
+    if(!hasBOM){
+      html += `<div style="background:#fdecea;border-radius:8px;padding:10px;font-size:12px;color:#e74c3c;">⚠️ No Bill of Materials set for ${selected.productName}. Go to Materials tab and set Socket Type + Screws Required first.</div>`;
+    } else {
+      html += `<div style="background:#f9f5f0;border-radius:8px;padding:10px;margin-bottom:10px;font-size:11px;">
+        <b>BOM:</b> 1× ${socketType} + ${screwsPerPiece} screws per piece
+      </div>
+      <div class="label">Quantity to Process</div>
+      <input type="number" id="socketProcessQty" min="1" max="${selected.qty}" placeholder="e.g. 100" oninput="calcSocketNeed(${JSON.stringify(socketType)},${screwsPerPiece})" style="margin-bottom:8px;"/>
+      <div id="socketNeedPreview" style="font-size:12px;color:#3498db;font-weight:700;margin-bottom:10px;"></div>
+      <div id="socketErr" style="font-size:12px;color:#e74c3c;margin-bottom:8px;display:none;"></div>
+      <button class="btn" style="background:#9b59b6;width:100%;" onclick="recordSocketProcessing()">Record Socket Attachment</button>
+      <div id="socketProcMsg" class="msg"></div>`;
+    }
+    html += `</div>`;
+  }
+
+  // Ready for Sale stock summary
+  const ready = state.readyForSale||[];
+  if(ready.length>0){
+    html += `<div class="card" style="border:2px solid #27ae60;">
+      <div class="label" style="color:#27ae60;">✅ Ready for Sale</div>`;
+    ready.forEach(r=>{
+      html += `<div style="display:flex;justify-content:space-between;font-size:12px;padding:5px 0;border-bottom:1px solid #f0e8de;">
+        <span>${r.productName} — ${r.batchNo}</span>
+        <span style="font-weight:700;color:#27ae60;">${r.qty} pcs</span>
+      </div>`;
+    });
+    html += `</div>`;
+  }
+
+  return html;
+}
+
+function selectSocketStock(id){
+  state.socketSelectedStock = id;
+  re();
+}
+
+function calcSocketNeed(socketType, screwsPerPiece){
+  const qty = +document.getElementById('socketProcessQty')?.value||0;
+  const preview = document.getElementById('socketNeedPreview');
+  const errEl = document.getElementById('socketErr');
+  if(!preview) return;
+  if(qty<=0){ preview.textContent=''; return; }
+  const socketsNeeded = qty;
+  const screwsNeeded = qty*screwsPerPiece;
+  const socketAvailable = (state.socketInventory||[]).filter(s=>s.socketType===socketType).reduce((s,x)=>s+x.qty,0);
+  const screwsAvailable = (state.screwInventory||[]).reduce((s,x)=>s+x.qty,0);
+  preview.textContent = `Needs: ${socketsNeeded} × ${socketType}, ${screwsNeeded} screws`;
+  if(errEl){
+    if(socketsNeeded>socketAvailable || screwsNeeded>screwsAvailable){
+      errEl.textContent = `⚠️ Not enough stock — have ${socketAvailable} ${socketType}, ${screwsAvailable} screws`;
+      errEl.style.display='block';
+    } else {
+      errEl.style.display='none';
+    }
+  }
+}
+
+let isSubmittingSocket = false;
+function recordSocketProcessing(){
+  if(isSubmittingSocket) return;
+  isSubmittingSocket = true;
+  setTimeout(()=>{isSubmittingSocket=false;}, 1000);
+
+  const selectedId = state.socketSelectedStock;
+  const brushes = state.finishedBrushes||[];
+  const stock = brushes.find(b=>b.id===selectedId);
+  const msgEl = document.getElementById('socketProcMsg');
+  if(!stock){ if(msgEl){msgEl.textContent="⚠️ Select finished brush stock first";msgEl.className="msg err";} return; }
+
+  const wp = (state.woodPieces||[]).find(w=>w.name===stock.productName);
+  const socketType = wp?.socketType||'';
+  const screwsPerPiece = wp?.screwsRequired||0;
+  if(!socketType||!screwsPerPiece){ if(msgEl){msgEl.textContent="⚠️ No Bill of Materials set for this product";msgEl.className="msg err";} return; }
+
+  const qty = +document.getElementById('socketProcessQty')?.value||0;
+  if(!qty||qty<=0){ if(msgEl){msgEl.textContent="⚠️ Enter quantity to process";msgEl.className="msg err";} return; }
+  if(qty>stock.qty){ if(msgEl){msgEl.textContent=`⚠️ Only ${stock.qty} pcs available`;msgEl.className="msg err";} return; }
+
+  const socketsNeeded = qty;
+  const screwsNeeded = qty*screwsPerPiece;
+  const socketAvailable = (state.socketInventory||[]).filter(s=>s.socketType===socketType).reduce((s,x)=>s+x.qty,0);
+  const screwsAvailable = (state.screwInventory||[]).reduce((s,x)=>s+x.qty,0);
+  if(socketsNeeded>socketAvailable){ if(msgEl){msgEl.textContent=`⚠️ Not enough ${socketType} sockets! Have ${socketAvailable}, need ${socketsNeeded}`;msgEl.className="msg err";} return; }
+  if(screwsNeeded>screwsAvailable){ if(msgEl){msgEl.textContent=`⚠️ Not enough screws! Have ${screwsAvailable}, need ${screwsNeeded}`;msgEl.className="msg err";} return; }
+
+  const today = new Date().toISOString().slice(0,10);
+  const preSnapshot = takeSnapshot(['finishedBrushes','socketInventory','screwInventory','readyForSale']);
+
+  // Deduct finished brushes stock
+  state.finishedBrushes = brushes.map(b=>b.id===stock.id?{...b,qty:b.qty-qty}:b).filter(b=>b.qty>0);
+
+  // Deduct socket stock (FIFO across entries of that type)
+  let toDeductSockets = socketsNeeded;
+  state.socketInventory = (state.socketInventory||[]).map(s=>{
+    if(s.socketType!==socketType||toDeductSockets<=0) return s;
+    const d=Math.min(s.qty,toDeductSockets); toDeductSockets-=d;
+    return {...s, qty:s.qty-d};
+  }).filter(s=>s.qty>0);
+
+  // Deduct screw stock (FIFO)
+  let toDeductScrews = screwsNeeded;
+  state.screwInventory = (state.screwInventory||[]).map(s=>{
+    if(toDeductScrews<=0) return s;
+    const d=Math.min(s.qty,toDeductScrews); toDeductScrews-=d;
+    return {...s, qty:s.qty-d};
+  }).filter(s=>s.qty>0);
+
+  // Add to Ready for Sale stock
+  const idx=(state.readyForSale||[]).findIndex(r=>r.productName===stock.productName&&r.batchNo===stock.batchNo);
+  if(idx>=0){ state.readyForSale[idx].qty += qty; }
+  else{
+    state.readyForSale=[...(state.readyForSale||[]),{
+      id:Date.now()+Math.random(), productName:stock.productName, batchNo:stock.batchNo, qty, dateAdded:today
+    }];
+  }
+
+  addLedgerEntry('finished', stock.productName, stock.batchNo, qty, 'OUT', `Sent to Socket Dept (used ${socketsNeeded} ${socketType}, ${screwsNeeded} screws)`, '');
+  addLedgerEntry('finished', stock.productName+' (Ready for Sale)', stock.batchNo, qty, 'IN', `Socket + screws attached — ready for sale`, '');
+
+  saveAll();
+  state.socketSelectedStock = null;
+  if(msgEl){msgEl.textContent=`✅ Processed ${qty} pcs! Used ${socketsNeeded} ${socketType} + ${screwsNeeded} screws.`;msgEl.className="msg ok";}
+  const stockNameForUndo = stock.productName, batchForUndo = stock.batchNo;
+  setTimeout(()=>{
+    re();
+    showReviewPopup({
+      snapshot: preSnapshot,
+      subtitle: stockNameForUndo + ' — Batch ' + batchForUndo,
+      field1Label: 'Quantity Processed', field1Value: qty, field1Editable: true,
+      field2Label: 'Screws Used', field2Value: screwsNeeded, field2Editable: false,
+      onUndo: function(){
+        const m=document.getElementById('socketProcMsg');
+        if(m){m.textContent='↩️ Entry undone — select stock and re-enter.';m.className='msg ok';}
+      }
+    });
+  },100);
+}
+
+function renderInventory(){
+  // Group all stock across sizes by batch number — shows one vendor lot with all its sizes together
+  const batchGroups = {};
+  PLANK_SIZES.forEach(size=>{
+    const mat = state.materials?.[size];
+    (mat?.batches||[]).forEach(b=>{
+      if(!batchGroups[b.batchNo]) batchGroups[b.batchNo] = {batchNo:b.batchNo, vendor:b.vendor||'', dateAdded:b.dateAdded, sizes:[]};
+      batchGroups[b.batchNo].sizes.push({size, qty:b.qty, price:b.pricePerPiece||0});
+      // Use earliest date and prefer any vendor name found
+      if(b.vendor && !batchGroups[b.batchNo].vendor) batchGroups[b.batchNo].vendor = b.vendor;
+    });
+  });
+  const batchList = Object.values(batchGroups).sort((a,b)=>(b.dateAdded||'').localeCompare(a.dateAdded||''));
+
+  let html=`<div class="card"><div class="label">📦 Stock by Purchase Batch</div>`;
+  if(batchList.length===0){
+    html+=`<div style="font-size:12px;color:#aaa;">No purchases recorded yet.</div>`;
+  } else {
+    batchList.forEach(g=>{
+      const totalPcs = g.sizes.reduce((s,x)=>s+x.qty,0);
+      const totalValue = g.sizes.reduce((s,x)=>s+(x.qty*x.price),0);
+      html+=`<div style="background:#f9f5f0;border-radius:8px;padding:10px;margin-bottom:8px;">
+        <div class="row" style="margin-bottom:4px;">
+          <div style="font-weight:700;font-size:13px;">${g.batchNo}</div>
+          <div style="font-size:11px;color:#aaa;">${g.dateAdded}</div>
+        </div>
+        ${g.vendor?`<div style="font-size:11px;color:#7a5230;font-weight:700;margin-bottom:6px;">🏭 ${g.vendor}</div>`:''}
+        ${g.sizes.map(sz=>`
+        <div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;">
+          <span>${sz.size}" — ${sz.qty} pcs${sz.price>0?` @ Rs.${sz.price}/pc`:''}</span>
+          ${sz.price>0?`<span style="color:#888;">Rs.${(sz.qty*sz.price).toLocaleString()}</span>`:''}
+        </div>`).join('')}
+        <div style="font-size:11px;color:#aaa;margin-top:6px;padding-top:6px;border-top:1px solid #f0e8de;">
+          Total: ${totalPcs} pcs${totalValue>0?` · Rs.${totalValue.toLocaleString()}`:''}
+        </div>
+      </div>`;
+    });
+  }
+  html+=`</div>`;
+
+  html+=`<div class="card"><div class="label">🪵 Wooden Planks by Size</div>`;
+  PLANK_SIZES.forEach(size=>{
+    const mat=state.materials?.[size]||{name:size+'" Planks',size:+size,low:50,batches:[]};
+    const total=(mat?.batches||[]).reduce((s,b)=>s+b.qty,0);
+    html+=`<div style="margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid #f0e8de;">
+      <div style="font-weight:700;font-size:13px;margin-bottom:6px;">${mat?.name}</div>`;
+    if(mat?.batches?.length>0){
+      mat.batches.forEach(b=>{html+=`<div class="batch-item"><span>${b.batchNo} (${b.dateAdded})${b.vendor?' · '+b.vendor:''}</span><span class="green" style="font-weight:700;">${b.qty} pcs</span></div>`;});
+    } else {
+      html+=`<div style="font-size:12px;color:#aaa;padding:4px 8px;">No stock</div>`;
+    }
+    html+=`<div style="font-size:11px;color:#aaa;padding-left:8px;margin-top:4px;">Total: ${total} | Min: ${mat?.low} | ${total<=mat?.low?"⚠️ Low":"✅ OK"}</div></div>`;
+  });
+  html+=`</div>`;
+
+  const sc=state.scrapInventory||[];
+  html+=`<div class="card" style="border:2px solid #e67e22;"><div class="label">♻️ Scrap Inventory</div>`;
+  if(sc.length>0){
+    const grouped={};
+    sc.forEach(s=>{const k=`${s.size}-${s.batch}`;grouped[k]=grouped[k]?{...grouped[k],quantity:grouped[k].quantity+s.quantity}:{...s};});
+    Object.values(grouped).forEach(s=>{
+      html+=`<div class="scrap-item"><div class="row"><span><b>${s.size}"</b> — ${s.batch}</span><span class="orange" style="font-weight:700;">${s.quantity} pcs</span></div><div style="font-size:11px;color:#888;margin-top:2px;">${s.dateCreated}</div></div>`;
+    });
+    html+=`<div style="font-size:11px;color:#aaa;margin-top:6px;">Total: ${sc.reduce((s,x)=>s+x.quantity,0)} pcs</div>`;
+  } else {
+    html+=`<div style="color:#aaa;font-size:12px;">No scrap yet.</div>`;
+  }
+  html+=`</div>`;
+  return html;
+}
+
+function initApp(){
+  // Validate materials structure — repair if corrupted
+  PLANK_SIZES.forEach(size=>{
+    if(!state.materials) state.materials = emptyMaterials();
+    if(!state.materials[size]) state.materials[size]={name:size+'" Planks',size:+size,low:50,batches:[]};
+    if(!state.materials[size].batches) state.materials[size].batches=[];
+  });
+  // Clean up: move any scrap inventory at-or-below the smallest defined piece size into wastage
+// (these are dead-end pieces that can never be used in production)
+function cleanupDeadEndScrap(){
+  const minSize = (state.woodPieces||[]).length>0 ? Math.min(...(state.woodPieces||[]).map(w=>w.size)) : 0;
+  if(minSize<=0) return;
+  const stuck = (state.scrapInventory||[]).filter(s=>s.size<=minSize);
+  if(stuck.length===0) return;
+  stuck.forEach(s=>{
+    // Derive root batch number to check whether the parent batch is open or closed
+    const rootBatchNo = s.batch.split('-Rejected-')[0].split('-Salvage-')[0].split('-Scrap-')[0];
+    const isClosed = (state.closedBatches||[]).some(b=>b.batchNo===rootBatchNo);
+    state.wastage=[...(state.wastage||[]),{
+      date:new Date().toISOString().slice(0,10),
+      batchNo:rootBatchNo,
+      plankSizeName:`${s.size}" pieces (auto-moved from dead-end scrap)`,
+      woodPieceName:'',
+      rejectedPieces:s.quantity,
+      wastageKg:0,
+      reason:'Smallest size — could not be used in production. Please enter weight (KG) manually.',
+      type:'QualityControl',
+      status: isClosed ? 'closed' : 'open',
+      needsWeight: true
+    }];
+  });
+  state.scrapInventory = (state.scrapInventory||[]).filter(s=>s.size>minSize);
+  saveAll();
+}
+cleanupDeadEndScrap();
+
+// One-time fix: repair existing QC wastage entries that have the WRONG batchNo
+// (full scrap-batch name instead of root batch number) and wrong status
+function fixBrokenQcWastageEntries(){
+  let changed = false;
+  state.wastage = (state.wastage||[]).map(w=>{
+    if(w.type!=='QualityControl'&&w.type!=='ManualClose') return w;
+    // If batchNo contains a suffix pattern, it's broken — extract the real root
+    if(w.batchNo && (w.batchNo.includes('-Rejected-')||w.batchNo.includes('-Salvage-')||w.batchNo.includes('-Scrap-'))){
+      const rootBatchNo = w.batchNo.split('-Rejected-')[0].split('-Salvage-')[0].split('-Scrap-')[0];
+      const isClosed = (state.closedBatches||[]).some(b=>b.batchNo===rootBatchNo);
+      changed = true;
+      return {...w, batchNo: rootBatchNo, status: isClosed?'closed':'open'};
+    }
+    // Even if batchNo looks fine, re-verify status against current closedBatches
+    const isClosed = (state.closedBatches||[]).some(b=>b.batchNo===w.batchNo);
+    if(isClosed && w.status!=='closed'){ changed=true; return {...w, status:'closed'}; }
+    return w;
+  });
+  if(changed) saveAll();
+}
+fixBrokenQcWastageEntries();
+
+mergeDuplicateClosedBatches();
+  syncLedgerFromExistingData();
+  // Initialize users if not set
+  if(!state.users || state.users.length===0) state.users = DEFAULT_USERS;
+  // Migration: add Owner account if it's missing from previously-saved user data
+  if(!state.users.some(u=>u.role==='owner')){
+    const ownerDefault = DEFAULT_USERS.find(u=>u.role==='owner');
+    if(ownerDefault){
+      state.users = [...state.users, {...ownerDefault, id: Date.now()}];
+      saveAll();
+    }
+  }
+  // Migration: rename "Production" tab to "Wood Finishing" in existing saved users
+  let renamedTabs = false;
+  state.users = state.users.map(u=>{
+    if(u.tabs.includes('Production')){
+      renamedTabs = true;
+      return {...u, tabs: u.tabs.map(t=>t==='Production'?'Wood Finishing':t)};
+    }
+    return u;
+  });
+  if(renamedTabs) saveAll();
+
+  // Migration: ensure every user has a voidPermissions object (even if empty)
+  let voidPermMigrated = false;
+  state.users = state.users.map(u=>{
+    if(!u.voidPermissions){
+      voidPermMigrated = true;
+      const defaultMatch = DEFAULT_USERS.find(d=>d.role===u.role);
+      return {...u, voidPermissions: defaultMatch ? {...defaultMatch.voidPermissions} : {}};
+    }
+    return u;
+  });
+  if(voidPermMigrated) saveAll();
+
+  // Migration: grant new department tabs to existing users whose role should have them
+  // (admin, owner, production — matching DEFAULT_USERS) if missing from their saved tabs
+  let usersChanged = false;
+  state.users = state.users.map(u=>{
+    const defaultMatch = DEFAULT_USERS.find(d=>d.role===u.role);
+    if(!defaultMatch) return u;
+    let tabs = u.tabs;
+    ['Brush Dept','Socket Dept','BOM'].forEach(newTab=>{
+      if(defaultMatch.tabs.includes(newTab) && !tabs.includes(newTab)){
+        usersChanged = true;
+        tabs = [...tabs, newTab];
+      }
+    });
+    return tabs===u.tabs ? u : {...u, tabs};
+  });
+  if(usersChanged) saveAll();
+
+  // Check if user was already logged in (persists across refresh)
+  const savedUser = localStorage.getItem('wbt_currentUser');
+  if(savedUser){
+    try{
+      const parsed = JSON.parse(savedUser);
+      // Verify user still exists and password hasn't changed
+      const stillValid = (state.users||DEFAULT_USERS).find(u=>u.password===parsed.password && u.id===parsed.id);
+      if(stillValid){
+        currentUser = {...stillValid, loginName: parsed.loginName||stillValid.name};
+        renderAuthenticatedApp();
+        return;
+      }
+    } catch(e){}
+  }
+  // Show login screen
+  document.getElementById('loginScreen').style.display='flex';
+}
+
+function renderWastage(){
+  // Always merge before rendering to ensure data is clean
+  mergeDuplicateClosedBatches();
+  const filter=state.wastageFilter||"all";
+  // After merge, closedBatches only has parent batches with scrap KG included
+  const batches=(state.closedBatches||[]).filter(b=>!b.batchNo.includes('-Scrap-'));
+  const filtered=filter==="all"?batches:batches.filter(b=>b.size===filter);
+  const totalKg=filtered.reduce((s,b)=>s+(b.wastageKg||0),0);
+  const sales=state.sales||[];
+  const typeStock = getWasteTypeStock();
+  const typeColors = {Bhusa:'#8b6f47', Patti:'#e67e22', Gitta:'#5c3d1e'};
+
+  // QC wastage — only show entries for OPEN batches (closed ones are merged into batch card)
+  const qcWastage=(state.wastage||[]).filter(w=>w.type==='QualityControl'&&w.status==='open');
+  const qcTotalKg=qcWastage.reduce((s,w)=>s+(w.wastageKg||0),0);
+
+  let html=`<div class="card" style="background:#fff8f0;border:2px solid #e67e22;">
+    <div class="label">🗑️ Wastage by Type</div>
+    <div class="grid3" style="margin-bottom:14px;">
+      ${WASTE_TYPES.map(t=>`
+      <div style="background:#fff;border-radius:8px;padding:10px;text-align:center;border-top:3px solid ${typeColors[t]};">
+        <div style="font-size:11px;font-weight:700;color:${typeColors[t]};margin-bottom:4px;">${t}</div>
+        <div style="font-size:18px;font-weight:700;color:#e74c3c;">${typeStock.available[t].toFixed(1)}</div>
+        <div style="font-size:9px;color:#aaa;">KG available</div>
+        <div style="font-size:9px;color:#27ae60;margin-top:2px;">Sold: ${typeStock.sold[t].toFixed(1)} KG</div>
+      </div>`).join('')}
+    </div>
+    <button class="btn btn-green btn-full" onclick="openSaleModal()">💰 Sell Wastage</button>
+  </div>`;
+
+  html+=`<div class="card" style="background:#fff8f0;border:2px solid #e67e22;">
+    <div class="label">📊 Overall Summary</div>
+    <div class="grid3" style="margin-bottom:14px;">
+      <div style="background:#fff;border-radius:8px;padding:10px;text-align:center;">
+        <div style="font-size:10px;color:#aaa;margin-bottom:4px;">Total Wastage</div>
+        <div style="font-size:22px;font-weight:700;color:#e67e22;">${(totalKg+qcTotalKg).toFixed(1)}</div>
+        <div style="font-size:10px;color:#aaa;">KG (incl. QC)</div>
+      </div>
+      <div style="background:#fff;border-radius:8px;padding:10px;text-align:center;">
+        <div style="font-size:10px;color:#aaa;margin-bottom:4px;">Total Sold</div>
+        <div style="font-size:22px;font-weight:700;color:#27ae60;">${sales.reduce((s,x)=>s+x.kgSold,0).toFixed(1)}</div>
+        <div style="font-size:10px;color:#aaa;">KG</div>
+      </div>
+      <div style="background:#fff;border-radius:8px;padding:10px;text-align:center;">
+        <div style="font-size:10px;color:#aaa;margin-bottom:4px;">Remaining</div>
+        <div style="font-size:22px;font-weight:700;color:#e74c3c;">${WASTE_TYPES.reduce((s,t)=>s+typeStock.available[t],0).toFixed(1)}</div>
+        <div style="font-size:10px;color:#aaa;">KG</div>
+      </div>
+    </div>
+    <div class="label">Filter by Plank Size</div>
+    <select onchange="state.wastageFilter=this.value;re()">
+      <option value="all" ${filter==="all"?"selected":""}>All Sizes</option>
+      ${PLANK_SIZES.map(s=>`<option value="${s}" ${filter===s?"selected":""}>${s}" Planks</option>`).join('')}
+    </select>
+  </div>`;
+
+  // After merge, filtered already has clean parent-only data
+  const parentBatches = filtered;
+  const scrapChildBatches = []; // already merged into parents
+
+  // Show QC wastage section (from production runs, before/without batch close)
+  if(qcWastage.length>0){
+    // Group by batchNo — combine multiple rejected-run entries from the same batch into one row
+    const qcGrouped = {};
+    qcWastage.forEach(w=>{
+      if(!qcGrouped[w.batchNo]){
+        qcGrouped[w.batchNo] = {
+          batchNo: w.batchNo,
+          plankSizeName: w.plankSizeName,
+          woodPieceNames: new Set([w.woodPieceName].filter(Boolean)),
+          reasons: new Set([w.reason].filter(Boolean)),
+          totalRejected: 0,
+          totalKg: 0,
+          status: w.status,
+          dates: new Set()
+        };
+      }
+      const g = qcGrouped[w.batchNo];
+      g.totalRejected += (w.rejectedPieces||0);
+      g.totalKg += (w.wastageKg||0);
+      if(w.woodPieceName) g.woodPieceNames.add(w.woodPieceName);
+      if(w.reason) g.reasons.add(w.reason);
+      g.dates.add(w.date);
+      // If any entry in this batch is closed, mark the whole group closed
+      if(w.status==='closed') g.status='closed';
+    });
+    const qcGroupedList = Object.values(qcGrouped);
+
+    html+=`<div class="card" style="border:2px solid #e74c3c;">
+      <div class="label" style="color:#e74c3c;">&#10060; Quality Control Wastage (from rejected pieces)</div>
+      <div style="font-size:12px;color:#888;margin-bottom:10px;">Recorded during production runs</div>
+      ${qcGroupedList.map(g=>`
+        <div style="padding:8px;background:#fdecea;border-radius:6px;margin-bottom:6px;border-left:3px solid #e74c3c;">
+          <div class="row">
+            <div>
+              <div style="font-size:13px;font-weight:700;">${g.batchNo}</div>
+              <div style="font-size:11px;color:#666;">${g.plankSizeName} · ${[...g.woodPieceNames].join(', ')||'—'}</div>
+              <div style="font-size:11px;color:#888;">${g.totalRejected} pcs rejected total · ${[...g.reasons].join(', ')||'—'}</div>
+            </div>
+            <div style="text-align:right;">
+              <div style="font-size:18px;font-weight:700;color:#e74c3c;">${g.totalKg.toFixed(1)} KG</div>
+              <div style="font-size:10px;color:${g.status==='open'?'#e67e22':'#27ae60'};">${g.status==='open'?'⏳ Batch Open':'✅ Batch Closed'}</div>
+            </div>
+          </div>
+        </div>`).join('')}
+      <div style="padding-top:8px;border-top:1px solid #f0e8de;font-size:12px;font-weight:700;color:#e74c3c;">
+        Total QC Wastage: ${qcTotalKg.toFixed(1)} KG
+      </div>
+    </div>`;
+  }
+
+  if(parentBatches.length===0){
+    html+=`<div class="card"><div style="color:#aaa;font-size:13px;text-align:center;padding:20px;">No closed batches yet.<br/><span style="font-size:11px;">Close a production batch to record wastage in KG.</span></div></div>`;
+    return html;
+  }
+
+  [...parentBatches].reverse().forEach((b)=>{
+    const realIdx = (state.closedBatches||[]).findIndex(x=>x.batchNo===b.batchNo);
+    // Type breakdown for THIS batch — sums typeSplit across all its wastage entries (production efficiency insight)
+    const batchWastageEntries = (state.wastage||[]).filter(w=>w.batchNo===b.batchNo&&(w.type==='QualityControl'||w.type==='ManualClose'));
+    const batchTypeBreakdown = {Bhusa:0, Patti:0, Gitta:0};
+    batchWastageEntries.forEach(w=>{
+      if(w.typeSplit){ WASTE_TYPES.forEach(t=>{ batchTypeBreakdown[t]+=(w.typeSplit[t]||0); }); }
+    });
+    const statusColor = '#888';
+    const statusLabel = '';
+
+    // Scrap still in inventory under this batch
+    const scrapInStock = (state.scrapInventory||[]).filter(s=>s.batch&&s.batch.startsWith(b.batchNo+'-Scrap-'));
+    const scrapGrouped = {};
+    scrapInStock.forEach(s=>{
+      if(!scrapGrouped[s.batch]) scrapGrouped[s.batch]={batch:s.batch,size:s.size,quantity:0,dateCreated:s.dateCreated,status:'In Stock',wastageKg:0};
+      scrapGrouped[s.batch].quantity+=s.quantity;
+    });
+    // Scrap children that were closed (already merged into b.scrapChildren)
+    (b.scrapChildren||[]).forEach(sb=>{
+      const key=sb.batchNo;
+      if(!scrapGrouped[key]) scrapGrouped[key]={batch:key,size:'',quantity:sb.totalPlanksUsed||0,dateCreated:sb.dateOpened,status:'Used in Production',wastageKg:sb.wastageKg||0};
+      else { scrapGrouped[key].status='Partially Used'; scrapGrouped[key].wastageKg=(sb.wastageKg||0); }
+    });
+    const scrapChildList = Object.values(scrapGrouped);
+    const productName = s => s.batch.replace(b.batchNo+'-Scrap-','');
+
+    html+=`<div class="card" style="border:1px solid #f0e8de;">
+      <div class="row" style="margin-bottom:10px;align-items:flex-start;">
+        <div>
+          <div style="font-weight:700;font-size:15px;">${b.batchNo}</div>
+          <div style="font-size:12px;color:#666;">${b.plankSizeName}</div>
+          <div style="font-size:11px;font-weight:700;color:${statusColor};margin-top:2px;">${statusLabel}</div>
+        </div>
+        <div style="text-align:right;">
+          <div style="font-size:20px;font-weight:700;color:#e67e22;">${b.wastageKg} KG</div>
+          <div style="font-size:10px;color:#aaa;">wastage (manual)</div>
+        </div>
+      </div>
+
+      ${scrapChildList.length>0?`
+      <div style="margin-bottom:12px;">
+        <div style="font-size:11px;font-weight:700;color:#e67e22;text-transform:uppercase;margin-bottom:6px;">♻️ Scrap from this batch</div>
+        ${scrapChildList.map(s=>`
+        <div style="padding:6px 10px;background:#fff3cd;border-radius:6px;margin-bottom:4px;border-left:3px solid #e67e22;">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <div>
+              <div style="font-size:12px;font-weight:600;">${productName(s)}</div>
+              <div style="font-size:10px;color:#888;">${s.size?s.size+'" pieces · ':''}since ${s.dateCreated}</div>
+            </div>
+            <div style="text-align:right;">
+              <div style="font-size:13px;font-weight:700;color:#e67e22;">${s.quantity} pcs</div>
+              <div style="font-size:10px;font-weight:600;color:${s.status==='In Stock'?'#27ae60':s.status==='Used in Production'?'#3498db':'#e67e22'};">${s.status==='In Stock'?'📦 In Stock':s.status==='Used in Production'?'🔄 Used':'⏳ Partial'}</div>
+            </div>
+          </div>
+          ${s.wastageKg>0?`<div style="font-size:10px;color:#e67e22;margin-top:3px;">Wastage from this scrap: ${s.wastageKg} KG</div>`:''}
+        </div>`).join('')}
+      </div>`:''}
+
+      <div class="grid3" style="font-size:11px;margin-bottom:10px;gap:6px;">
+        ${WASTE_TYPES.map(t=>`
+        <div style="background:#f9f5f0;border-radius:6px;padding:6px;text-align:center;border-top:2px solid ${typeColors[t]};">
+          <div style="color:${typeColors[t]};font-weight:700;font-size:10px;">${t}</div>
+          <div style="font-weight:700;font-size:13px;">${batchTypeBreakdown[t].toFixed(1)} KG</div>
+        </div>`).join('')}
+      </div>
+      ${(b.qcWastageKg||0)>0||( b.manualWastageKg!==undefined)?`
+      <div style="display:flex;gap:6px;font-size:11px;margin-bottom:10px;">
+        ${(b.manualWastageKg||0)>0?`<div style="flex:1;background:#fff3cd;border-radius:6px;padding:6px 8px;"><div style="color:#aaa;">Manual</div><div style="font-weight:700;color:#e67e22;">${b.manualWastageKg} KG</div></div>`:''}
+        ${(b.qcWastageKg||0)>0?`<div style="flex:1;background:#fdecea;border-radius:6px;padding:6px 8px;"><div style="color:#aaa;">QC Rejected</div><div style="font-weight:700;color:#e74c3c;">${b.qcWastageKg} KG</div></div>`:''}
+      </div>`:'' }
+      ${(() => {
+        const batchQcEntries = (state.wastage||[]).filter(w=>w.batchNo===b.batchNo&&(w.type==='QualityControl'||w.type==='ManualClose'));
+        if(batchQcEntries.length===0) return '';
+        return `<details style="margin-bottom:10px;font-size:11px;">
+          <summary style="cursor:pointer;color:#7a5230;font-weight:700;">📋 View ${batchQcEntries.length} rejection record${batchQcEntries.length>1?'s':''} (total ${b.qcWastageKg||0} KG)</summary>
+          <div style="margin-top:6px;background:#f9f5f0;border-radius:6px;padding:8px;">
+            ${batchQcEntries.map(w=>`
+              <div style="padding:4px 0;border-bottom:1px solid #f0e8de;">
+                <div style="display:flex;justify-content:space-between;">
+                  <span>${w.woodPieceName||'—'} · ${w.rejectedPieces||0} pcs · ${w.reason||'—'}</span>
+                  <span style="font-weight:700;color:#e74c3c;">${(w.wastageKg||0).toFixed(1)} KG</span>
+                </div>
+                ${w.typeSplit?`<div style="color:#888;font-size:10px;">${WASTE_TYPES.map(t=>w.typeSplit[t]?t+': '+w.typeSplit[t].toFixed(1)+'KG':'').filter(Boolean).join(' · ')}</div>`:''}
+                <div style="color:#aaa;font-size:10px;">${w.date||''}</div>
+              </div>`).join('')}
+          </div>
+        </details>`;
+      })()}
+      <div class="wastage-card-grid" style="margin-top:10px;">
+        <div><div class="aaa">Opened</div><div style="font-weight:600;">${b.dateOpened}</div></div>
+        <div><div class="aaa">Closed</div><div style="font-weight:600;">${b.dateClosed}</div></div>
+        <div><div class="aaa">Runs</div><div style="font-weight:600;">${b.runs?.length||0}</div></div>
+        <div><div class="aaa">Planks</div><div style="font-weight:600;">${b.totalPlanksUsed}</div></div>
+        <div><div class="aaa">Pieces</div><div style="font-weight:600;color:#27ae60;">${b.totalPiecesProduced}</div></div>
+      </div>
+    </div>`;
+  });
+  return html;
+}
+
+// ==================== BILL OF MATERIALS ====================
+function renderBOM(){
+  const wp = state.woodPieces||[];
+  const socketTypes = state.socketTypes||[];
+
+  let html = `<div class="card" style="background:#f5f0eb;">
+    <div class="label">🔩 Bill of Materials</div>
+    <div style="font-size:11px;color:#888;">Define socket types and how many screws each product needs for the Socket Department.</div>
+  </div>`;
+
+  // Manage Socket Types — master list used everywhere else
+  html+=`<div class="card" style="border:2px solid #9b59b6;">
+    <div class="label" style="color:#9b59b6;">🏷️ Socket Types</div>
+    <div style="font-size:11px;color:#888;margin-bottom:10px;">Define the socket types once here — used below and in Materials tab stock.</div>
+    <div style="margin-bottom:10px;">`;
+  if(socketTypes.length>0){
+    socketTypes.forEach(t=>{html+=`<div style="font-size:12px;padding:4px 0;">• ${t}</div>`;});
+  } else {
+    html+=`<div style="color:#aaa;font-size:12px;">None yet</div>`;
+  }
+  html+=`</div>
+    <input type="text" placeholder="e.g. Socket-A" id="newSocketTypeName" value="${state.newSocketTypeName||''}" oninput="state.newSocketTypeName=this.value" style="margin-bottom:8px;"/>
+    <button class="btn" style="background:#9b59b6;width:100%;" onclick="addSocketType()">Add Socket Type</button>
+    <div id="socketTypeMsg" class="msg"></div>
+  </div>`;
+
+  // Bill of Materials — socket type + screw count per product
+  html+=`<div class="card" style="border:2px solid #9b59b6;">
+    <div class="label" style="color:#9b59b6;">🔩 Socket + Screws per Product</div>
+    <div style="font-size:11px;color:#888;margin-bottom:10px;">Set which socket type and how many screws each product needs.</div>`;
+  if(wp.length===0){
+    html+=`<div style="color:#aaa;font-size:12px;">Add wood piece types first (in Materials tab).</div>`;
+  } else if(socketTypes.length===0){
+    html+=`<div style="color:#e74c3c;font-size:12px;">⚠️ Add at least one Socket Type above first.</div>`;
+  } else {
+    wp.forEach(w=>{
+      html+=`<div style="background:#f9f5f0;border-radius:8px;padding:10px;margin-bottom:8px;">
+        <div style="font-size:12px;font-weight:700;margin-bottom:6px;">${w.name} (${w.size}")</div>
+        <div class="grid2">
+          <div><div class="label">Socket Type</div>
+            <select id="bomSocket_${w.id}" onchange="updateBOM(${w.id})" style="margin-bottom:0;">
+              <option value="">-- Select --</option>
+              ${socketTypes.map(t=>`<option value="${t}" ${w.socketType===t?'selected':''}>${t}</option>`).join('')}
+            </select></div>
+          <div><div class="label">Screws Required</div>
+            <input type="number" min="0" placeholder="e.g. 2" id="bomScrews_${w.id}" value="${w.screwsRequired||''}" oninput="updateBOM(${w.id})" style="margin-bottom:0;"/></div>
+        </div>
+      </div>`;
+    });
+  }
+  html+=`</div>`;
+
+  return html;
+}
+
+function renderMaterials(){
+  const wp=state.woodPieces||[];
+  let html=`<div class="card" style="border:2px solid #27ae60;">
+    <div class="label">📦 Add Purchase (Vendor Lot)</div>
+    <div style="font-size:11px;color:#888;margin-bottom:10px;">One vendor delivery can include multiple plank sizes — they'll all share the same batch number.</div>
+
+    <div class="label">Vendor / Supplier Name</div>
+    <input type="text" placeholder="e.g. Ali Timber Traders" id="purchVendor" value="${state.newPurchVendor||''}" oninput="state.newPurchVendor=this.value" style="margin-bottom:10px;"/>
+
+    <div class="label">Purchase Date</div>
+    <input type="date" id="purchDate" value="${state.newPurchDate||new Date().toISOString().slice(0,10)}" oninput="state.newPurchDate=this.value" style="margin-bottom:12px;"/>
+
+    <div style="font-size:11px;font-weight:700;color:#7a5230;text-transform:uppercase;margin-bottom:6px;">Sizes in this Lot (leave blank to skip)</div>
+    ${PLANK_SIZES.map(s=>`
+    <div style="background:#f9f5f0;border-radius:8px;padding:10px;margin-bottom:8px;">
+      <div style="font-size:12px;font-weight:700;color:#5c3d1e;margin-bottom:6px;">${s}" Planks</div>
+      <div class="grid2">
+        <div><div class="label">Quantity (pcs)</div>
+          <input type="number" min="0" placeholder="0" id="purchQty_${s}" value="${state['newPurchQty_'+s]||''}" oninput="state['newPurchQty_${s}']=this.value" style="margin-bottom:0;"/></div>
+        <div><div class="label">Price per Piece (Rs.)</div>
+          <input type="number" min="0" step="0.01" placeholder="0.00" id="purchPrice_${s}" value="${state['newPurchPrice_'+s]||''}" oninput="state['newPurchPrice_${s}']=this.value" style="margin-bottom:0;"/></div>
+      </div>
+    </div>`).join('')}
+
+    <button class="btn btn-green" style="width:100%;margin-top:6px;" onclick="addPurchaseBatch()">Add Purchase Lot</button>
+    <div id="matMsg" class="msg"></div>
+  </div>`;
+
+  html+=`<div class="card" style="border:2px solid #3498db;">
+    <div class="label">🪜 Wood Piece Types</div>
+    <div style="margin-bottom:12px;">`;
+  if(wp.length>0){
+    wp.forEach(w=>{html+=`<div style="font-size:12px;padding:4px 0;">• ${w.name} (${w.size}")</div>`;});
+  } else {
+    html+=`<div style="color:#aaa;font-size:12px;">None yet</div>`;
+  }
+  html+=`</div>
+    <div class="grid2">
+      <input type="text" placeholder="Name" id="wpName" value="${state.newWoodName}" oninput="state.newWoodName=this.value"/>
+      <input type="number" step="0.5" placeholder="Size (inches)" id="wpSize" value="${state.newWoodSize}" oninput="state.newWoodSize=this.value"/>
+    </div>
+    <button class="btn btn-blue" onclick="addWoodPiece()">Add Wood Piece</button>
+    <div id="wpMsg" class="msg"></div>
+  </div>`;
+
+  // Add Socket Stock
+  const socketTypesForStock = state.socketTypes||[];
+  html+=`<div class="card" style="border:2px solid #9b59b6;">
+    <div class="label" style="color:#9b59b6;">🧩 Add Socket Stock</div>
+    ${socketTypesForStock.length===0?`<div style="color:#e74c3c;font-size:12px;margin-bottom:8px;">⚠️ Add a Socket Type first in the Bill of Materials tab.</div>`:''}
+    <div class="grid2">
+      <div><div class="label">Socket Type</div>
+        <select id="socketType" onchange="state.newSocketType=this.value">
+          <option value="">-- Select --</option>
+          ${socketTypesForStock.map(t=>`<option value="${t}" ${state.newSocketType===t?'selected':''}>${t}</option>`).join('')}
+        </select></div>
+      <div><div class="label">Quantity</div>
+        <input type="number" min="0" placeholder="0" id="socketQty" value="${state.newSocketQty||''}" oninput="state.newSocketQty=this.value"/></div>
+    </div>
+    <button class="btn" style="background:#9b59b6;width:100%;" onclick="addSocketStock()">Add Socket Stock</button>
+
+    <div id="socketMsg" class="msg"></div>
+    ${(state.socketInventory||[]).length>0?`<div style="margin-top:10px;font-size:11px;">
+      ${Object.entries((state.socketInventory||[]).reduce((acc,s)=>{acc[s.socketType]=(acc[s.socketType]||0)+s.qty;return acc;},{})).map(([t,q])=>`<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #f0e8de;"><span>${t}</span><span style="font-weight:700;">${q} pcs</span></div>`).join('')}
+    </div>`:''}
+  </div>`;
+
+  // Add Screw Stock
+  html+=`<div class="card" style="border:2px solid #7f8c8d;">
+    <div class="label" style="color:#7f8c8d;">🔧 Add Screw Stock</div>
+    <div class="label">Quantity</div>
+    <input type="number" min="0" placeholder="0" id="screwQty" value="${state.newScrewQty||''}" oninput="state.newScrewQty=this.value"/>
+    <button class="btn" style="background:#7f8c8d;width:100%;margin-top:8px;" onclick="addScrewStock()">Add Screw Stock</button>
+    <div id="screwMsg" class="msg"></div>
+    <div style="margin-top:10px;font-size:13px;font-weight:700;">Total Screws Available: ${(state.screwInventory||[]).reduce((s,x)=>s+x.qty,0)}</div>
+  </div>`;
+
+  return html;
+}
+
+function renderLedger(){
+  const ledger = (state.ledger||[]);
+  const fromDate = state.ledgerFilterFrom||'';
+  const toDate = state.ledgerFilterTo||'';
+  const section = state.ledgerFilterSection||'all';
+  const filterSize = state.ledgerFilterSize||'all';
+  const filterBatch = state.ledgerFilterBatch||'all';
+  const filterDir = state.ledgerFilterDirection||'all';
+  const filterVendor = state.ledgerFilterVendor||'all';
+
+  const allBatches = [...new Set(ledger.map(e=>e.batchNo))].sort();
+  const allSizes = [...new Set(ledger.filter(e=>e.type==='plank'&&e.size).map(e=>e.size))].sort();
+  const allVendors = [...new Set(ledger.filter(e=>e.vendor).map(e=>e.vendor))].sort();
+
+  const filtered = ledger.filter(e=>{
+    if(fromDate && e.date < fromDate) return false;
+    if(toDate && e.date > toDate) return false;
+    if(section!=='all' && e.type!==section) return false;
+    if(filterSize!=='all' && e.size!==filterSize) return false;
+    if(filterBatch!=='all' && e.batchNo!==filterBatch) return false;
+    if(filterDir!=='all' && e.direction!==filterDir) return false;
+    if(filterVendor!=='all' && e.vendor!==filterVendor) return false;
+    return true;
+  }).sort((a,b)=>b.datetime.localeCompare(a.datetime));
+
+  const totalIn = filtered.filter(e=>e.direction==='IN').reduce((s,e)=>s+e.qty,0);
+  const totalOut = filtered.filter(e=>e.direction==='OUT').reduce((s,e)=>s+e.qty,0);
+  const hasFilters = fromDate||toDate||section!=='all'||filterSize!=='all'||filterBatch!=='all'||filterDir!=='all'||filterVendor!=='all';
+
+  const sectionColors = {plank:'#5c3d1e', scrap:'#e67e22', finished:'#27ae60'};
+  const sectionLabels = {plank:'🪵 Wooden Planks', scrap:'♻️ Scrap', finished:'✅ Finished Pieces'};
+
+  let html=`<div class="card" style="border:2px solid #5c3d1e;">
+    <div class="label">📒 Stock Ledger — Filters</div>
+    <div class="label">Material Type</div>
+    <select onchange="state.ledgerFilterSection=this.value;state.ledgerFilterSize='all';state.ledgerFilterBatch='all';re()" style="margin-bottom:8px;">
+      <option value="all" ${section==='all'?'selected':''}>All Materials</option>
+      <option value="plank" ${section==='plank'?'selected':''}>🪵 Wooden Planks</option>
+      <option value="scrap" ${section==='scrap'?'selected':''}>♻️ Scrap</option>
+      <option value="finished" ${section==='finished'?'selected':''}>✅ Finished Pieces</option>
+    </select>
+    ${section==='plank'&&allSizes.length>0?`
+    <div class="label">Plank Size</div>
+    <select onchange="state.ledgerFilterSize=this.value;state.ledgerFilterBatch='all';re()" style="margin-bottom:8px;">
+      <option value="all" ${filterSize==='all'?'selected':''}>All Sizes</option>
+      ${allSizes.map(s=>`<option value="${s}" ${filterSize===s?'selected':''}>${s}" Planks</option>`).join('')}
+    </select>`:''}
+    <div class="label">Batch Number</div>
+    <select onchange="state.ledgerFilterBatch=this.value;re()" style="margin-bottom:8px;">
+      <option value="all" ${filterBatch==='all'?'selected':''}>All Batches</option>
+      ${allBatches.map(b=>`<option value="${b}" ${filterBatch===b?'selected':''}>${b}</option>`).join('')}
+    </select>
+    ${section==='plank'&&allVendors.length>0?`
+    <div class="label">Vendor</div>
+    <select onchange="state.ledgerFilterVendor=this.value;re()" style="margin-bottom:8px;">
+      <option value="all" ${filterVendor==='all'?'selected':''}>All Vendors</option>
+      ${allVendors.map(v=>`<option value="${v}" ${filterVendor===v?'selected':''}>${v}</option>`).join('')}
+    </select>`:''}
+    <div class="label">Direction</div>
+    <select onchange="state.ledgerFilterDirection=this.value;re()" style="margin-bottom:8px;">
+      <option value="all" ${filterDir==='all'?'selected':''}>IN & OUT</option>
+      <option value="IN" ${filterDir==='IN'?'selected':''}>↑ IN only</option>
+      <option value="OUT" ${filterDir==='OUT'?'selected':''}>↓ OUT only</option>
+    </select>
+    <div class="grid2" style="margin-bottom:8px;">
+      <div><div class="label">From Date</div><input type="date" value="${fromDate}" onchange="state.ledgerFilterFrom=this.value;re()"/></div>
+      <div><div class="label">To Date</div><input type="date" value="${toDate}" onchange="state.ledgerFilterTo=this.value;re()"/></div>
+    </div>
+    ${hasFilters?`<button class="btn btn-gray" style="font-size:12px;padding:6px 12px;margin-bottom:10px;" onclick="state.ledgerFilterFrom='';state.ledgerFilterTo='';state.ledgerFilterSection='all';state.ledgerFilterSize='all';state.ledgerFilterBatch='all';state.ledgerFilterDirection='all';state.ledgerFilterVendor='all';re()">✕ Clear All Filters</button>`:''}
+    <div class="grid3">
+      <div style="background:#e8f5e9;border-radius:8px;padding:10px;text-align:center;">
+        <div style="font-size:10px;color:#aaa;">Total IN</div>
+        <div style="font-size:20px;font-weight:700;color:#27ae60;">${totalIn}</div>
+      </div>
+      <div style="background:#fdecea;border-radius:8px;padding:10px;text-align:center;">
+        <div style="font-size:10px;color:#aaa;">Total OUT</div>
+        <div style="font-size:20px;font-weight:700;color:#e74c3c;">${totalOut}</div>
+      </div>
+      <div style="background:#f5f0eb;border-radius:8px;padding:10px;text-align:center;">
+        <div style="font-size:10px;color:#aaa;">Net</div>
+        <div style="font-size:20px;font-weight:700;color:#5c3d1e;">${totalIn-totalOut}</div>
+      </div>
+    </div>
+  </div>`;
+
+  if(filtered.length===0){
+    html+=`<div class="card"><div style="color:#aaa;font-size:13px;text-align:center;padding:20px;">No entries found for selected filters.</div></div>`;
+    return html;
+  }
+
+  const sections = section==='all'?['plank','scrap','finished']:[section];
+  sections.forEach(sec=>{
+    const entries=filtered.filter(e=>e.type===sec);
+    if(entries.length===0) return;
+    const color=sectionColors[sec]||'#5c3d1e';
+    const secIn=entries.filter(e=>e.direction==='IN').reduce((s,e)=>s+e.qty,0);
+    const secOut=entries.filter(e=>e.direction==='OUT').reduce((s,e)=>s+e.qty,0);
+    html+=`<div class="card" style="border-left:4px solid ${color};">
+      <div class="row" style="margin-bottom:12px;flex-wrap:wrap;gap:6px;">
+        <div style="font-weight:700;font-size:14px;color:${color};">${sectionLabels[sec]}</div>
+        <div style="font-size:12px;display:flex;gap:10px;">
+          <span style="color:#27ae60;font-weight:700;">↑ IN: ${secIn}</span>
+          <span style="color:#e74c3c;font-weight:700;">↓ OUT: ${secOut}</span>
+          <span style="color:#5c3d1e;font-weight:700;">Net: ${secIn-secOut}</span>
+        </div>
+      </div>`;
+
+    if(sec==='plank'||sec==='scrap'){
+      const sizes=[...new Set(entries.map(e=>e.size||e.material))];
+      sizes.forEach(sz=>{
+        const sizeEntries=entries.filter(e=>(e.size||e.material)===sz);
+        const szIn=sizeEntries.filter(e=>e.direction==='IN').reduce((s,e)=>s+e.qty,0);
+        const szOut=sizeEntries.filter(e=>e.direction==='OUT').reduce((s,e)=>s+e.qty,0);
+        html+=`<div style="margin-bottom:12px;">
+          <div style="font-size:12px;font-weight:700;color:${color};background:#f9f5f0;padding:6px 10px;border-radius:6px;margin-bottom:6px;display:flex;justify-content:space-between;">
+            <span>${sec==='plank'?sz+'" Planks':sz+'" Scrap'}</span>
+            <span style="font-size:11px;font-weight:400;">IN:${szIn} OUT:${szOut} Net:${szIn-szOut}</span>
+          </div>`;
+        const batchNos=[...new Set(sizeEntries.map(e=>e.batchNo))];
+        batchNos.forEach(bno=>{
+          const bEntries=sizeEntries.filter(e=>e.batchNo===bno);
+          const bIn=bEntries.filter(e=>e.direction==='IN').reduce((s,e)=>s+e.qty,0);
+          const bOut=bEntries.filter(e=>e.direction==='OUT').reduce((s,e)=>s+e.qty,0);
+          html+=`<div style="margin-left:8px;margin-bottom:8px;">
+            <div style="font-size:11px;font-weight:700;color:#888;margin-bottom:4px;display:flex;justify-content:space-between;">
+              <span>Batch: ${bno}</span><span>IN:${bIn} OUT:${bOut} Bal:${bIn-bOut}</span>
+            </div>`;
+          let bal=0;
+          const withBal=[...bEntries].reverse().map(e=>{bal+=e.direction==='IN'?e.qty:-e.qty;return{...e,balance:bal};}).reverse();
+          withBal.forEach(e=>{
+            const isIn=e.direction==='IN';
+            html+=`<div style="display:flex;gap:8px;padding:6px 0;border-bottom:1px solid #f9f5f0;align-items:flex-start;">
+              <div style="min-width:28px;height:28px;border-radius:6px;background:${isIn?'#e8f5e9':'#fdecea'};display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:${isIn?'#27ae60':'#e74c3c'};">${isIn?'↑':'↓'}</div>
+              <div style="flex:1;">
+                <div style="display:flex;justify-content:space-between;">
+                  <div style="font-size:12px;color:#444;">${e.note}</div>
+                  <div style="text-align:right;"><div style="font-size:13px;font-weight:700;color:${isIn?'#27ae60':'#e74c3c'};">${isIn?'+':'−'}${e.qty}</div><div style="font-size:10px;color:#aaa;">Bal:${e.balance}</div></div>
+                </div>
+                <div style="font-size:10px;color:#aaa;margin-top:2px;">📅 ${e.date} ⏰ ${e.time}</div>
+              </div>
+            </div>`;
+          });
+          html+=`</div>`;
+        });
+        html+=`</div>`;
+      });
+    } else {
+      const mats=[...new Set(entries.map(e=>e.material))];
+      mats.forEach(mat=>{
+        const matEntries=entries.filter(e=>e.material===mat);
+        const mIn=matEntries.filter(e=>e.direction==='IN').reduce((s,e)=>s+e.qty,0);
+        html+=`<div style="margin-bottom:10px;">
+          <div style="font-size:12px;font-weight:700;color:${color};background:#f0fff4;padding:6px 10px;border-radius:6px;margin-bottom:6px;display:flex;justify-content:space-between;">
+            <span>${mat}</span><span style="font-size:11px;font-weight:400;">Total: ${mIn} pcs</span>
+          </div>`;
+        const batchNos=[...new Set(matEntries.map(e=>e.batchNo))];
+        batchNos.forEach(bno=>{
+          const bEntries=matEntries.filter(e=>e.batchNo===bno);
+          const bTotal=bEntries.reduce((s,e)=>s+e.qty,0);
+          html+=`<div style="margin-left:8px;margin-bottom:6px;">
+            <div style="font-size:11px;color:#888;margin-bottom:4px;font-weight:700;">Batch: ${bno} — Total: ${bTotal} pcs</div>`;
+          bEntries.forEach(e=>{
+            html+=`<div style="display:flex;gap:8px;padding:5px 0;border-bottom:1px solid #f9f5f0;align-items:flex-start;">
+              <div style="min-width:28px;height:28px;border-radius:6px;background:#e8f5e9;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#27ae60;">↑</div>
+              <div style="flex:1;">
+                <div style="display:flex;justify-content:space-between;">
+                  <div style="font-size:12px;color:#444;">${e.note}</div>
+                  <div style="font-size:13px;font-weight:700;color:#27ae60;">+${e.qty}</div>
+                </div>
+                <div style="font-size:10px;color:#aaa;margin-top:2px;">📅 ${e.date} ⏰ ${e.time}</div>
+              </div>
+            </div>`;
+          });
+          html+=`</div>`;
+        });
+        html+=`</div>`;
+      });
+    }
+    html+=`</div>`;
+  });
+  return html;
+}
+
+function renderSales(){
+  const sales = [...(state.sales||[])].sort((a,b)=>b.datetime.localeCompare(a.datetime));
+  const totalRevenue = sales.reduce((s,x)=>s+x.totalAmount,0);
+  const totalReceived = sales.reduce((s,x)=>s+x.amountReceived,0);
+  const totalKgSold = sales.reduce((s,x)=>s+x.kgSold,0);
+  const totalOwedToOwner = sales.reduce((s,x)=>s+Math.max(0,(x.amountReceived||0)-(x.ownerReceivedAmount||0)),0);
+
+  let html=`<div class="card" style="border:2px solid #27ae60;background:#f0fff4;">
+    <div class="label">💰 Sales Report</div>
+    <div class="grid2" style="margin-bottom:10px;">
+      <div style="background:#fff;border-radius:8px;padding:12px;text-align:center;">
+        <div style="font-size:10px;color:#aaa;">Total Revenue</div>
+        <div style="font-size:22px;font-weight:700;color:#27ae60;">Rs.${totalRevenue.toLocaleString()}</div>
+      </div>
+      <div style="background:#fff;border-radius:8px;padding:12px;text-align:center;">
+        <div style="font-size:10px;color:#aaa;">Total KG Sold</div>
+        <div style="font-size:22px;font-weight:700;color:#5c3d1e;">${totalKgSold.toFixed(1)} KG</div>
+      </div>
+      <div style="background:#fff;border-radius:8px;padding:12px;text-align:center;">
+        <div style="font-size:10px;color:#aaa;">Collected from Buyers</div>
+        <div style="font-size:18px;font-weight:700;color:#27ae60;">Rs.${totalReceived.toLocaleString()}</div>
+      </div>
+      <div style="background:#fff;border-radius:8px;padding:12px;text-align:center;">
+        <div style="font-size:10px;color:#aaa;">Owed to Owner</div>
+        <div style="font-size:18px;font-weight:700;color:#e74c3c;">Rs.${totalOwedToOwner.toLocaleString()}</div>
+      </div>
+    </div>
+  </div>`;
+
+  if(sales.length===0){
+    html+=`<div class="card"><div style="color:#aaa;font-size:13px;text-align:center;padding:20px;">No sales recorded yet.<br/><span style="font-size:11px;">Go to the Wastage tab to record a sale.</span></div></div>`;
+    return html;
+  }
+
+  // Group by waste type
+  const typeColors = {Bhusa:'#8b6f47', Patti:'#e67e22', Gitta:'#5c3d1e'};
+  html+=`<div class="card" style="border:1px solid #d4b896;">
+    <div class="label">🗑️ By Wastage Type</div>`;
+  WASTE_TYPES.forEach(t=>{
+    const ts = sales.filter(s=>s.wasteType===t);
+    if(ts.length===0) return;
+    const tTotal = ts.reduce((s,x)=>s+x.totalAmount,0);
+    const tKg = ts.reduce((s,x)=>s+x.kgSold,0);
+    const avgPrice = tKg>0 ? tTotal/tKg : 0;
+    html+=`<div style="padding:10px;background:#f9f5f0;border-radius:8px;margin-bottom:8px;border-left:4px solid ${typeColors[t]};">
+      <div class="row" style="margin-bottom:4px;">
+        <div style="font-weight:700;font-size:13px;color:${typeColors[t]};">${t}</div>
+        <div style="font-size:13px;font-weight:700;color:#27ae60;">Rs.${tTotal.toLocaleString()}</div>
+      </div>
+      <div style="font-size:11px;color:#666;">${tKg.toFixed(1)} KG sold · avg Rs.${avgPrice.toFixed(1)}/KG · ${ts.length} sale${ts.length>1?'s':''}</div>
+    </div>`;
+  });
+  html+=`</div>`;
+
+  // Group by buyer
+  const buyers = [...new Set(sales.map(s=>s.buyer))];
+  html+=`<div class="card" style="border:1px solid #d4b896;">
+    <div class="label">📊 By Buyer</div>`;
+  buyers.forEach(buyer=>{
+    const bs = sales.filter(s=>s.buyer===buyer);
+    const bTotal = bs.reduce((s,x)=>s+x.totalAmount,0);
+    const bReceived = bs.reduce((s,x)=>s+x.amountReceived,0);
+    const bPending = bs.reduce((s,x)=>s+x.pendingAmount,0);
+    const bKg = bs.reduce((s,x)=>s+x.kgSold,0);
+    html+=`<div style="padding:10px;background:#f9f5f0;border-radius:8px;margin-bottom:8px;">
+      <div class="row" style="margin-bottom:4px;">
+        <div style="font-weight:700;font-size:13px;">${buyer}</div>
+        <div style="font-size:13px;font-weight:700;color:#27ae60;">Rs.${bTotal.toLocaleString()}</div>
+      </div>
+      <div style="font-size:11px;color:#666;">${bKg.toFixed(1)} KG sold across ${bs.length} transaction${bs.length>1?'s':''}</div>
+      ${bPending>0?`<div style="font-size:11px;color:#e74c3c;font-weight:700;margin-top:2px;">⚠️ Pending: Rs.${bPending.toLocaleString()}</div>`:'<div style="font-size:11px;color:#27ae60;margin-top:2px;">✅ Fully paid</div>'}
+    </div>`;
+  });
+  html+=`</div>`;
+
+  // All transactions
+  html+=`<div class="card"><div class="label">🧾 All Transactions</div>`;
+  const isOwner = currentUser?.role==='owner';
+  sales.forEach((s,idx)=>{
+    const payColor = s.payment==='Paid'?'#27ae60':s.payment==='Unpaid'?'#e74c3c':'#e67e22';
+    const payIcon = s.payment==='Paid'?'✅':s.payment==='Unpaid'?'❌':'⏳';
+    const realIdx = (state.sales||[]).findIndex(x=>x.id===s.id);
+    const ownerCollections = s.ownerCollections||[];
+    const collectedByAccountant = s.amountReceived||0;
+    const receivedByOwner = s.ownerReceivedAmount||0;
+    const owedToOwner = Math.max(0, collectedByAccountant - receivedByOwner);
+    // Button only makes sense once accountant has actually collected something (Paid/Partial) —
+    // nothing to hand over to owner if buyer hasn't paid the accountant yet (Unpaid).
+    const showCashBtn = isOwner && (s.payment==='Paid'||s.payment==='Partial') && owedToOwner>0.001;
+    html+=`<div style="padding:10px 0;border-bottom:1px solid #f0e8de;">
+      <div class="row" style="margin-bottom:4px;">
+        <div>
+          <div style="font-size:13px;font-weight:700;">${s.buyer}</div>
+          <div style="font-size:11px;color:${typeColors[s.wasteType]||'#666'};font-weight:700;">${s.wasteType||'—'} · ${s.date}</div>
+        </div>
+        <div style="text-align:right;">
+          <div style="font-size:14px;font-weight:700;color:#27ae60;">Rs.${s.totalAmount.toFixed(0)}</div>
+          <div style="font-size:10px;color:${payColor};font-weight:700;">${payIcon} ${s.payment}</div>
+        </div>
+      </div>
+        <div style="font-size:11px;color:#888;">${s.kgSold} KG @ Rs.${s.pricePerKg}/KG</div>
+      ${isOwner && collectedByAccountant>0?`
+      <div style="display:flex;gap:8px;margin-top:8px;">
+        <div style="flex:1;background:#e8f5e9;border-radius:8px;padding:10px;text-align:center;">
+          <div style="font-size:10px;color:#27ae60;font-weight:700;">HANDED TO YOU</div>
+          <div style="font-size:20px;font-weight:700;color:#27ae60;">Rs.${receivedByOwner.toFixed(0)}</div>
+        </div>
+        ${owedToOwner>0.001?`
+        <div style="flex:1;background:#fdecea;border-radius:8px;padding:10px;text-align:center;">
+          <div style="font-size:10px;color:#e74c3c;font-weight:700;">OWED TO YOU</div>
+          <div style="font-size:20px;font-weight:700;color:#e74c3c;">Rs.${owedToOwner.toFixed(0)}</div>
+        </div>`:`
+        <div style="flex:1;background:#e8f5e9;border-radius:8px;padding:10px;text-align:center;display:flex;align-items:center;justify-content:center;">
+          <div style="font-size:13px;font-weight:700;color:#27ae60;">✅ Fully Settled</div>
+        </div>`}
+      </div>
+      `:''}
+      ${ownerCollections.length>0?`
+      <div style="font-size:10px;color:#888;margin-top:4px;">
+        ${ownerCollections.map(c=>`💵 Rs.${c.amount.toFixed(0)} handed to owner on ${c.date}`).join('<br/>')}
+      </div>`:''}
+      ${showCashBtn?`
+      <button class="btn btn-green" style="font-size:11px;padding:6px 12px;margin-top:6px;" onclick="openCashReceivedModal(${realIdx})">💵 Cash Received</button>
+      `:''}
+    </div>`;
+  });
+  html+=`</div>`;
+  return html;
+}
+
+// ---- SALES ACTIONS ----
+// Computes available KG per waste type by summing all wastage entries' typeSplit,
+// minus whatever has already been sold of that type.
+function getWasteTypeStock(){
+  const produced = {Bhusa:0, Patti:0, Gitta:0};
+  (state.wastage||[]).forEach(w=>{
+    if(w.typeSplit){
+      WASTE_TYPES.forEach(t=>{ produced[t] += (w.typeSplit[t]||0); });
+    } else if((w.wastageKg||0)>0){
+      // Legacy entries without a type split — treat as unclassified, lump into "Gitta" bucket as fallback
+      // (shouldn't happen for new entries, only old data before this feature existed)
+      produced.Gitta += w.wastageKg;
+    }
+  });
+  const sold = {Bhusa:0, Patti:0, Gitta:0};
+  (state.sales||[]).forEach(s=>{
+    if(s.wasteType && sold[s.wasteType]!==undefined) sold[s.wasteType] += (s.kgSold||0);
+  });
+  const available = {};
+  WASTE_TYPES.forEach(t=>{ available[t] = Math.max(0, produced[t]-sold[t]); });
+  return {produced, sold, available};
+}
+
+function openSaleModal(){
+  const stock = getWasteTypeStock();
+  state.saleModal = {stock};
+  document.getElementById('saleModalTitle').textContent = `💰 Sell Wastage`;
+  document.getElementById('saleModalSub').textContent = `Choose a wastage type and enter sale details`;
+  document.getElementById('saleErr').classList.add('hidden');
+  document.getElementById('saleModalBody').innerHTML = `
+    <div class="label">Wastage Type</div>
+    <select id="saleWasteType" onchange="updateSaleTypeAvailable()">
+      ${WASTE_TYPES.map(t=>`<option value="${t}">${t} (${stock.available[t].toFixed(1)} KG available)</option>`).join('')}
+    </select>
+    <div id="saleTypeAvailableNote" style="font-size:11px;color:#666;margin:4px 0 10px;"></div>
+    <div class="label">Buyer Name</div>
+    <input type="text" id="saleBuyer" placeholder="e.g. Ahmed Traders"/>
+    <div class="label">KG to Sell</div>
+    <input type="number" id="saleKg" step="0.1" min="0.1"/>
+    <div class="label">Price per KG (Rs.)</div>
+    <input type="number" id="salePrice" step="0.01" min="0" placeholder="e.g. 25.50"/>
+    <div class="label">Sale Date</div>
+    <input type="date" id="saleDate" value="${new Date().toISOString().slice(0,10)}"/>
+    <div style="background:#e8f5e9;border-radius:6px;padding:8px;font-size:11px;color:#27ae60;font-weight:700;">✅ Payment collected in full at time of sale</div>`;
+  document.getElementById('saleModal').classList.remove('hidden');
+  updateSaleTypeAvailable();
+}
+
+function updateSaleTypeAvailable(){
+  const type = document.getElementById('saleWasteType')?.value;
+  const stock = state.saleModal?.stock;
+  if(!type||!stock) return;
+  const note = document.getElementById('saleTypeAvailableNote');
+  if(note) note.textContent = `Available to sell: ${stock.available[type].toFixed(1)} KG`;
+  const kgInput = document.getElementById('saleKg');
+  if(kgInput) kgInput.max = stock.available[type];
+}
+
+let isSubmittingSale = false;
+function confirmSale(){
+  if(isSubmittingSale) return;
+  isSubmittingSale = true;
+  setTimeout(()=>{isSubmittingSale=false;}, 1000);
+
+  const modal=state.saleModal;
+  if(!modal) return;
+  const wasteType=document.getElementById('saleWasteType')?.value;
+  const buyer=document.getElementById('saleBuyer')?.value?.trim();
+  const kg=+document.getElementById('saleKg')?.value;
+  const price=+document.getElementById('salePrice')?.value;
+  const date=document.getElementById('saleDate')?.value;
+  const err=document.getElementById('saleErr');
+  const available = modal.stock.available[wasteType]||0;
+  if(!wasteType){err.textContent="⚠️ Select a wastage type";err.classList.remove('hidden');return;}
+  if(!buyer){err.textContent="⚠️ Enter buyer name";err.classList.remove('hidden');return;}
+  if(!kg||kg<=0){err.textContent="⚠️ Enter KG to sell";err.classList.remove('hidden');return;}
+  if(kg>available+0.001){err.textContent=`⚠️ Max available for ${wasteType} is ${available.toFixed(1)} KG`;err.classList.remove('hidden');return;}
+  if(!price||price<=0){err.textContent="⚠️ Enter price per KG";err.classList.remove('hidden');return;}
+  if(!date){err.textContent="⚠️ Enter sale date";err.classList.remove('hidden');return;}
+  const totalAmount=kg*price;
+  const preSnapshot = takeSnapshot(['sales']);
+  // Every wastage sale is paid in full at the time of recording — no credit sales.
+  state.sales=[...(state.sales||[]),{
+    id:Date.now(), wasteType,
+    buyer, kgSold:kg, pricePerKg:price, totalAmount,
+    amountReceived:totalAmount, pendingAmount:0,
+    payment:'Paid', date, datetime:new Date().toISOString()
+  }];
+  document.getElementById('saleModal').classList.add('hidden');
+  state.saleModal=null;
+  saveAll(); re();
+  setTimeout(()=>{
+    showReviewPopup({
+      snapshot: preSnapshot,
+      subtitle: buyer + ' — ' + wasteType,
+      field1Label: 'KG Sold', field1Value: kg, field1Editable: true,
+      field2Label: 'Total Amount (Rs.)', field2Value: totalAmount, field2Editable: false,
+      onUndo: function(){
+        alert('↩️ Sale undone. Please open Sell Wastage again to re-enter.');
+      }
+    });
+  },100);
+}
+
+// Owner-only: record cash actually collected for a sale, separate from what was marked at sale time.
+// Supports partial collections over multiple visits — each collection is logged with date+amount.
+// Owner-only: track how much of the accountant-collected money has actually reached the owner's hand.
+// This is SEPARATE from payment status (which tracks buyer→accountant). Button only makes sense
+// once the accountant has collected something (Paid or Partial) — nothing to hand over if Unpaid.
+function openCashReceivedModal(saleIdx){
+  const sale = state.sales[saleIdx];
+  if(!sale) return;
+  const collectedByAccountant = sale.amountReceived||0; // what buyer has paid accountant so far
+  const receivedByOwner = sale.ownerReceivedAmount||0;
+  const owedToOwner = Math.max(0, collectedByAccountant - receivedByOwner);
+  state.cashReceivedModal = {saleIdx};
+  document.getElementById('cashReceivedSub').textContent =
+    `${sale.buyer} · ${sale.wasteType} · Accountant collected: Rs.${collectedByAccountant.toFixed(0)} · Already handed to you: Rs.${receivedByOwner.toFixed(0)} · Owed to you: Rs.${owedToOwner.toFixed(0)}`;
+  document.getElementById('cashReceivedAmt').value = '';
+  document.getElementById('cashReceivedAmt').max = owedToOwner;
+  document.getElementById('cashReceivedDate').value = new Date().toISOString().slice(0,10);
+  document.getElementById('cashReceivedErr').classList.add('hidden');
+  document.getElementById('cashReceivedModal').classList.remove('hidden');
+}
+
+function confirmCashReceived(){
+  const modal = state.cashReceivedModal;
+  if(!modal) return;
+  const sale = state.sales[modal.saleIdx];
+  if(!sale) return;
+  const collectedByAccountant = sale.amountReceived||0;
+  const receivedByOwner = sale.ownerReceivedAmount||0;
+  const owedToOwner = Math.max(0, collectedByAccountant - receivedByOwner);
+  const amt = +document.getElementById('cashReceivedAmt')?.value||0;
+  const date = document.getElementById('cashReceivedDate')?.value;
+  const err = document.getElementById('cashReceivedErr');
+  if(!amt||amt<=0){err.textContent="⚠️ Enter an amount";err.classList.remove('hidden');return;}
+  if(amt>owedToOwner+0.01){err.textContent=`⚠️ Cannot exceed amount owed to you: Rs.${owedToOwner.toFixed(0)}`;err.classList.remove('hidden');return;}
+  if(!date){err.textContent="⚠️ Enter a date";err.classList.remove('hidden');return;}
+
+  sale.ownerCollections = [...(sale.ownerCollections||[]), {amount:amt, date}];
+  sale.ownerReceivedAmount = (sale.ownerReceivedAmount||0) + amt;
+
+  document.getElementById('cashReceivedModal').classList.add('hidden');
+  state.cashReceivedModal = null;
+  saveAll(); re();
+}
+
+// ==================== VOID / FLAG ACTIONS (Wood Finishing production runs) ====================
+function openVoidModal(size, runIndex){
+  const dept = 'Wood Finishing';
+  if(!canVoidInDept(dept)){
+    alert("You don't have permission to void entries in this department.");
+    return;
+  }
+  if(!hasVoidsRemaining(dept)){
+    alert("You've used all your voids for today in this department. Ask the Owner for a correction.");
+    return;
+  }
+  state.voidTarget = {size, runIndex, dept};
+  const ob = state.openBatches[size];
+  const run = ob?.runs?.[runIndex];
+  document.getElementById('voidModalSub').textContent = run
+    ? `${run.date} — ${run.woodPieceName} — ${run.planksUsed} planks, ${run.piecesProduced} good pcs`
+    : '';
+  document.getElementById('voidReason').value = '';
+  document.getElementById('voidErr').classList.add('hidden');
+  document.getElementById('voidModal').classList.remove('hidden');
+}
+
+function confirmVoid(){
+  const target = state.voidTarget;
+  if(!target) return;
+  const reason = document.getElementById('voidReason')?.value?.trim();
+  const err = document.getElementById('voidErr');
+  if(!reason){ err.textContent="⚠️ A reason is required to void an entry"; err.classList.remove('hidden'); return; }
+
+  const ob = state.openBatches[target.size];
+  const run = ob?.runs?.[target.runIndex];
+  if(!run){ document.getElementById('voidModal').classList.add('hidden'); return; }
+
+  run.voided = true;
+  run.voidedBy = currentUser?.loginName || currentUser?.name || 'Unknown';
+  run.voidedReason = reason;
+  run.voidedDate = new Date().toISOString().slice(0,10);
+  // If an admin/owner voids something that wasn't already flagged, mark it flagged too —
+  // this ensures no entry can be changed by Admin without leaving a visible reason.
+  if(isAdminOrOwner() && !run.flagged){
+    run.flagged = true;
+    run.flagNote = 'Voided directly by Admin/Owner — reason: ' + reason;
+    run.flaggedBy = currentUser?.loginName || currentUser?.name || 'Admin';
+    run.flaggedDate = run.voidedDate;
+  }
+
+  // Also update the corresponding entry in state.production (same batch+date+wood piece+planksUsed, first unvoided match)
+  const prodIdx = (state.production||[]).findIndex(p=>!p.voided && p.batchNo===ob.batchNo && p.woodPieceName===run.woodPieceName && p.planksUsed===run.planksUsed && p.date===run.date);
+  if(prodIdx>=0){
+    state.production[prodIdx] = {...state.production[prodIdx], voided:true, voidedBy:run.voidedBy, voidedReason:run.voidedReason, voidedDate:run.voidedDate};
+  }
+
+  logVoidUsage(target.dept);
+  document.getElementById('voidModal').classList.add('hidden');
+  state.voidTarget = null;
+  saveAll(); re();
+}
+
+function openFlagModal(size, runIndex){
+  const dept = 'Wood Finishing';
+  if(!canFlagInDept(dept)){
+    alert("You don't have permission to flag entries in this department.");
+    return;
+  }
+  state.flagTarget = {size, runIndex};
+  const ob = state.openBatches[size];
+  const run = ob?.runs?.[runIndex];
+  document.getElementById('flagModalSub').textContent = run
+    ? `${run.date} — ${run.woodPieceName} — ${run.planksUsed} planks, ${run.piecesProduced} good pcs`
+    : '';
+  document.getElementById('flagNote').value = '';
+  document.getElementById('flagErr').classList.add('hidden');
+  document.getElementById('flagModal').classList.remove('hidden');
+}
+
+function confirmFlag(){
+  const target = state.flagTarget;
+  if(!target) return;
+  const note = document.getElementById('flagNote')?.value?.trim();
+  const err = document.getElementById('flagErr');
+  if(!note){ err.textContent="⚠️ Please describe what looks wrong"; err.classList.remove('hidden'); return; }
+
+  const ob = state.openBatches[target.size];
+  const run = ob?.runs?.[target.runIndex];
+  if(!run){ document.getElementById('flagModal').classList.add('hidden'); return; }
+
+  run.flagged = true;
+  run.flagNote = note;
+  run.flaggedBy = currentUser?.loginName || currentUser?.name || 'Unknown';
+  run.flaggedDate = new Date().toISOString().slice(0,10);
+
+  document.getElementById('flagModal').classList.add('hidden');
+  state.flagTarget = null;
+  saveAll(); re();
+}
+
+// ==================== 15-SECOND REVIEW POPUP ====================
+// Shown right after a production run is saved. Editing within the window performs a full
+// rollback of that single action (silent, no reason needed — this is the FIRST layer of
+// self-correction). Anything noticed after this popup closes must go through Void (above),
+// which is permanent, reason-required, and capped.
+let reviewTimerHandle = null;
+let reviewTimeLeft = 15;
+let reviewEditing = false;
+let reviewDone = false;
+
+function takeSnapshot(keys){
+  const snap = {};
+  keys.forEach(k=>{ snap[k] = JSON.parse(JSON.stringify(state[k])); });
+  return snap;
+}
+
+// Generic version: opts = {
+//   subtitle, snapshotKeys (state keys to snapshot/restore),
+//   field1Label, field1Value, field1Editable,
+//   field2Label, field2Value, field2Editable,
+//   extraLabel, extraValue (optional 3rd read-only row),
+//   onUndo(newField1Value, newField2Value) — called after rollback, department-specific reset/prefill
+// }
+function showReviewPopup(opts){
+  // opts.snapshot must be captured by the caller BEFORE any state mutation happened —
+  // this function only displays/restores it, it can't take it retroactively.
+  state.reviewContext = {snapshot: opts.snapshot||{}, opts};
+  reviewTimeLeft = 15;
+  reviewEditing = false;
+  reviewDone = false;
+
+  document.getElementById('reviewSub').textContent = opts.subtitle||'';
+  document.getElementById('reviewField1Label').textContent = opts.field1Label||'';
+  document.getElementById('reviewPlanksView').textContent = opts.field1Value;
+  document.getElementById('reviewPlanksInput').value = opts.field1Value;
+
+  const field2Row = document.getElementById('reviewPiecesView').closest('div');
+  if(opts.field2Label){
+    field2Row.style.display = 'block';
+    document.getElementById('reviewField2Label').textContent = opts.field2Label;
+    document.getElementById('reviewPiecesView').textContent = opts.field2Value;
+    document.getElementById('reviewPiecesInput').value = opts.field2Value;
+  } else {
+    field2Row.style.display = 'none';
+  }
+
+  const scrapRow = document.getElementById('reviewScrapRow');
+  if(opts.extraLabel && opts.extraValue>0){
+    document.getElementById('reviewScrapLabel').textContent = opts.extraLabel;
+    document.getElementById('reviewScrapView').textContent = opts.extraValue;
+    scrapRow.style.display = 'block';
+  } else {
+    scrapRow.style.display = 'none';
+  }
+
+  document.getElementById('reviewPlanksView').style.display = 'block';
+  document.getElementById('reviewPiecesView').style.display = 'block';
+  document.getElementById('reviewPlanksInput').style.display = 'none';
+  document.getElementById('reviewPiecesInput').style.display = 'none';
+  document.getElementById('reviewEditBtn').style.display = 'block';
+  document.getElementById('reviewConfirmBtn').style.display = 'none';
+  document.getElementById('reviewTimerLabel').textContent = 'Saving in';
+  document.getElementById('reviewTimerRing').style.opacity = '1';
+  document.getElementById('reviewTimerRing').textContent = '15';
+  document.getElementById('reviewHint').textContent = 'Entry is saved. This closes automatically.';
+
+  document.getElementById('reviewPopup').classList.remove('hidden');
+
+  clearInterval(reviewTimerHandle);
+  reviewTimerHandle = setInterval(()=>{
+    if(reviewDone) return;
+    reviewTimeLeft -= 1;
+    if(reviewTimeLeft<=0){
+      reviewDone = true;
+      clearInterval(reviewTimerHandle);
+      document.getElementById('reviewPopup').classList.add('hidden');
+    } else {
+      document.getElementById('reviewTimerRing').textContent = String(reviewTimeLeft);
+    }
+  }, 1000);
+}
+
+function reviewEnterEditMode(){
+  if(reviewDone) return;
+  const ctx = state.reviewContext;
+  reviewEditing = true;
+  clearInterval(reviewTimerHandle);
+  document.getElementById('reviewTimerRing').style.opacity = '0.3';
+  document.getElementById('reviewTimerLabel').textContent = 'Paused';
+  document.getElementById('reviewHint').textContent = 'Make your changes, then tap Confirm to redo this entry';
+  document.getElementById('reviewPlanksView').style.display = 'none';
+  document.getElementById('reviewPlanksInput').style.display = 'block';
+  if(ctx?.opts?.field2Editable){
+    document.getElementById('reviewPiecesView').style.display = 'none';
+    document.getElementById('reviewPiecesInput').style.display = 'block';
+  }
+  document.getElementById('reviewEditBtn').style.display = 'none';
+  document.getElementById('reviewConfirmBtn').style.display = 'block';
+}
+
+function reviewConfirmEdit(){
+  if(reviewDone) return;
+  reviewDone = true;
+  clearInterval(reviewTimerHandle);
+  const ctx = state.reviewContext;
+  document.getElementById('reviewPopup').classList.add('hidden');
+  if(!ctx) return;
+
+  // Full rollback: restore every state slice this action touched, exactly as it was before.
+  Object.keys(ctx.snapshot).forEach(k=>{ state[k] = ctx.snapshot[k]; });
+  saveAll();
+
+  const newField1 = +document.getElementById('reviewPlanksInput').value;
+  const newField2 = +document.getElementById('reviewPiecesInput').value;
+  setTimeout(()=>{
+    re();
+    setTimeout(()=>{
+      if(ctx.opts.onUndo) ctx.opts.onUndo(newField1, newField2);
+    }, 80);
+  }, 50);
+}
+
+// ---- MATERIALS ACTIONS ----
+let isSubmittingPurchase = false;
+function addPurchaseBatch(){
+  if(isSubmittingPurchase) return; // prevent double-tap duplicate purchase entries
+  isSubmittingPurchase = true;
+  setTimeout(()=>{isSubmittingPurchase=false;}, 1000);
+
+  const vendor = (document.getElementById('purchVendor')?.value || state.newPurchVendor || '').trim();
+  const date = document.getElementById('purchDate')?.value || state.newPurchDate || new Date().toISOString().slice(0,10);
+  const msg = document.getElementById('matMsg');
+
+  if(!vendor){ if(msg){msg.textContent="⚠️ Enter vendor/supplier name";msg.className="msg err";} return; }
+
+  // Collect qty+price for each size that has a quantity entered
+  const sizeEntries = [];
+  PLANK_SIZES.forEach(s=>{
+    const qtyEl = document.getElementById('purchQty_'+s);
+    const priceEl = document.getElementById('purchPrice_'+s);
+    const qty = +(qtyEl?.value||0);
+    const price = +(priceEl?.value||0);
+    if(qty>0) sizeEntries.push({size:s, qty, price});
+  });
+
+  if(sizeEntries.length===0){ if(msg){msg.textContent="⚠️ Enter quantity for at least one size";msg.className="msg err";} return; }
+
+  // One batch number covers this entire vendor lot, across all sizes
+  const bno = getNextBatchNo();
+
+  sizeEntries.forEach(({size, qty, price})=>{
+    if(!state.materials[size]) state.materials[size]={name:size+'" Planks',size:+size,low:50,batches:[]};
+    state.materials[size].batches=[...(state.materials[size].batches||[]),{
+      batchNo:bno, qty, dateAdded:date, vendor, pricePerPiece:price
+    }];
+    addLedgerEntry('plank', state.materials[size].name, bno, qty, 'IN',
+      `Purchased from ${vendor}${price>0?` @ Rs.${price}/pc`:''}`, size, vendor);
+  });
+
+  // Reset form fields
+  state.newPurchVendor=''; state.newPurchDate='';
+  PLANK_SIZES.forEach(s=>{ state['newPurchQty_'+s]=''; state['newPurchPrice_'+s]=''; });
+
+  saveAll();
+  re();
+  setTimeout(()=>{
+    const m=document.getElementById('matMsg');
+    if(m){
+      const summary = sizeEntries.map(e=>`${e.size}": ${e.qty}pcs`).join(', ');
+      m.textContent=`✅ Batch ${bno} added! ${summary} — from ${vendor}`;
+      m.className="msg ok";
+      setTimeout(()=>{if(m)m.textContent='';},4000);
+    }
+  },50);
+}
+
+function addWoodPiece(){
+  const nameEl=document.getElementById('wpName');
+  const sizeEl=document.getElementById('wpSize');
+  const name=nameEl?nameEl.value.trim():state.newWoodName;
+  const size=sizeEl?+sizeEl.value:+state.newWoodSize;
+  if(!name||!size||size<=0){
+    const msg=document.getElementById('wpMsg');
+    if(msg){msg.textContent="⚠️ Fill all fields";msg.className="msg err";}
+    return;
+  }
+  state.woodPieces=[...(state.woodPieces||[]),{id:Date.now(),name,size}];
+  state.newWoodName=""; state.newWoodSize="";
+  saveAll();
+  re();
+  setTimeout(()=>{
+    const msg=document.getElementById('wpMsg');
+    if(msg){msg.textContent=`✅ ${name} (${size}") added!`;msg.className="msg ok";setTimeout(()=>{if(msg)msg.textContent='';},3000);}
+  },50);
+}
+
+// Update a wood piece's Bill of Materials (socket type + screws required) as the user types
+function updateBOM(woodPieceId){
+  const socketEl = document.getElementById('bomSocket_'+woodPieceId);
+  const screwsEl = document.getElementById('bomScrews_'+woodPieceId);
+  const socketType = socketEl?.value?.trim()||'';
+  const screwsRequired = +screwsEl?.value||0;
+  state.woodPieces = (state.woodPieces||[]).map(w=>w.id===woodPieceId?{...w, socketType, screwsRequired}:w);
+  saveAll();
+}
+
+function addSocketType(){
+  const nameEl = document.getElementById('newSocketTypeName');
+  const msg = document.getElementById('socketTypeMsg');
+  const name = (nameEl?.value||state.newSocketTypeName||'').trim();
+  if(!name){ if(msg){msg.textContent="⚠️ Enter a socket type name";msg.className="msg err";} return; }
+  if((state.socketTypes||[]).includes(name)){ if(msg){msg.textContent="⚠️ Already exists";msg.className="msg err";} return; }
+  state.socketTypes=[...(state.socketTypes||[]), name];
+  state.newSocketTypeName='';
+  saveAll(); re();
+  setTimeout(()=>{
+    const m=document.getElementById('socketTypeMsg');
+    if(m){m.textContent=`✅ ${name} added!`;m.className="msg ok";setTimeout(()=>{if(m)m.textContent='';},3000);}
+  },50);
+}
+
+function addSocketStock(){
+  const typeEl = document.getElementById('socketType');
+  const qtyEl = document.getElementById('socketQty');
+  const msg = document.getElementById('socketMsg');
+  const socketType = (typeEl?.value||state.newSocketType||'').trim();
+  const qty = +(qtyEl?.value||state.newSocketQty||0);
+  if(!socketType){ if(msg){msg.textContent="⚠️ Enter socket type";msg.className="msg err";} return; }
+  if(!qty||qty<=0){ if(msg){msg.textContent="⚠️ Enter quantity";msg.className="msg err";} return; }
+  const idx=(state.socketInventory||[]).findIndex(s=>s.socketType===socketType);
+  if(idx>=0){ state.socketInventory[idx].qty += qty; }
+  else{ state.socketInventory=[...(state.socketInventory||[]),{socketType, qty, dateAdded:new Date().toISOString().slice(0,10)}]; }
+  state.newSocketType=''; state.newSocketQty='';
+  saveAll(); re();
+  setTimeout(()=>{
+    const m=document.getElementById('socketMsg');
+    if(m){m.textContent=`✅ ${qty} pcs of ${socketType} added!`;m.className="msg ok";setTimeout(()=>{if(m)m.textContent='';},3000);}
+  },50);
+}
+
+function addScrewStock(){
+  const qtyEl = document.getElementById('screwQty');
+  const msg = document.getElementById('screwMsg');
+  const qty = +(qtyEl?.value||state.newScrewQty||0);
+  if(!qty||qty<=0){ if(msg){msg.textContent="⚠️ Enter quantity";msg.className="msg err";} return; }
+  state.screwInventory=[...(state.screwInventory||[]),{qty, dateAdded:new Date().toISOString().slice(0,10)}];
+  state.newScrewQty='';
+  saveAll(); re();
+  setTimeout(()=>{
+    const m=document.getElementById('screwMsg');
+    if(m){m.textContent=`✅ ${qty} screws added!`;m.className="msg ok";setTimeout(()=>{if(m)m.textContent='';},3000);}
+  },50);
+}
+
+// ---- RESET ----
+function confirmResetProd(){document.getElementById('resetProdBar').classList.remove('hidden');document.getElementById('resetAllBar').classList.add('hidden');}
+function confirmResetAll(){document.getElementById('resetAllBar').classList.remove('hidden');document.getElementById('resetProdBar').classList.add('hidden');}
+function hideResetBars(){document.getElementById('resetProdBar').classList.add('hidden');document.getElementById('resetAllBar').classList.add('hidden');}
+
+function resetProduction(){
+  [SK.production,SK.scrapInventory,SK.wastage,SK.openBatches,SK.closedBatches,SK.ledger,SK.sales,SK.finishedInventory,SK.reworkStock,SK.finishedBrushes,SK.brushScrapLog,SK.readyForSale,SK.voidLog].forEach(k=>localStorage.removeItem(k));
+  state.production=[]; state.scrapInventory=[]; state.wastage=[];
+  state.openBatches={}; state.closedBatches=[]; state.ledger=[]; state.sales=[];
+  state.finishedInventory=[]; state.reworkStock=[]; state.finishedBrushes=[]; state.brushScrapLog=[];
+  state.readyForSale=[]; state.voidLog=[];
+  hideResetBars(); saveAll(); re();
+}
+function resetAll(){
+  Object.values(SK).forEach(k=>localStorage.removeItem(k));
+  state.materials=emptyMats(); state.woodPieces=DEFAULT_WOOD_PIECES;
+  state.production=[]; state.scrapInventory=[]; state.wastage=[];
+  state.openBatches={}; state.closedBatches=[]; state.ledger=[]; state.sales=[];
+  state.finishedInventory=[]; state.reworkStock=[]; state.finishedBrushes=[]; state.brushScrapLog=[];
+  state.socketInventory=[]; state.screwInventory=[]; state.readyForSale=[]; state.voidLog=[];
+  hideResetBars(); saveAll(); re();
+}
+
+// ---- AUTH ----
+function doLogin(){
+  const name = document.getElementById('loginName')?.value?.trim();
+  const pass = document.getElementById('loginPass')?.value;
+  const err = document.getElementById('loginErr');
+  const users = state.users || DEFAULT_USERS;
+  const user = users.find(u => u.password === pass);
+  if(!user){ 
+    if(err){err.textContent="⚠️ Incorrect password. Try again.";err.style.display='block';}
+    return;
+  }
+  currentUser = {...user, loginName: name||user.name};
+  localStorage.setItem('wbt_currentUser', JSON.stringify(currentUser));
+  document.getElementById('loginScreen').style.display='none';
+  renderAuthenticatedApp();
+}
+
+function logout(){
+  currentUser = null;
+  localStorage.removeItem('wbt_currentUser');
+  document.getElementById('loginScreen').style.display='flex';
+  document.getElementById('loginName').value='';
+  document.getElementById('loginPass').value='';
+  document.getElementById('loginErr').style.display='none';
+  document.querySelectorAll('.tab').forEach(t=>t.style.display='');
+}
+
+function renderAuthenticatedApp(){
+  if(!currentUser) return;
+  // Filter tabs based on role
+  const allowedTabs = currentUser.tabs || [];
+  const isAdmin = currentUser.role === 'admin' || currentUser.role === 'owner';
+  document.querySelectorAll('.tab').forEach(t=>{
+    const tabName = t.textContent.replace('📒','').replace('💰','').replace('⚙️','').replace('🪥','').replace('🔌','').replace('🔩','').trim();
+    if(tabName === 'Admin'){
+      t.style.display = isAdmin ? '' : 'none';
+    } else {
+      t.style.display = allowedTabs.includes(tabName) ? '' : 'none';
+    }
+  });
+  // Switch to first allowed tab
+  const firstTab = allowedTabs[0] || 'Dashboard';
+  state.currentTab = firstTab;
+  document.querySelectorAll('.tab').forEach(t=>{
+    t.classList.remove('active');
+    const tabName = t.textContent.replace('📒','').replace('💰','').replace('🪥','').replace('🔌','').replace('🔩','').trim();
+    if(tabName === firstTab) t.classList.add('active');
+  });
+  // Update header with user info
+  const userInfo = document.getElementById('userInfo');
+  if(userInfo) userInfo.innerHTML = `<span style="font-size:11px;opacity:0.8;">👤 ${currentUser.loginName} (${currentUser.name})</span>`;
+  renderTab(firstTab);
+}
+
+function renderAdminPanel(){
+  const users = state.users || DEFAULT_USERS;
+  const allTabs = ["Dashboard","Wood Finishing","Brush Dept","Socket Dept","Inventory","Wastage","Materials","BOM","Ledger","Sales"];
+  
+  let html = `<div class="card" style="border:2px solid #5c3d1e;">
+    <div class="label">👥 User Management</div>
+    <div style="font-size:12px;color:#888;margin-bottom:12px;">Tap a user to edit their details</div>`;
+
+  users.forEach((u,i)=>{
+    html+=`<div style="background:#f9f5f0;border-radius:8px;padding:12px;margin-bottom:10px;border-left:4px solid #5c3d1e;">
+      <div class="row" style="margin-bottom:8px;">
+        <div style="font-weight:700;font-size:14px;">${u.name}</div>
+        <div style="font-size:11px;color:#7a5230;font-weight:700;text-transform:uppercase;">${u.role}</div>
+      </div>
+      <div style="font-size:11px;color:#888;margin-bottom:8px;">Password: <b>${u.password}</b></div>
+      <div style="font-size:11px;color:#888;margin-bottom:10px;">Access: ${(u.tabs||[]).join(', ')}</div>
+      <button class="btn btn-brown" style="font-size:12px;padding:6px 12px;width:100%;" onclick="editUser(${i})">✏️ Edit User ${i+1}</button>
+    </div>`;
+  });
+
+  html+=`<button class="btn btn-green" style="width:100%;margin-top:8px;" onclick="addUser()">+ Add New User</button>
+  </div>`;
+
+  // Void & Flag permissions per user, per department they have access to
+  const DEPT_TABS = ["Wood Finishing","Brush Dept","Socket Dept","Wastage","Sales","Materials"];
+  html+=`<div class="card" style="border:2px solid #9b59b6;">
+    <div class="label" style="color:#9b59b6;">🚫 Void &amp; Flag Permissions</div>
+    <div style="font-size:11px;color:#888;margin-bottom:12px;">Control who can void their own entries (with a daily cap) and who can flag entries for your review. Admin and Owner always have full access, so they aren't listed here.</div>`;
+  const nonAdminUsers = users.filter(u=>u.role!=='admin'&&u.role!=='owner');
+  if(nonAdminUsers.length===0){
+    html+=`<div style="color:#aaa;font-size:12px;">No employees to configure yet.</div>`;
+  } else {
+    nonAdminUsers.forEach(u=>{
+      const uIdx = users.findIndex(x=>x.id===u.id);
+      const relevantDepts = (u.tabs||[]).filter(t=>DEPT_TABS.includes(t));
+      const expanded = state.permPanelExpanded===u.id;
+      html+=`<div style="background:#f9f5f0;border-radius:8px;padding:10px;margin-bottom:8px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;" onclick="togglePermPanel(${u.id})">
+          <div><div style="font-size:13px;font-weight:700;">${u.name}</div><div style="font-size:11px;color:#888;">${relevantDepts.length} department${relevantDepts.length===1?'':'s'}</div></div>
+          <span style="font-size:14px;">${expanded?'▲':'▼'}</span>
+        </div>`;
+      if(expanded){
+        if(relevantDepts.length===0){
+          html+=`<div style="margin-top:10px;font-size:12px;color:#aaa;">This user has no department tab access yet.</div>`;
+        } else {
+          relevantDepts.forEach(dept=>{
+            const perm = (u.voidPermissions||{})[dept] || {canVoid:false, maxVoids:0, canFlag:true};
+            html+=`<div style="background:#fff;border-radius:6px;padding:10px;margin-top:8px;">
+              <div style="font-size:12px;font-weight:700;margin-bottom:6px;">${dept}</div>
+              <label style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;font-size:12px;">Can void own entries
+                <input type="checkbox" ${perm.canVoid?'checked':''} onchange="updateVoidPerm(${uIdx},'${dept}','canVoid',this.checked)" style="width:16px;height:16px;"/></label>
+              <label style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;font-size:12px;">Max voids per day
+                <input type="number" min="0" value="${perm.maxVoids||0}" onchange="updateVoidPerm(${uIdx},'${dept}','maxVoids',+this.value)" style="width:60px;text-align:center;"/></label>
+              <label style="display:flex;justify-content:space-between;align-items:center;font-size:12px;">Can flag for review
+                <input type="checkbox" ${perm.canFlag?'checked':''} onchange="updateVoidPerm(${uIdx},'${dept}','canFlag',this.checked)" style="width:16px;height:16px;"/></label>
+            </div>`;
+          });
+        }
+      }
+      html+=`</div>`;
+    });
+  }
+  html+=`</div>`;
+
+  // Flagged entries — quick visibility for Admin/Owner across Wood Finishing
+  const flaggedRuns = [];
+  Object.entries(state.openBatches||{}).forEach(([sz,ob])=>{
+    (ob.runs||[]).forEach((r,ri)=>{
+      if(r.flagged && !r.voided) flaggedRuns.push({...r, size:sz, runIndex:ri, batchNo:ob.batchNo});
+    });
+  });
+  if(flaggedRuns.length>0){
+    html+=`<div class="card" style="border:2px solid #3498db;">
+      <div class="label" style="color:#3498db;">🚩 Flagged Entries Awaiting Review</div>`;
+    flaggedRuns.forEach(r=>{
+      html+=`<div style="background:#e8f4fd;border-radius:8px;padding:10px;margin-bottom:8px;">
+        <div style="font-size:12px;font-weight:700;">${r.batchNo} — ${r.woodPieceName}</div>
+        <div style="font-size:11px;color:#666;margin:4px 0;">${r.planksUsed} planks, ${r.piecesProduced} good pcs · ${r.date}</div>
+        <div style="font-size:11px;color:#3498db;font-style:italic;margin-bottom:8px;">Flagged by ${r.flaggedBy}: "${r.flagNote}"</div>
+        <button class="btn btn-red" style="font-size:11px;padding:6px 12px;" onclick="openVoidModal('${r.size}',${r.runIndex})">🚫 Void This Entry</button>
+      </div>`;
+    });
+    html+=`</div>`;
+  }
+
+  return html;
+}
+
+function togglePermPanel(userId){
+  state.permPanelExpanded = state.permPanelExpanded===userId ? null : userId;
+  re();
+}
+
+function updateVoidPerm(userIdx, dept, key, value){
+  const users = [...(state.users||DEFAULT_USERS)];
+  const u = {...users[userIdx]};
+  const vp = {...(u.voidPermissions||{})};
+  vp[dept] = {...(vp[dept]||{canVoid:false,maxVoids:0,canFlag:true}), [key]: value};
+  u.voidPermissions = vp;
+  users[userIdx] = u;
+  state.users = users;
+  if(currentUser && currentUser.id===u.id) currentUser = {...currentUser, voidPermissions: vp};
+  saveAll();
+}
+
+function editUser(idx){
+  const users = state.users || DEFAULT_USERS;
+  const u = users[idx];
+  const allTabs = ["Dashboard","Wood Finishing","Brush Dept","Socket Dept","Inventory","Wastage","Materials","BOM","Ledger","Sales"];
+  
+  const modal = document.getElementById('adminModal');
+  document.getElementById('adminModalTitle').textContent = `✏️ Edit: ${u.name}`;
+  document.getElementById('adminModalBody').innerHTML = `
+    <div class="label">Display Name</div>
+    <input id="editName" type="text" value="${u.name}" style="width:100%;padding:8px;border:1px solid #d4b896;border-radius:6px;font-size:14px;margin-bottom:10px;box-sizing:border-box;"/>
+    <div class="label">Password</div>
+    <input id="editPass" type="text" value="${u.password}" style="width:100%;padding:8px;border:1px solid #d4b896;border-radius:6px;font-size:14px;margin-bottom:10px;box-sizing:border-box;"/>
+    <div class="label">Tab Access</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:12px;">
+      ${allTabs.map(t=>`
+      <label style="display:flex;align-items:center;gap:6px;font-size:13px;padding:6px;background:#f9f5f0;border-radius:6px;">
+        <input type="checkbox" value="${t}" ${(u.tabs||[]).includes(t)?'checked':''} style="width:auto;"/> ${t}
+      </label>`).join('')}
+    </div>
+    <div id="editErr" style="color:#e74c3c;font-size:12px;margin-bottom:8px;display:none;"></div>
+    <div style="display:flex;gap:8px;">
+      <button class="btn btn-brown" style="flex:1;" onclick="saveUser(${idx})">💾 Save</button>
+      ${idx>0?`<button class="btn" style="flex:1;background:#e74c3c;" onclick="deleteUser(${idx})">🗑️ Delete</button>`:''}
+    </div>`;
+  modal.style.display='flex';
+}
+
+function addUser(){
+  const allTabs = ["Dashboard","Wood Finishing","Brush Dept","Socket Dept","Inventory","Wastage","Materials","BOM","Ledger","Sales"];
+  const modal = document.getElementById('adminModal');
+  document.getElementById('adminModalTitle').textContent = '+ Add New User';
+  document.getElementById('adminModalBody').innerHTML = `
+    <div class="label">Display Name</div>
+    <input id="editName" type="text" placeholder="e.g. Warehouse Manager" style="width:100%;padding:8px;border:1px solid #d4b896;border-radius:6px;font-size:14px;margin-bottom:10px;box-sizing:border-box;"/>
+    <div class="label">Password</div>
+    <input id="editPass" type="text" placeholder="e.g. warehouse123" style="width:100%;padding:8px;border:1px solid #d4b896;border-radius:6px;font-size:14px;margin-bottom:10px;box-sizing:border-box;"/>
+    <div class="label">Tab Access</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:12px;">
+      ${allTabs.map(t=>`
+      <label style="display:flex;align-items:center;gap:6px;font-size:13px;padding:6px;background:#f9f5f0;border-radius:6px;">
+        <input type="checkbox" value="${t}" style="width:auto;"/> ${t}
+      </label>`).join('')}
+    </div>
+    <div id="editErr" style="color:#e74c3c;font-size:12px;margin-bottom:8px;display:none;"></div>
+    <button class="btn btn-green" style="width:100%;" onclick="saveUser(-1)">+ Add User</button>`;
+  modal.style.display='flex';
+}
+
+function saveUser(idx){
+  const name = document.getElementById('editName')?.value?.trim();
+  const pass = document.getElementById('editPass')?.value?.trim();
+  const tabs = [...document.querySelectorAll('#adminModalBody input[type=checkbox]:checked')].map(c=>c.value);
+  const err = document.getElementById('editErr');
+  if(!name){err.textContent="⚠️ Enter a name";err.style.display='block';return;}
+  if(!pass){err.textContent="⚠️ Enter a password";err.style.display='block';return;}
+  if(tabs.length===0){err.textContent="⚠️ Select at least one tab";err.style.display='block';return;}
+  // Check duplicate password (excluding current user)
+  const users = [...(state.users||DEFAULT_USERS)];
+  const dupIdx = users.findIndex((u,i)=>u.password===pass && i!==idx);
+  if(dupIdx>=0){err.textContent="⚠️ Password already used by "+users[dupIdx].name;err.style.display='block';return;}
+
+  if(idx===-1){
+    users.push({id:Date.now(), name, password:pass, role:'custom', tabs, voidPermissions:{}});
+  } else {
+    users[idx]={...users[idx], name, password:pass, tabs, voidPermissions: users[idx].voidPermissions||{}};
+  }
+  state.users=users;
+  saveAll();
+  document.getElementById('adminModal').style.display='none';
+  re();
+}
+
+function deleteUser(idx){
+  if(!confirm('Delete this user?')) return;
+  const users=[...(state.users||DEFAULT_USERS)];
+  users.splice(idx,1);
+  state.users=users;
+  saveAll();
+  document.getElementById('adminModal').style.display='none';
+  re();
+}
+
+// ---- INIT - Merge duplicate closed batches (same batchNo) in existing data
+// Extract the true root batch number (e.g. "B014" from "B014-Rejected-Commando Broom-Rejected-Commando Gittuk")
+function getRootBatchNo(batchNo){
+  if(!batchNo) return batchNo;
+  const m = batchNo.match(/^(B\d+)/);
+  return m ? m[1] : batchNo;
+}
+
+function mergeDuplicateClosedBatches(){
+  const merged = {};
+  // Group ALL closed batches by their ROOT batch number (B014, B011, etc) regardless of suffix variants
+  (state.closedBatches||[]).filter(b=>b&&b.batchNo).forEach(b=>{
+    const root = getRootBatchNo(b.batchNo);
+    if(!merged[root]){
+      merged[root] = {
+        ...b, batchNo: root,
+        runs:[...(b.runs||[])],
+        totalPlanksUsed:b.totalPlanksUsed||0,
+        totalPiecesProduced:b.totalPiecesProduced||0,
+        scrapChildren:[]
+      };
+    } else {
+      merged[root].totalPlanksUsed += (b.totalPlanksUsed||0);
+      merged[root].totalPiecesProduced += (b.totalPiecesProduced||0);
+      merged[root].runs = [...(merged[root].runs||[]), ...(b.runs||[])];
+      if((b.dateClosed||'') > (merged[root].dateClosed||'')) merged[root].dateClosed = b.dateClosed;
+    }
+  });
+  // Wastage is ALWAYS computed fresh from state.wastage — the single source of truth.
+  // QC type = rejected pieces during production. ManualClose type = extra KG entered when closing.
+  Object.keys(merged).forEach(root=>{
+    const entries = (state.wastage||[]).filter(w=>w.batchNo===root&&(w.type==='QualityControl'||w.type==='ManualClose'));
+    const liveQcKg = entries.filter(w=>w.type==='QualityControl').reduce((s,w)=>s+(w.wastageKg||0),0);
+    const liveManualKg = entries.filter(w=>w.type==='ManualClose').reduce((s,w)=>s+(w.wastageKg||0),0);
+    merged[root].qcWastageKg = liveQcKg;
+    merged[root].manualWastageKg = liveManualKg;
+    merged[root].wastageKg = liveQcKg + liveManualKg;
+  });
+  const mergedList = Object.values(merged);
+  state.closedBatches = mergedList;
+
+  // Also fix QC/Manual wastage entries to use root batch numbers
+  state.wastage = (state.wastage||[]).map(w=>{
+    if(w.type!=='QualityControl'&&w.type!=='ManualClose') return w;
+    const root = getRootBatchNo(w.batchNo);
+    if(root===w.batchNo) return w;
+    return {...w, batchNo: root};
+  });
+
+  saveAll();
+}
+mergeDuplicateClosedBatches();
+
+// INIT - Sync existing scrap/plank inventory into ledger if ledger is empty
+function syncLedgerFromExistingData(){
+  if((state.ledger||[]).length > 0) return; // already has entries, skip
+
+  // Sync plank batches IN
+  Object.entries(state.materials||{}).forEach(([size, mat])=>{
+    if(!mat) return;
+    (mat.batches||[]).forEach(b=>{
+      addLedgerEntry('plank', mat.name, b.batchNo, b.qty, 'IN', 'Existing stock (synced)', size);
+    });
+  });
+
+  // Sync scrap inventory IN
+  (state.scrapInventory||[]).forEach(s=>{
+    addLedgerEntry('scrap', `${s.size}" Scrap`, s.batch, s.quantity, 'IN', 'Existing scrap (synced)', String(s.size));
+  });
+
+  // Sync production OUT entries
+  (state.production||[]).forEach(r=>{
+    addLedgerEntry('plank', `${r.plankSize}" Planks`, r.batchNo, r.planksUsed, 'OUT', `Production → ${r.woodPieceName}`, String(r.plankSize));
+    addLedgerEntry('finished', r.woodPieceName, r.batchNo, r.piecesProduced, 'IN', `Produced from ${r.planksUsed} planks`, '');
+  });
+
+  if((state.ledger||[]).length > 0) saveAll();
+}
+// Start app — load from Google Sheets first
+loadFromSheets();
+</script>
+
+<div id="saleModal" class="modal-overlay hidden">
+  <div class="modal">
+    <div style="font-size:16px;font-weight:700;margin-bottom:4px;" id="saleModalTitle"></div>
+    <div style="font-size:12px;color:#666;margin-bottom:14px;" id="saleModalSub"></div>
+    <div id="saleModalBody"></div>
+    <div id="saleErr" class="msg err hidden"></div>
+    <div style="display:flex;gap:10px;margin-top:12px;">
+      <button class="btn btn-green" style="flex:1;" onclick="confirmSale()">💰 Record Sale</button>
+      <button class="btn btn-gray" style="flex:1;" onclick="document.getElementById('saleModal').classList.add('hidden')">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<div id="cashReceivedModal" class="modal-overlay hidden">
+  <div class="modal">
+    <div style="font-size:16px;font-weight:700;margin-bottom:4px;">💵 Cash Received</div>
+    <div style="font-size:12px;color:#666;margin-bottom:14px;" id="cashReceivedSub"></div>
+    <div class="label">Amount Received (Rs.)</div>
+    <input type="number" id="cashReceivedAmt" step="0.01" min="0" placeholder="e.g. 500"/>
+    <div class="label">Date</div>
+    <input type="date" id="cashReceivedDate" value=""/>
+    <div id="cashReceivedErr" class="msg err hidden"></div>
+    <div style="display:flex;gap:10px;margin-top:12px;">
+      <button class="btn btn-green" style="flex:1;" onclick="confirmCashReceived()">✅ Confirm</button>
+      <button class="btn btn-gray" style="flex:1;" onclick="document.getElementById('cashReceivedModal').classList.add('hidden')">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<div id="voidModal" class="modal-overlay hidden">
+  <div class="modal">
+    <div style="font-size:16px;font-weight:700;margin-bottom:4px;">🚫 Void Entry</div>
+    <div style="font-size:12px;color:#666;margin-bottom:14px;" id="voidModalSub"></div>
+    <div style="font-size:11px;color:#888;margin-bottom:10px;">This entry will stay visible permanently, marked voided. It will not be deleted or hidden.</div>
+    <div class="label">Reason (required)</div>
+    <textarea id="voidReason" placeholder="e.g. Typed 50 instead of 35 by mistake" style="width:100%;min-height:70px;margin-bottom:10px;"></textarea>
+    <div id="voidErr" class="msg err hidden"></div>
+    <div style="display:flex;gap:10px;">
+      <button class="btn btn-red" style="flex:1;" onclick="confirmVoid()">🚫 Void This Entry</button>
+      <button class="btn btn-gray" style="flex:1;" onclick="document.getElementById('voidModal').classList.add('hidden')">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<div id="flagModal" class="modal-overlay hidden">
+  <div class="modal">
+    <div style="font-size:16px;font-weight:700;margin-bottom:4px;">🚩 Flag for Review</div>
+    <div style="font-size:12px;color:#666;margin-bottom:14px;" id="flagModalSub"></div>
+    <div style="font-size:11px;color:#888;margin-bottom:10px;">This doesn't change any data — it just notifies the Admin/Owner to take a look.</div>
+    <div class="label">What looks wrong?</div>
+    <textarea id="flagNote" placeholder="e.g. Planks used looks too high, please check" style="width:100%;min-height:70px;margin-bottom:10px;"></textarea>
+    <div id="flagErr" class="msg err hidden"></div>
+    <div style="display:flex;gap:10px;">
+      <button class="btn" style="background:#3498db;flex:1;" onclick="confirmFlag()">🚩 Flag It</button>
+      <button class="btn btn-gray" style="flex:1;" onclick="document.getElementById('flagModal').classList.add('hidden')">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<div id="reviewPopup" class="modal-overlay hidden">
+  <div class="modal">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+      <div style="font-weight:700;font-size:15px;" id="reviewTimerLabel">Saving in</div>
+      <div id="reviewTimerRing" style="width:46px;height:46px;border-radius:50%;border:3px solid #5c3d1e;display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:700;">15</div>
+    </div>
+    <div style="font-size:12px;color:#666;margin-bottom:12px;" id="reviewSub"></div>
+
+    <div style="margin-bottom:14px;">
+      <div class="label" id="reviewField1Label">Planks Used</div>
+      <p id="reviewPlanksView" style="font-size:42px;font-weight:700;text-align:center;margin:4px 0;"></p>
+      <input type="number" id="reviewPlanksInput" style="display:none;width:100%;font-size:36px;font-weight:700;padding:10px;text-align:center;margin-top:4px;"/>
+    </div>
+    <div style="margin-bottom:14px;">
+      <div class="label" id="reviewField2Label">Good Pieces</div>
+      <p id="reviewPiecesView" style="font-size:42px;font-weight:700;text-align:center;margin:4px 0;color:#27ae60;"></p>
+      <input type="number" id="reviewPiecesInput" style="display:none;width:100%;font-size:36px;font-weight:700;padding:10px;text-align:center;margin-top:4px;color:#27ae60;"/>
+    </div>
+    <div id="reviewScrapRow" style="margin-bottom:14px;">
+      <div class="label" id="reviewScrapLabel">Sent to Scrap Inventory</div>
+      <p id="reviewScrapView" style="font-size:42px;font-weight:700;text-align:center;margin:4px 0;color:#e67e22;"></p>
+    </div>
+
+    <button id="reviewEditBtn" class="btn btn-brown" style="width:100%;" onclick="reviewEnterEditMode()">✏️ Edit</button>
+    <button id="reviewConfirmBtn" class="btn btn-green" style="width:100%;display:none;" onclick="reviewConfirmEdit()">✅ Confirm</button>
+    <p id="reviewHint" style="font-size:11px;color:#888;text-align:center;margin:10px 0 0;">Entry is saved. This closes automatically.</p>
+  </div>
+</div>
+
+<script>
+// Inline manifest as blob
+const manifest = {
+  name: "Brush Manufacturing Tracker",
+  short_name: "Brush Tracker",
+  description: "Track wooden brush production, inventory and wastage",
+  start_url: ".",
+  display: "standalone",
+  background_color: "#f5f0eb",
+  theme_color: "#5c3d1e",
+  orientation: "portrait",
+  icons: [
+    {
+      src: "data:image/svg+xml;base64," + btoa(unescape(encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'><rect width='192' height='192' rx='24' fill='%235c3d1e'/><text y='130' x='96' text-anchor='middle' font-size='110' font-family='system-ui'>🪥</text></svg>`))),
+      sizes: "192x192",
+      type: "image/svg+xml",
+      purpose: "any maskable"
+    }
+  ]
+};
+const manifestBlob = new Blob([JSON.stringify(manifest)], {type: 'application/json'});
+const manifestURL = URL.createObjectURL(manifestBlob);
+document.getElementById('manifestLink').setAttribute('href', manifestURL);
+
+// Register service worker inline
+if ('serviceWorker' in navigator) {
+  const swCode = `
+    const CACHE = 'brush-tracker-v1';
+    self.addEventListener('install', e => {
+      e.waitUntil(caches.open(CACHE).then(c => c.addAll(['/'])));
+      self.skipWaiting();
+    });
+    self.addEventListener('activate', e => {
+      e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))));
+      self.clients.claim();
+    });
+    self.addEventListener('fetch', e => {
+      e.respondWith(caches.match(e.request).then(r => r || fetch(e.request).catch(() => caches.match('/'))));
+    });
+  `;
+  const swBlob = new Blob([swCode], {type: 'application/javascript'});
+  const swURL = URL.createObjectURL(swBlob);
+  navigator.serviceWorker.register(swURL).catch(()=>{});
+}
+
+// Show install prompt
+let deferredPrompt;
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault();
+  deferredPrompt = e;
+  const bar = document.getElementById('installBar');
+  if(bar) bar.classList.remove('hidden');
+});
+window.addEventListener('appinstalled', () => {
+  const bar = document.getElementById('installBar');
+  if(bar) bar.classList.add('hidden');
+});
+function installApp() {
+  if(deferredPrompt) {
+    deferredPrompt.prompt();
+    deferredPrompt.userChoice.then(() => { deferredPrompt = null; });
+  }
+}
+</script>
+</body>
+</html>
