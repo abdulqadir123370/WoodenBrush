@@ -63,6 +63,15 @@ input,select{width:100%;padding:8px 10px;border:1px solid #d4b896;border-radius:
 .green{color:#27ae60;}
 .orange{color:#e67e22;}
 .brown{color:#5c3d1e;}
+#printReport{display:none;}
+@media print{
+  body *{visibility:hidden;}
+  #printReport, #printReport *{visibility:visible;}
+  #printReport{display:block;position:absolute;top:0;left:0;width:100%;padding:20px;}
+  #printReport h2{font-size:16px;margin:16px 0 6px;border-bottom:2px solid #5c3d1e;padding-bottom:4px;}
+  #printReport table{width:100%;border-collapse:collapse;font-size:11px;margin-bottom:10px;}
+  #printReport td,#printReport th{border:1px solid #ccc;padding:4px 6px;text-align:left;}
+}
 </style>
 </head>
 <body>
@@ -504,6 +513,51 @@ function renderDashboard(){
 
   let html='';
 
+  // Voided & flagged entries — always visible to Admin/Owner here, regardless of which
+  // department tab the entry originally came from or whether its batch is still open.
+  if(isAdminOrOwner()){
+    const flaggedNow = (state.production||[]).filter(p=>p.flagged && !p.voided);
+    const voidedAll = [...(state.production||[])].filter(p=>p.voided).sort((a,b)=>(b.voidedDate||'').localeCompare(a.voidedDate||''));
+
+    if(flaggedNow.length>0){
+      html+=`<div class="card" style="border:2px solid #3498db;">
+        <div class="label" style="color:#3498db;">🚩 Flagged — Awaiting Your Review (${flaggedNow.length})</div>`;
+      flaggedNow.forEach(r=>{
+        html+=`<div style="background:#e8f4fd;border-radius:8px;padding:10px;margin-bottom:8px;">
+          <div style="font-size:12px;font-weight:700;">${r.batchNo} — ${r.woodPieceName}</div>
+          <div style="font-size:11px;color:#666;margin:4px 0;">${r.planksUsed} planks, ${r.piecesProduced} good pcs</div>
+          <div style="font-size:10px;color:#aaa;">📅 ${r.date} ⏰ ${r.time||'—'}</div>
+          <div style="font-size:11px;color:#3498db;font-style:italic;margin:6px 0 8px;">Flagged by ${r.flaggedBy} on ${r.flaggedDate} ${r.flaggedTime||''}: "${r.flagNote}"</div>
+          <div style="display:flex;gap:6px;">
+            <button class="btn" style="background:#5c3d1e;font-size:11px;padding:6px 12px;" onclick="openViewEntryModal(${JSON.stringify(r.id)})">👁️ View</button>
+            <button class="btn btn-red" style="font-size:11px;padding:6px 12px;" onclick="openVoidModal(${JSON.stringify(r.id)})">🚫 Void This Entry</button>
+          </div>
+        </div>`;
+      });
+      html+=`</div>`;
+    }
+
+    if(voidedAll.length>0){
+      html+=`<div class="card" style="border:2px solid #e74c3c;">
+        <div class="label" style="color:#e74c3c;">🚫 Voided Entries (${voidedAll.length})</div>
+        <div style="font-size:11px;color:#888;margin-bottom:10px;">Permanent record — nothing is ever deleted, only cancelled with a reason.</div>`;
+      voidedAll.slice(0,15).forEach(r=>{
+        html+=`<div style="background:#fdecea;border-radius:8px;padding:10px;margin-bottom:8px;opacity:0.85;">
+          <div style="font-size:12px;font-weight:700;text-decoration:line-through;">${r.batchNo} — ${r.woodPieceName}</div>
+          <div style="font-size:11px;color:#666;margin:4px 0;text-decoration:line-through;">${r.planksUsed} planks, ${r.piecesProduced} good pcs</div>
+          <div style="font-size:10px;color:#aaa;">📅 ${r.date} ⏰ ${r.time||'—'}</div>
+          <div style="font-size:11px;color:#e74c3c;margin-top:4px;">Voided by ${r.voidedBy} on ${r.voidedDate} ${r.voidedTime||''}</div>
+          <div style="font-size:11px;color:#888;font-style:italic;margin-bottom:6px;">"${r.voidedReason}"</div>
+          <button class="btn" style="background:#5c3d1e;font-size:11px;padding:6px 12px;" onclick="openViewEntryModal(${JSON.stringify(r.id)})">👁️ View</button>
+        </div>`;
+      });
+      if(voidedAll.length>15){
+        html+=`<div style="font-size:11px;color:#aaa;text-align:center;">+ ${voidedAll.length-15} more</div>`;
+      }
+      html+=`</div>`;
+    }
+  }
+
   if(openList.length>0){
     html+=`<div class="card" style="border:2px solid #27ae60;background:#f0fff4;">
       <div class="label">🟢 Open Batches</div>`;
@@ -685,7 +739,7 @@ function renderProduction(){
         <div>
           <div class="label">Wood Piece Type</div>
           <select id="wpSelect" onchange="calcProduction()">`;
-    const isRejectedStock = openBatch?.sourceBatchTag && openBatch.sourceBatchTag.includes('-Rejected-');
+    const isRejectedStock = openBatch?.sourceBatchTag && (openBatch.sourceBatchTag.includes('-Rejected-') || openBatch.sourceBatchTag.includes('-BrushScrap-'));
     const anyEnabled = wp.some(w => isRejectedStock ? (effSize>w.size) : (effSize>=w.size));
     if(!anyEnabled){
       html += `<option value="" disabled selected>No products can be made from this size</option>`;
@@ -738,14 +792,50 @@ function renderProduction(){
           ${isVoided?`<div style="font-size:11px;color:#e74c3c;margin-top:6px;background:#fdecea;border-radius:6px;padding:6px 8px;">Voided by ${r.voidedBy} on ${r.voidedDate}<br/><span style="font-style:italic;">"${r.voidedReason}"</span></div>`:''}
           ${r.flagged&&!isVoided?`<div style="font-size:11px;color:#3498db;margin-top:6px;background:#e8f4fd;border-radius:6px;padding:6px 8px;">Flagged by ${r.flaggedBy} on ${r.flaggedDate}<br/><span style="font-style:italic;">"${r.flagNote}"</span></div>`:''}
           ${!isVoided?`<div style="display:flex;gap:6px;margin-top:8px;">
-            ${canVoidHere?`<button class="btn btn-red" style="font-size:10px;padding:5px 10px;" onclick="openVoidModal('${size}',${ri})">🚫 Void</button>`:''}
-            ${canFlagHere&&!isAdminOrOwner()?`<button class="btn" style="background:#3498db;font-size:10px;padding:5px 10px;" onclick="openFlagModal('${size}',${ri})">🚩 Flag</button>`:''}
+            ${canVoidHere?`<button class="btn btn-red" style="font-size:10px;padding:5px 10px;" onclick="openVoidModal(${JSON.stringify(r.id)})">🚫 Void</button>`:''}
+            ${canFlagHere&&!isAdminOrOwner()?`<button class="btn" style="background:#3498db;font-size:10px;padding:5px 10px;" onclick="openFlagModal(${JSON.stringify(r.id)})">🚩 Flag</button>`:''}
           </div>`:''}
         </div>`;
       });
       html+=`</div>`;
     }
   }
+
+  // Persistent runs list — always visible regardless of whether the batch is still open
+  // or has since been closed, so Void/Flag remain reachable at any time.
+  const allSizeRuns = [...(state.production||[])]
+    .filter(p=>p.department==='wood_finishing')
+    .sort((a,b)=>(b.date||'').localeCompare(a.date||'')||(b.id||0)-(a.id||0))
+    .slice(0,20);
+  if(allSizeRuns.length>0){
+    const canVoidHere2 = canVoidInDept('Wood Finishing');
+    const canFlagHere2 = canFlagInDept('Wood Finishing');
+    html+=`<div class="card"><div class="label">📋 Recent Production Runs</div>
+      <div style="font-size:11px;color:#888;margin-bottom:8px;">Shows the last 20 runs across all sizes and batches — stays here whether the batch is open or already closed.</div>`;
+    allSizeRuns.forEach(r=>{
+      const isVoided2 = !!r.voided;
+      html+=`<div class="prod-item" style="${isVoided2?'opacity:0.55;':''}">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+          <div style="font-weight:600;${isVoided2?'text-decoration:line-through;':''}">${r.woodPieceName} <span style="color:#7a5230;font-size:11px;">(${r.batchNo})</span></div>
+          <div style="display:flex;gap:4px;">
+            ${isVoided2?'<span style="font-size:10px;padding:2px 8px;border-radius:6px;background:#fdecea;color:#e74c3c;font-weight:700;">VOIDED</span>':''}
+            ${r.flagged&&!isVoided2?'<span style="font-size:10px;padding:2px 8px;border-radius:6px;background:#e8f4fd;color:#3498db;font-weight:700;">🚩 FLAGGED</span>':''}
+          </div>
+        </div>
+        <div style="color:#aaa;font-size:10px;${isVoided2?'text-decoration:line-through;':''}">📅 ${r.date} ⏰ ${r.time||'—'}</div>
+        <div style="color:#666;font-size:11px;${isVoided2?'text-decoration:line-through;':''}">${r.planksUsed} planks → <span style="color:#27ae60;font-weight:700;">${r.piecesProduced} good pcs</span></div>
+        ${isVoided2?`<div style="font-size:11px;color:#e74c3c;margin-top:6px;background:#fdecea;border-radius:6px;padding:6px 8px;">Voided by ${r.voidedBy} on ${r.voidedDate} ${r.voidedTime||''}<br/><span style="font-style:italic;">"${r.voidedReason}"</span></div>`:''}
+        ${r.flagged&&!isVoided2?`<div style="font-size:11px;color:#3498db;margin-top:6px;background:#e8f4fd;border-radius:6px;padding:6px 8px;">Flagged by ${r.flaggedBy} on ${r.flaggedDate} ${r.flaggedTime||''}<br/><span style="font-style:italic;">"${r.flagNote}"</span></div>`:''}
+        <div style="display:flex;gap:6px;margin-top:8px;">
+          <button class="btn" style="background:#5c3d1e;font-size:10px;padding:5px 10px;" onclick="openViewEntryModal(${JSON.stringify(r.id)})">👁️ View</button>
+          ${!isVoided2&&canVoidHere2?`<button class="btn btn-red" style="font-size:10px;padding:5px 10px;" onclick="openVoidModal(${JSON.stringify(r.id)})">🚫 Void</button>`:''}
+          ${!isVoided2&&canFlagHere2&&!isAdminOrOwner()?`<button class="btn" style="background:#3498db;font-size:10px;padding:5px 10px;" onclick="openFlagModal(${JSON.stringify(r.id)})">🚩 Flag</button>`:''}
+        </div>
+      </div>`;
+    });
+    html+=`</div>`;
+  }
+
   return html;
 }
 
@@ -988,7 +1078,7 @@ function recordProduction(){
   if(!planksUsed||!wpId){showProdMsg("⚠️ Fill all fields",false);return;}
   const effSize=openBatch.isScrap?(openBatch.scrapSize||parseInt(size)):parseInt(size);
   const sourceTag = openBatch.sourceBatchTag||openBatch.batchNo;
-  const isRejectedStock = sourceTag&&sourceTag.includes('-Rejected-');
+  const isRejectedStock = sourceTag&&(sourceTag.includes('-Rejected-')||sourceTag.includes('-BrushScrap-'));
   if(isRejectedStock ? (pieceSize>=effSize) : (pieceSize>effSize)){
     showProdMsg(isRejectedStock ? "⚠️ Piece must be strictly smaller than rejected stock size!" : "⚠️ Piece too large for this batch!",false);
     return;
@@ -1106,9 +1196,12 @@ function recordProduction(){
   }
 
   const pureWastage = wastageQtyFromReject;
+  const runId = Date.now() + Math.random();
 
   const run={
+    id: runId,
     date:prodDate?.value||new Date().toISOString().slice(0,10),
+    time:new Date().toTimeString().slice(0,5),
     woodPieceName:wp.name, planksUsed,
     theoreticalPieces:pieces, piecesProduced:actualPieces,
     rejectedPieces, rejectionReason,
@@ -1449,7 +1542,7 @@ function recordBrushProcessing(){
   if(wastageQty>0 && !wastageKg){ if(msgEl){msgEl.textContent="⚠️ Enter weight (KG) for Keere Wala wastage";msgEl.className="msg err";} return; }
 
   const today = new Date().toISOString().slice(0,10);
-  const preSnapshot = takeSnapshot(['finishedInventory','reworkStock','brushScrapLog','wastage','finishedBrushes']);
+  const preSnapshot = takeSnapshot(['finishedInventory','reworkStock','brushScrapLog','wastage','finishedBrushes','scrapInventory']);
 
   // Deduct processed quantity from finished wood stock
   state.finishedInventory = finished.map(f=>f.id===stock.id?{...f,qty:f.qty-total}:f).filter(f=>f.qty>0);
@@ -1468,11 +1561,21 @@ function recordBrushProcessing(){
     }];
   }
 
-  // Kharab Maal → scrap log (piece count only)
+  // Kharab Maal → scrap log (for record-keeping) AND scrapInventory (so it's selectable back in Wood Finishing)
   if(scrap>0){
     state.brushScrapLog=[...(state.brushScrapLog||[]),{
       date:today, productName:stock.productName, batchNo:stock.batchNo, qty:scrap, reason:'Kharab Maal'
     }];
+    const scrapKey = `${stock.batchNo}-BrushScrap-${stock.productName}`;
+    const scrapSizeVal = stock.size || 0;
+    const sIdx=(state.scrapInventory||[]).findIndex(s=>s.size===scrapSizeVal&&s.batch===scrapKey);
+    if(sIdx>=0){ state.scrapInventory[sIdx].quantity += scrap; }
+    else{
+      state.scrapInventory=[...(state.scrapInventory||[]),{
+        size:scrapSizeVal, quantity:scrap, batch:scrapKey, dateCreated:today
+      }];
+    }
+    addLedgerEntry('scrap', `${stock.productName} (Kharab Maal)`, stock.batchNo, scrap, 'IN', `Rejected in Brush Dept — usable for smaller products`, String(scrapSizeVal));
   }
 
   // Keere Wala → wastage (piece count + KG, no material type split — different from wood scrap)
@@ -1835,7 +1938,7 @@ cleanupDeadEndScrap();
 function fixBrokenQcWastageEntries(){
   let changed = false;
   state.wastage = (state.wastage||[]).map(w=>{
-    if(w.type!=='QualityControl'&&w.type!=='ManualClose') return w;
+    if(w.type!=='QualityControl'&&w.type!=='ManualClose'&&w.type!=='BrushDeptWastage') return w;
     // If batchNo contains a suffix pattern, it's broken — extract the real root
     if(w.batchNo && (w.batchNo.includes('-Rejected-')||w.batchNo.includes('-Salvage-')||w.batchNo.includes('-Scrap-'))){
       const rootBatchNo = w.batchNo.split('-Rejected-')[0].split('-Salvage-')[0].split('-Scrap-')[0];
@@ -1938,6 +2041,12 @@ function renderWastage(){
   const qcWastage=(state.wastage||[]).filter(w=>w.type==='QualityControl'&&w.status==='open');
   const qcTotalKg=qcWastage.reduce((s,w)=>s+(w.wastageKg||0),0);
 
+  // Brush Dept wastage tied to a Wood Finishing batch that hasn't been closed yet — show separately
+  // so it's not invisible while waiting, then it folds into the batch card automatically once closed.
+  const closedBatchNos = new Set((state.closedBatches||[]).map(b=>b.batchNo));
+  const pendingBrushWastage = (state.wastage||[]).filter(w=>w.type==='BrushDeptWastage' && !closedBatchNos.has(w.batchNo));
+  const pendingBrushWastageKg = pendingBrushWastage.reduce((s,w)=>s+(w.wastageKg||0),0);
+
   let html=`<div class="card" style="background:#fff8f0;border:2px solid #e67e22;">
     <div class="label">🗑️ Wastage by Type</div>
     <div class="grid3" style="margin-bottom:14px;">
@@ -1957,7 +2066,7 @@ function renderWastage(){
     <div class="grid3" style="margin-bottom:14px;">
       <div style="background:#fff;border-radius:8px;padding:10px;text-align:center;">
         <div style="font-size:10px;color:#aaa;margin-bottom:4px;">Total Wastage</div>
-        <div style="font-size:22px;font-weight:700;color:#e67e22;">${(totalKg+qcTotalKg).toFixed(1)}</div>
+        <div style="font-size:22px;font-weight:700;color:#e67e22;">${(totalKg+qcTotalKg+pendingBrushWastageKg).toFixed(1)}</div>
         <div style="font-size:10px;color:#aaa;">KG (incl. QC)</div>
       </div>
       <div style="background:#fff;border-radius:8px;padding:10px;text-align:center;">
@@ -2033,6 +2142,30 @@ function renderWastage(){
     </div>`;
   }
 
+  if(pendingBrushWastage.length>0){
+    html+=`<div class="card" style="border:2px solid #e67e22;">
+      <div class="label" style="color:#e67e22;">🐛 Brush Dept Wastage (Keere Wala) — Batch Still Open</div>
+      <div style="font-size:12px;color:#888;margin-bottom:10px;">This will fold into the batch's total once its Wood Finishing batch is closed.</div>
+      ${pendingBrushWastage.map(w=>`
+        <div style="padding:8px;background:#fff3cd;border-radius:6px;margin-bottom:6px;border-left:3px solid #e67e22;">
+          <div class="row">
+            <div>
+              <div style="font-size:13px;font-weight:700;">${w.batchNo}</div>
+              <div style="font-size:11px;color:#666;">${w.plankSizeName||w.woodPieceName}</div>
+              <div style="font-size:11px;color:#888;">${w.rejectedPieces||0} pcs · ${w.reason}</div>
+            </div>
+            <div style="text-align:right;">
+              <div style="font-size:18px;font-weight:700;color:#e67e22;">${(w.wastageKg||0).toFixed(1)} KG</div>
+              <div style="font-size:10px;color:#e67e22;">⏳ Batch Open</div>
+            </div>
+          </div>
+        </div>`).join('')}
+      <div style="padding-top:8px;border-top:1px solid #f0e8de;font-size:12px;font-weight:700;color:#e67e22;">
+        Total Pending: ${pendingBrushWastageKg.toFixed(1)} KG
+      </div>
+    </div>`;
+  }
+
   if(parentBatches.length===0){
     html+=`<div class="card"><div style="color:#aaa;font-size:13px;text-align:center;padding:20px;">No closed batches yet.<br/><span style="font-size:11px;">Close a production batch to record wastage in KG.</span></div></div>`;
     return html;
@@ -2041,7 +2174,7 @@ function renderWastage(){
   [...parentBatches].reverse().forEach((b)=>{
     const realIdx = (state.closedBatches||[]).findIndex(x=>x.batchNo===b.batchNo);
     // Type breakdown for THIS batch — sums typeSplit across all its wastage entries (production efficiency insight)
-    const batchWastageEntries = (state.wastage||[]).filter(w=>w.batchNo===b.batchNo&&(w.type==='QualityControl'||w.type==='ManualClose'));
+    const batchWastageEntries = (state.wastage||[]).filter(w=>w.batchNo===b.batchNo&&(w.type==='QualityControl'||w.type==='ManualClose'||w.type==='BrushDeptWastage'));
     const batchTypeBreakdown = {Bhusa:0, Patti:0, Gitta:0};
     batchWastageEntries.forEach(w=>{
       if(w.typeSplit){ WASTE_TYPES.forEach(t=>{ batchTypeBreakdown[t]+=(w.typeSplit[t]||0); }); }
@@ -2110,7 +2243,7 @@ function renderWastage(){
         ${(b.qcWastageKg||0)>0?`<div style="flex:1;background:#fdecea;border-radius:6px;padding:6px 8px;"><div style="color:#aaa;">QC Rejected</div><div style="font-weight:700;color:#e74c3c;">${b.qcWastageKg} KG</div></div>`:''}
       </div>`:'' }
       ${(() => {
-        const batchQcEntries = (state.wastage||[]).filter(w=>w.batchNo===b.batchNo&&(w.type==='QualityControl'||w.type==='ManualClose'));
+        const batchQcEntries = (state.wastage||[]).filter(w=>w.batchNo===b.batchNo&&(w.type==='QualityControl'||w.type==='ManualClose'||w.type==='BrushDeptWastage'));
         if(batchQcEntries.length===0) return '';
         return `<details style="margin-bottom:10px;font-size:11px;">
           <summary style="cursor:pointer;color:#7a5230;font-weight:700;">📋 View ${batchQcEntries.length} rejection record${batchQcEntries.length>1?'s':''} (total ${b.qcWastageKg||0} KG)</summary>
@@ -2736,7 +2869,123 @@ function confirmCashReceived(){
 }
 
 // ==================== VOID / FLAG ACTIONS (Wood Finishing production runs) ====================
-function openVoidModal(size, runIndex){
+// Finds a run by its unique id everywhere it might live — state.production (always present),
+// any open batch's runs array, and any closed batch's runs array — so void/flag work
+// regardless of whether the underlying batch is still open or has already been closed.
+function findRunEverywhere(runId){
+  const results = {production:null, openRun:null, closedRun:null};
+  const prodIdx = (state.production||[]).findIndex(p=>p.id===runId);
+  if(prodIdx>=0) results.production = state.production[prodIdx];
+  Object.values(state.openBatches||{}).forEach(ob=>{
+    const idx = (ob.runs||[]).findIndex(r=>r.id===runId);
+    if(idx>=0) results.openRun = ob.runs[idx];
+  });
+  (state.closedBatches||[]).forEach(cb=>{
+    const idx = (cb.runs||[]).findIndex(r=>r.id===runId);
+    if(idx>=0) results.closedRun = cb.runs[idx];
+  });
+  return results;
+}
+
+function openViewEntryModal(runId){
+  const found = findRunEverywhere(runId);
+  const r = found.production || found.openRun || found.closedRun;
+  const body = document.getElementById('viewEntryBody');
+  if(!r){ body.innerHTML = '<div style="color:#aaa;font-size:13px;">Entry not found.</div>'; document.getElementById('viewEntryModal').classList.remove('hidden'); return; }
+
+  const fieldBox = (val) => `<div style="padding:8px 10px;background:#f9f5f0;border-radius:6px;font-weight:600;font-size:14px;min-height:20px;">${val!==undefined&&val!==null&&val!==''?val:'—'}</div>`;
+
+  let html = `<div class="card" style="border:2px solid #d4b896;margin-bottom:12px;">
+    <div class="label">🪚 Production Run — ${r.batchNo||''}</div>
+    <div class="grid2">
+      <div><div class="label">Wood Piece Type</div>${fieldBox(r.woodPieceName)}</div>
+      <div><div class="label">Number of Planks</div>${fieldBox(r.planksUsed)}</div>
+      <div><div class="label">Date</div>${fieldBox(r.date)}</div>
+      <div><div class="label">Time</div>${fieldBox(r.time)}</div>
+      <div style="grid-column:1/-1;"><div class="label">Notes</div>${fieldBox(r.notes)}</div>
+    </div>
+  </div>`;
+
+  // Theoretical calculation box — same visual as the live form
+  html += `<div class="calc-box" style="margin-bottom:12px;">
+    <div class="label">📊 Calculation</div>
+    <div class="grid3" style="font-size:13px;margin-bottom:10px;">
+      <div><div class="aaa" style="font-size:11px;">Planks</div><div class="calc-num">${r.planksUsed||0}</div></div>
+      <div><div class="aaa" style="font-size:11px;">Pieces</div><div class="calc-num green">${r.piecesProduced||0}</div></div>
+      <div><div class="aaa" style="font-size:11px;">Rem/Plank</div><div class="calc-num" style="color:#3498db;">${(r.remainder||0).toFixed?r.remainder.toFixed(1):r.remainder||0}"</div></div>
+    </div>
+    ${r.remainder>0?`<div class="rem-box ${r.remainderType==='Wastage'?'waste':''}">${r.remainderType==='Scrap'?'✅ Remainder → Scrap':'⚠️ Remainder → Wastage'}</div>`:''}
+  </div>`;
+
+  // Quality Control section — only shown if there was a rejection, matching the live form's behavior
+  if(r.rejectedPieces>0){
+    html += `<div style="background:#fdecea;border-radius:8px;padding:12px;margin-bottom:12px;border:2px solid #f5c6cb;">
+      <div class="label" style="color:#e74c3c;">⚠️ Quality Control</div>
+      <div class="grid2" style="margin-bottom:10px;">
+        <div><div class="label">Actual Good Pieces</div>${fieldBox(r.piecesProduced)}</div>
+        <div><div class="label">Rejected Pieces</div>${fieldBox(r.rejectedPieces)}</div>
+      </div>
+      <div style="margin-bottom:10px;"><div class="label">Rejection Reason</div>${fieldBox(r.rejectionReason)}</div>
+      ${r.salvageQty>0?`<div style="background:#f9f5f0;border-radius:8px;padding:10px;margin-bottom:8px;">
+        <div class="label" style="margin-bottom:6px;">♻️ Sent to Scrap Inventory</div>
+        ${fieldBox(r.salvageQty+' pcs (as rejected '+r.salvageSize+'" stock)')}
+      </div>`:''}
+      ${r.wastageQtyFromReject>0?`<div style="background:#fff;border-radius:8px;padding:10px;">
+        <div class="label" style="margin-bottom:6px;">🗑️ Sent to Wastage</div>
+        <div class="grid2">
+          <div><div class="label">Quantity</div>${fieldBox(r.wastageQtyFromReject)}</div>
+          <div><div class="label">Weight (KG)</div>${fieldBox(r.wastageKgFromReject)}</div>
+        </div>
+      </div>`:''}
+    </div>`;
+  }
+
+  if(r.flagged){
+    html += `<div style="background:#e8f4fd;border-radius:8px;padding:10px;margin-bottom:10px;">
+      <div style="font-size:12px;font-weight:700;color:#3498db;margin-bottom:6px;">🚩 Flagged</div>
+      <div style="font-size:13px;">By <b>${r.flaggedBy}</b> on ${r.flaggedDate} ${r.flaggedTime||''}</div>
+      <div style="font-size:13px;font-style:italic;margin-top:4px;">"${r.flagNote}"</div>
+    </div>`;
+  }
+  if(r.voided){
+    html += `<div style="background:#fdecea;border-radius:8px;padding:10px;">
+      <div style="font-size:12px;font-weight:700;color:#e74c3c;margin-bottom:6px;">🚫 Voided</div>
+      <div style="font-size:13px;">By <b>${r.voidedBy}</b> on ${r.voidedDate} ${r.voidedTime||''}</div>
+      <div style="font-size:13px;font-style:italic;margin-top:4px;">"${r.voidedReason}"</div>
+    </div>`;
+  }
+
+  body.innerHTML = html;
+  document.getElementById('viewEntryModal').classList.remove('hidden');
+}
+
+function applyVoidToRun(runId, reason){
+  const by = currentUser?.loginName || currentUser?.name || 'Unknown';
+  const date = new Date().toISOString().slice(0,10);
+  const time = new Date().toTimeString().slice(0,5);
+  const found = findRunEverywhere(runId);
+  [found.production, found.openRun, found.closedRun].forEach(r=>{
+    if(!r) return;
+    r.voided = true; r.voidedBy = by; r.voidedReason = reason; r.voidedDate = date; r.voidedTime = time;
+    if(isAdminOrOwner() && !r.flagged){
+      r.flagged = true; r.flagNote = 'Voided directly by Admin/Owner — reason: ' + reason;
+      r.flaggedBy = by; r.flaggedDate = date; r.flaggedTime = time;
+    }
+  });
+}
+
+function applyFlagToRun(runId, note){
+  const by = currentUser?.loginName || currentUser?.name || 'Unknown';
+  const date = new Date().toISOString().slice(0,10);
+  const time = new Date().toTimeString().slice(0,5);
+  const found = findRunEverywhere(runId);
+  [found.production, found.openRun, found.closedRun].forEach(r=>{
+    if(!r) return;
+    r.flagged = true; r.flagNote = note; r.flaggedBy = by; r.flaggedDate = date; r.flaggedTime = time;
+  });
+}
+
+function openVoidModal(runId){
   const dept = 'Wood Finishing';
   if(!canVoidInDept(dept)){
     alert("You don't have permission to void entries in this department.");
@@ -2746,11 +2995,11 @@ function openVoidModal(size, runIndex){
     alert("You've used all your voids for today in this department. Ask the Owner for a correction.");
     return;
   }
-  state.voidTarget = {size, runIndex, dept};
-  const ob = state.openBatches[size];
-  const run = ob?.runs?.[runIndex];
+  state.voidTarget = {runId, dept};
+  const found = findRunEverywhere(runId);
+  const run = found.production || found.openRun || found.closedRun;
   document.getElementById('voidModalSub').textContent = run
-    ? `${run.date} — ${run.woodPieceName} — ${run.planksUsed} planks, ${run.piecesProduced} good pcs`
+    ? `${run.date} ${run.time||''} — ${run.woodPieceName} — ${run.planksUsed} planks, ${run.piecesProduced} good pcs`
     : '';
   document.getElementById('voidReason').value = '';
   document.getElementById('voidErr').classList.add('hidden');
@@ -2764,46 +3013,24 @@ function confirmVoid(){
   const err = document.getElementById('voidErr');
   if(!reason){ err.textContent="⚠️ A reason is required to void an entry"; err.classList.remove('hidden'); return; }
 
-  const ob = state.openBatches[target.size];
-  const run = ob?.runs?.[target.runIndex];
-  if(!run){ document.getElementById('voidModal').classList.add('hidden'); return; }
-
-  run.voided = true;
-  run.voidedBy = currentUser?.loginName || currentUser?.name || 'Unknown';
-  run.voidedReason = reason;
-  run.voidedDate = new Date().toISOString().slice(0,10);
-  // If an admin/owner voids something that wasn't already flagged, mark it flagged too —
-  // this ensures no entry can be changed by Admin without leaving a visible reason.
-  if(isAdminOrOwner() && !run.flagged){
-    run.flagged = true;
-    run.flagNote = 'Voided directly by Admin/Owner — reason: ' + reason;
-    run.flaggedBy = currentUser?.loginName || currentUser?.name || 'Admin';
-    run.flaggedDate = run.voidedDate;
-  }
-
-  // Also update the corresponding entry in state.production (same batch+date+wood piece+planksUsed, first unvoided match)
-  const prodIdx = (state.production||[]).findIndex(p=>!p.voided && p.batchNo===ob.batchNo && p.woodPieceName===run.woodPieceName && p.planksUsed===run.planksUsed && p.date===run.date);
-  if(prodIdx>=0){
-    state.production[prodIdx] = {...state.production[prodIdx], voided:true, voidedBy:run.voidedBy, voidedReason:run.voidedReason, voidedDate:run.voidedDate};
-  }
-
+  applyVoidToRun(target.runId, reason);
   logVoidUsage(target.dept);
   document.getElementById('voidModal').classList.add('hidden');
   state.voidTarget = null;
   saveAll(); re();
 }
 
-function openFlagModal(size, runIndex){
+function openFlagModal(runId){
   const dept = 'Wood Finishing';
   if(!canFlagInDept(dept)){
     alert("You don't have permission to flag entries in this department.");
     return;
   }
-  state.flagTarget = {size, runIndex};
-  const ob = state.openBatches[size];
-  const run = ob?.runs?.[runIndex];
+  state.flagTarget = {runId};
+  const found = findRunEverywhere(runId);
+  const run = found.production || found.openRun || found.closedRun;
   document.getElementById('flagModalSub').textContent = run
-    ? `${run.date} — ${run.woodPieceName} — ${run.planksUsed} planks, ${run.piecesProduced} good pcs`
+    ? `${run.date} ${run.time||''} — ${run.woodPieceName} — ${run.planksUsed} planks, ${run.piecesProduced} good pcs`
     : '';
   document.getElementById('flagNote').value = '';
   document.getElementById('flagErr').classList.add('hidden');
@@ -2817,16 +3044,10 @@ function confirmFlag(){
   const err = document.getElementById('flagErr');
   if(!note){ err.textContent="⚠️ Please describe what looks wrong"; err.classList.remove('hidden'); return; }
 
-  const ob = state.openBatches[target.size];
-  const run = ob?.runs?.[target.runIndex];
-  if(!run){ document.getElementById('flagModal').classList.add('hidden'); return; }
-
-  run.flagged = true;
-  run.flagNote = note;
-  run.flaggedBy = currentUser?.loginName || currentUser?.name || 'Unknown';
-  run.flaggedDate = new Date().toISOString().slice(0,10);
+  applyFlagToRun(target.runId, note);
 
   document.getElementById('flagModal').classList.add('hidden');
+
   state.flagTarget = null;
   saveAll(); re();
 }
@@ -3165,8 +3386,17 @@ function renderAuthenticatedApp(){
 function renderAdminPanel(){
   const users = state.users || DEFAULT_USERS;
   const allTabs = ["Dashboard","Wood Finishing","Brush Dept","Socket Dept","Inventory","Wastage","Materials","BOM","Ledger","Sales"];
-  
-  let html = `<div class="card" style="border:2px solid #5c3d1e;">
+  const isOwnerRole = currentUser?.role==='owner';
+
+  let html = `<div class="card" style="border:2px solid #27ae60;background:#f0fff4;">
+    <div class="label" style="color:#27ae60;">📤 Export Data</div>
+    <div style="font-size:11px;color:#888;margin-bottom:12px;">Download a snapshot of your data. PDF is a readable report — open it and use your browser's "Save as PDF" option.</div>
+    <button class="btn btn-brown" style="width:100%;margin-bottom:8px;" onclick="exportDataPDF()">📄 Export PDF Report</button>
+    ${isOwnerRole?`<button class="btn" style="background:#3498db;width:100%;" onclick="exportDataJSON()">💾 Export Raw Data (JSON backup)</button>
+    <div style="font-size:10px;color:#888;margin-top:6px;">The JSON file contains everything — useful as a full backup or if you ever move to a different system.</div>`:''}
+  </div>
+
+  <div class="card" style="border:2px solid #5c3d1e;">
     <div class="label">👥 User Management</div>
     <div style="font-size:12px;color:#888;margin-bottom:12px;">Tap a user to edit their details</div>`;
 
@@ -3226,28 +3456,89 @@ function renderAdminPanel(){
   }
   html+=`</div>`;
 
-  // Flagged entries — quick visibility for Admin/Owner across Wood Finishing
-  const flaggedRuns = [];
-  Object.entries(state.openBatches||{}).forEach(([sz,ob])=>{
-    (ob.runs||[]).forEach((r,ri)=>{
-      if(r.flagged && !r.voided) flaggedRuns.push({...r, size:sz, runIndex:ri, batchNo:ob.batchNo});
-    });
-  });
-  if(flaggedRuns.length>0){
-    html+=`<div class="card" style="border:2px solid #3498db;">
-      <div class="label" style="color:#3498db;">🚩 Flagged Entries Awaiting Review</div>`;
-    flaggedRuns.forEach(r=>{
-      html+=`<div style="background:#e8f4fd;border-radius:8px;padding:10px;margin-bottom:8px;">
-        <div style="font-size:12px;font-weight:700;">${r.batchNo} — ${r.woodPieceName}</div>
-        <div style="font-size:11px;color:#666;margin:4px 0;">${r.planksUsed} planks, ${r.piecesProduced} good pcs · ${r.date}</div>
-        <div style="font-size:11px;color:#3498db;font-style:italic;margin-bottom:8px;">Flagged by ${r.flaggedBy}: "${r.flagNote}"</div>
-        <button class="btn btn-red" style="font-size:11px;padding:6px 12px;" onclick="openVoidModal('${r.size}',${r.runIndex})">🚫 Void This Entry</button>
-      </div>`;
-    });
-    html+=`</div>`;
-  }
+  // Flagged and voided entries now live permanently on the Dashboard tab (visible to
+  // Admin/Owner regardless of which department the entry came from or batch open/close state).
 
   return html;
+}
+
+// ==================== EXPORT DATA ====================
+function exportDataPDF(){
+  const today = new Date().toISOString().slice(0,10);
+  let html = `<h1 style="font-size:20px;margin-bottom:2px;">Brush Manufacturing Tracker — Report</h1>
+    <div style="font-size:11px;color:#666;margin-bottom:10px;">Generated ${today} by ${currentUser?.loginName||currentUser?.name||'Unknown'}</div>`;
+
+  html += `<h2>Plank Stock</h2><table><tr><th>Size</th><th>Batch</th><th>Vendor</th><th>Qty</th></tr>`;
+  PLANK_SIZES.forEach(size=>{
+    const mat = state.materials?.[size];
+    (mat?.batches||[]).forEach(b=>{
+      html += `<tr><td>${size}"</td><td>${b.batchNo}</td><td>${b.vendor||'-'}</td><td>${b.qty}</td></tr>`;
+    });
+  });
+  html += `</table>`;
+
+  html += `<h2>Scrap Inventory</h2><table><tr><th>Size</th><th>Batch</th><th>Qty</th></tr>`;
+  (state.scrapInventory||[]).forEach(s=>{
+    html += `<tr><td>${s.size}"</td><td>${s.batch}</td><td>${s.quantity}</td></tr>`;
+  });
+  html += `</table>`;
+
+  html += `<h2>Closed Production Batches</h2><table><tr><th>Batch</th><th>Size</th><th>Planks</th><th>Pieces</th><th>Wastage KG</th></tr>`;
+  (state.closedBatches||[]).forEach(b=>{
+    html += `<tr><td>${b.batchNo}</td><td>${b.plankSizeName||''}</td><td>${b.totalPlanksUsed||0}</td><td>${b.totalPiecesProduced||0}</td><td>${(b.wastageKg||0).toFixed(1)}</td></tr>`;
+  });
+  html += `</table>`;
+
+  html += `<h2>Finished Wood Stock</h2><table><tr><th>Product</th><th>Batch</th><th>Qty</th></tr>`;
+  (state.finishedInventory||[]).forEach(f=>{
+    html += `<tr><td>${f.productName}</td><td>${f.batchNo}</td><td>${f.qty}</td></tr>`;
+  });
+  html += `</table>`;
+
+  html += `<h2>Finished Brushes</h2><table><tr><th>Product</th><th>Batch</th><th>Qty</th></tr>`;
+  (state.finishedBrushes||[]).forEach(f=>{
+    html += `<tr><td>${f.productName}</td><td>${f.batchNo}</td><td>${f.qty}</td></tr>`;
+  });
+  html += `</table>`;
+
+  html += `<h2>Ready for Sale</h2><table><tr><th>Product</th><th>Batch</th><th>Qty</th></tr>`;
+  (state.readyForSale||[]).forEach(f=>{
+    html += `<tr><td>${f.productName}</td><td>${f.batchNo}</td><td>${f.qty}</td></tr>`;
+  });
+  html += `</table>`;
+
+  const totalWastageKg = (state.closedBatches||[]).reduce((s,b)=>s+(b.wastageKg||0),0);
+  const totalRevenue = (state.sales||[]).reduce((s,x)=>s+x.totalAmount,0);
+  html += `<h2>Wastage Sales Summary</h2><table><tr><th>Total Wastage (KG)</th><th>Total Revenue (Rs.)</th></tr>
+    <tr><td>${totalWastageKg.toFixed(1)}</td><td>${totalRevenue.toLocaleString()}</td></tr></table>`;
+
+  html += `<h2>All Sales</h2><table><tr><th>Date</th><th>Buyer</th><th>Type</th><th>KG</th><th>Amount</th></tr>`;
+  (state.sales||[]).forEach(s=>{
+    html += `<tr><td>${s.date}</td><td>${s.buyer}</td><td>${s.wasteType||'-'}</td><td>${s.kgSold}</td><td>Rs.${s.totalAmount.toFixed(0)}</td></tr>`;
+  });
+  html += `</table>`;
+
+  document.getElementById('printReport').innerHTML = html;
+  setTimeout(()=>{ window.print(); }, 100);
+}
+
+function exportDataJSON(){
+  const exportObj = {};
+  Object.entries(SK).forEach(([stateKey, sheetKey])=>{
+    exportObj[stateKey] = state[stateKey];
+  });
+  exportObj._exportedAt = new Date().toISOString();
+  exportObj._exportedBy = currentUser?.loginName || currentUser?.name || 'Unknown';
+
+  const blob = new Blob([JSON.stringify(exportObj, null, 2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'brushtracker-backup-' + new Date().toISOString().slice(0,10) + '.json';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 function togglePermPanel(userId){
@@ -3380,7 +3671,7 @@ function mergeDuplicateClosedBatches(){
   // Wastage is ALWAYS computed fresh from state.wastage — the single source of truth.
   // QC type = rejected pieces during production. ManualClose type = extra KG entered when closing.
   Object.keys(merged).forEach(root=>{
-    const entries = (state.wastage||[]).filter(w=>w.batchNo===root&&(w.type==='QualityControl'||w.type==='ManualClose'));
+    const entries = (state.wastage||[]).filter(w=>w.batchNo===root&&(w.type==='QualityControl'||w.type==='ManualClose'||w.type==='BrushDeptWastage'));
     const liveQcKg = entries.filter(w=>w.type==='QualityControl').reduce((s,w)=>s+(w.wastageKg||0),0);
     const liveManualKg = entries.filter(w=>w.type==='ManualClose').reduce((s,w)=>s+(w.wastageKg||0),0);
     merged[root].qcWastageKg = liveQcKg;
@@ -3392,7 +3683,7 @@ function mergeDuplicateClosedBatches(){
 
   // Also fix QC/Manual wastage entries to use root batch numbers
   state.wastage = (state.wastage||[]).map(w=>{
-    if(w.type!=='QualityControl'&&w.type!=='ManualClose') return w;
+    if(w.type!=='QualityControl'&&w.type!=='ManualClose'&&w.type!=='BrushDeptWastage') return w;
     const root = getRootBatchNo(w.batchNo);
     if(root===w.batchNo) return w;
     return {...w, batchNo: root};
@@ -3444,6 +3735,8 @@ loadFromSheets();
   </div>
 </div>
 
+<div id="printReport"></div>
+
 <div id="cashReceivedModal" class="modal-overlay hidden">
   <div class="modal">
     <div style="font-size:16px;font-weight:700;margin-bottom:4px;">💵 Cash Received</div>
@@ -3457,6 +3750,16 @@ loadFromSheets();
       <button class="btn btn-green" style="flex:1;" onclick="confirmCashReceived()">✅ Confirm</button>
       <button class="btn btn-gray" style="flex:1;" onclick="document.getElementById('cashReceivedModal').classList.add('hidden')">Cancel</button>
     </div>
+  </div>
+</div>
+
+<div id="viewEntryModal" class="modal-overlay hidden">
+  <div class="modal">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+      <div style="font-size:16px;font-weight:700;">🔍 Entry Details</div>
+      <button onclick="document.getElementById('viewEntryModal').classList.add('hidden')" style="background:none;border:none;font-size:20px;cursor:pointer;color:#888;">✕</button>
+    </div>
+    <div id="viewEntryBody" style="max-height:60vh;overflow-y:auto;"></div>
   </div>
 </div>
 
