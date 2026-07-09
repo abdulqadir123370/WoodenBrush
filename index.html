@@ -1466,6 +1466,7 @@ function renderBrushDept(){
             <div><div class="label">Quantity</div><input type="number" id="catWastageQty" min="0" placeholder="0" oninput="calcBrushSplit()" style="margin-bottom:0;"/></div>
             <div><div class="label">Weight (KG)</div><input type="number" id="catWastageKg" step="0.1" min="0" placeholder="0.0" style="margin-bottom:0;"/></div>
           </div>
+          <div style="font-size:11px;color:#888;margin-top:6px;">Recorded as Gitta — Keere Wala wastage from Brush Dept is almost always Gitta.</div>
         </div>
 
         <div style="background:#e8f5e9;border-radius:8px;padding:10px;margin-bottom:10px;">
@@ -1556,6 +1557,9 @@ function recordBrushProcessing(){
   if(color+regmal+scrap+wastageQty>total){ if(msgEl){msgEl.textContent="⚠️ Category totals exceed quantity being processed";msgEl.className="msg err";} return; }
   if(wastageQty>0 && !wastageKg){ if(msgEl){msgEl.textContent="⚠️ Enter weight (KG) for Keere Wala wastage";msgEl.className="msg err";} return; }
 
+  // Keere Wala is almost always Gitta — no need to ask for a split, record it directly.
+  const wasteTypeSplit = wastageQty>0 && wastageKg>0 ? {Bhusa:0, Patti:0, Gitta:wastageKg} : null;
+
   const today = new Date().toISOString().slice(0,10);
   const preSnapshot = takeSnapshot(['finishedInventory','reworkStock','brushScrapLog','wastage','finishedBrushes','scrapInventory']);
 
@@ -1593,11 +1597,12 @@ function recordBrushProcessing(){
     addLedgerEntry('scrap', `${stock.productName} (Kharab Maal)`, stock.batchNo, scrap, 'IN', `Rejected in Brush Dept — usable for smaller products`, String(scrapSizeVal));
   }
 
-  // Keere Wala → wastage (piece count + KG, no material type split — different from wood scrap)
+  // Keere Wala → wastage (piece count + KG + Bhusa/Patti/Gitta split)
   if(wastageQty>0){
     state.wastage=[...(state.wastage||[]),{
       date:today, batchNo:stock.batchNo, plankSizeName:stock.productName,
       woodPieceName:stock.productName, rejectedPieces:wastageQty, wastageKg:wastageKg,
+      typeSplit: wasteTypeSplit,
       reason:'Keere Wala (Brush Dept)', type:'BrushDeptWastage', status:'closed'
     }];
   }
@@ -2252,10 +2257,11 @@ function renderWastage(){
           <div style="font-weight:700;font-size:13px;">${batchTypeBreakdown[t].toFixed(1)} KG</div>
         </div>`).join('')}
       </div>
-      ${(b.qcWastageKg||0)>0||( b.manualWastageKg!==undefined)?`
-      <div style="display:flex;gap:6px;font-size:11px;margin-bottom:10px;">
-        ${(b.manualWastageKg||0)>0?`<div style="flex:1;background:#fff3cd;border-radius:6px;padding:6px 8px;"><div style="color:#aaa;">Manual</div><div style="font-weight:700;color:#e67e22;">${b.manualWastageKg} KG</div></div>`:''}
-        ${(b.qcWastageKg||0)>0?`<div style="flex:1;background:#fdecea;border-radius:6px;padding:6px 8px;"><div style="color:#aaa;">QC Rejected</div><div style="font-weight:700;color:#e74c3c;">${b.qcWastageKg} KG</div></div>`:''}
+      ${(b.qcWastageKg||0)>0||(b.manualWastageKg||0)>0||(b.brushWastageKg||0)>0?`
+      <div style="display:flex;gap:6px;font-size:11px;margin-bottom:10px;flex-wrap:wrap;">
+        ${(b.manualWastageKg||0)>0?`<div style="flex:1;min-width:80px;background:#fff3cd;border-radius:6px;padding:6px 8px;"><div style="color:#aaa;">Manual</div><div style="font-weight:700;color:#e67e22;">${b.manualWastageKg} KG</div></div>`:''}
+        ${(b.qcWastageKg||0)>0?`<div style="flex:1;min-width:80px;background:#fdecea;border-radius:6px;padding:6px 8px;"><div style="color:#aaa;">QC Rejected</div><div style="font-weight:700;color:#e74c3c;">${b.qcWastageKg} KG</div></div>`:''}
+        ${(b.brushWastageKg||0)>0?`<div style="flex:1;min-width:80px;background:#e8f4fd;border-radius:6px;padding:6px 8px;"><div style="color:#aaa;">Brush Dept</div><div style="font-weight:700;color:#3498db;">${b.brushWastageKg} KG</div></div>`:''}
       </div>`:'' }
       ${(() => {
         const batchQcEntries = (state.wastage||[]).filter(w=>w.batchNo===b.batchNo&&(w.type==='QualityControl'||w.type==='ManualClose'||w.type==='BrushDeptWastage'));
@@ -3718,9 +3724,11 @@ function mergeDuplicateClosedBatches(){
     const entries = (state.wastage||[]).filter(w=>w.batchNo===root&&(w.type==='QualityControl'||w.type==='ManualClose'||w.type==='BrushDeptWastage'));
     const liveQcKg = entries.filter(w=>w.type==='QualityControl').reduce((s,w)=>s+(w.wastageKg||0),0);
     const liveManualKg = entries.filter(w=>w.type==='ManualClose').reduce((s,w)=>s+(w.wastageKg||0),0);
+    const liveBrushKg = entries.filter(w=>w.type==='BrushDeptWastage').reduce((s,w)=>s+(w.wastageKg||0),0);
     merged[root].qcWastageKg = liveQcKg;
     merged[root].manualWastageKg = liveManualKg;
-    merged[root].wastageKg = liveQcKg + liveManualKg;
+    merged[root].brushWastageKg = liveBrushKg;
+    merged[root].wastageKg = liveQcKg + liveManualKg + liveBrushKg;
   });
   const mergedList = Object.values(merged);
   state.closedBatches = mergedList;
