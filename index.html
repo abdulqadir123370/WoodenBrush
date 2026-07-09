@@ -516,7 +516,8 @@ function renderDashboard(){
   // Voided & flagged entries — always visible to Admin/Owner here, regardless of which
   // department tab the entry originally came from or whether its batch is still open.
   if(isAdminOrOwner()){
-    const flaggedNow = (state.production||[]).filter(p=>p.flagged && !p.voided);
+    const flaggedNow = (state.production||[]).filter(p=>p.flagged && !p.voided && isWithin24Hours(p.date,p.time));
+    const flaggedExpired = (state.production||[]).filter(p=>p.flagged && !p.voided && !isWithin24Hours(p.date,p.time));
     const voidedAll = [...(state.production||[])].filter(p=>p.voided).sort((a,b)=>(b.voidedDate||'').localeCompare(a.voidedDate||''));
 
     if(flaggedNow.length>0){
@@ -532,6 +533,20 @@ function renderDashboard(){
             <button class="btn" style="background:#5c3d1e;font-size:11px;padding:6px 12px;" onclick="openViewEntryModal(${JSON.stringify(r.id)})">👁️ View</button>
             <button class="btn btn-red" style="font-size:11px;padding:6px 12px;" onclick="openVoidModal(${JSON.stringify(r.id)})">🚫 Void This Entry</button>
           </div>
+        </div>`;
+      });
+      html+=`</div>`;
+    }
+
+    if(flaggedExpired.length>0){
+      html+=`<div class="card" style="border:2px solid #aaa;background:#f5f0eb;">
+        <div class="label" style="color:#888;">⏰ Flagged but Past 24-Hour Window (${flaggedExpired.length})</div>
+        <div style="font-size:11px;color:#888;margin-bottom:8px;">These were flagged in time, but 24 hours have now passed — they can no longer be voided by anyone.</div>`;
+      flaggedExpired.forEach(r=>{
+        html+=`<div style="background:#fff;border-radius:8px;padding:8px;margin-bottom:6px;">
+          <div style="font-size:12px;font-weight:700;">${r.batchNo} — ${r.woodPieceName}</div>
+          <div style="font-size:11px;color:#888;font-style:italic;">"${r.flagNote}"</div>
+          <button class="btn" style="background:#5c3d1e;font-size:11px;padding:5px 10px;margin-top:6px;" onclick="openViewEntryModal(${JSON.stringify(r.id)})">👁️ View</button>
         </div>`;
       });
       html+=`</div>`;
@@ -804,14 +819,14 @@ function renderProduction(){
   // Persistent runs list — always visible regardless of whether the batch is still open
   // or has since been closed, so Void/Flag remain reachable at any time.
   const allSizeRuns = [...(state.production||[])]
-    .filter(p=>p.department==='wood_finishing')
+    .filter(p=>p.department==='wood_finishing' && isWithin24Hours(p.date,p.time))
     .sort((a,b)=>(b.date||'').localeCompare(a.date||'')||(b.id||0)-(a.id||0))
     .slice(0,20);
   if(allSizeRuns.length>0){
     const canVoidHere2 = canVoidInDept('Wood Finishing');
     const canFlagHere2 = canFlagInDept('Wood Finishing');
-    html+=`<div class="card"><div class="label">📋 Recent Production Runs</div>
-      <div style="font-size:11px;color:#888;margin-bottom:8px;">Shows the last 20 runs across all sizes and batches — stays here whether the batch is open or already closed.</div>`;
+    html+=`<div class="card"><div class="label">📋 Recent Production Runs (last 24 hours)</div>
+      <div style="font-size:11px;color:#888;margin-bottom:8px;">Entries older than 24 hours can no longer be voided or flagged by anyone and drop off this list.</div>`;
     allSizeRuns.forEach(r=>{
       const isVoided2 = !!r.voided;
       html+=`<div class="prod-item" style="${isVoided2?'opacity:0.55;':''}">
@@ -2872,6 +2887,16 @@ function confirmCashReceived(){
 // Finds a run by its unique id everywhere it might live — state.production (always present),
 // any open batch's runs array, and any closed batch's runs array — so void/flag work
 // regardless of whether the underlying batch is still open or has already been closed.
+// Hard 24-hour edit window — once an entry is older than this, NOBODY can void or flag it,
+// including Admin/Owner. No exceptions. This is deliberately a strict business rule.
+function isWithin24Hours(dateStr, timeStr){
+  if(!dateStr) return false;
+  const entryDT = new Date(dateStr + 'T' + (timeStr||'00:00') + ':00');
+  if(isNaN(entryDT.getTime())) return false;
+  const hoursElapsed = (Date.now() - entryDT.getTime()) / (1000*60*60);
+  return hoursElapsed >= 0 && hoursElapsed < 24;
+}
+
 function findRunEverywhere(runId){
   const results = {production:null, openRun:null, closedRun:null};
   const prodIdx = (state.production||[]).findIndex(p=>p.id===runId);
@@ -2986,12 +3011,18 @@ function applyFlagToRun(runId, note){
 }
 
 function openVoidModal(runId){
+  const found0 = findRunEverywhere(runId);
+  const run0 = found0.production || found0.openRun || found0.closedRun;
+  if(!run0 || !isWithin24Hours(run0.date, run0.time)){
+    alert("⏰ This entry is more than 24 hours old and can no longer be voided by anyone, including Admin/Owner. This is a permanent rule with no exceptions.");
+    return;
+  }
   const dept = 'Wood Finishing';
-  if(!canVoidInDept(dept)){
+  if(!isAdminOrOwner() && !canVoidInDept(dept)){
     alert("You don't have permission to void entries in this department.");
     return;
   }
-  if(!hasVoidsRemaining(dept)){
+  if(!isAdminOrOwner() && !hasVoidsRemaining(dept)){
     alert("You've used all your voids for today in this department. Ask the Owner for a correction.");
     return;
   }
@@ -3009,6 +3040,13 @@ function openVoidModal(runId){
 function confirmVoid(){
   const target = state.voidTarget;
   if(!target) return;
+  const found0 = findRunEverywhere(target.runId);
+  const run0 = found0.production || found0.openRun || found0.closedRun;
+  if(!run0 || !isWithin24Hours(run0.date, run0.time)){
+    document.getElementById('voidModal').classList.add('hidden');
+    alert("⏰ This entry has just passed the 24-hour window and can no longer be voided.");
+    return;
+  }
   const reason = document.getElementById('voidReason')?.value?.trim();
   const err = document.getElementById('voidErr');
   if(!reason){ err.textContent="⚠️ A reason is required to void an entry"; err.classList.remove('hidden'); return; }
@@ -3021,8 +3059,14 @@ function confirmVoid(){
 }
 
 function openFlagModal(runId){
+  const found0 = findRunEverywhere(runId);
+  const run0 = found0.production || found0.openRun || found0.closedRun;
+  if(!run0 || !isWithin24Hours(run0.date, run0.time)){
+    alert("⏰ This entry is more than 24 hours old and can no longer be flagged.");
+    return;
+  }
   const dept = 'Wood Finishing';
-  if(!canFlagInDept(dept)){
+  if(!isAdminOrOwner() && !canFlagInDept(dept)){
     alert("You don't have permission to flag entries in this department.");
     return;
   }
