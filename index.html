@@ -429,14 +429,21 @@ function addLedgerEntry(type, material, batchNo, qty, direction, note, size='', 
   }];
 }
 
-function getNextBatchNo(){
+function getNextBatchNo(prefix){
+  prefix = prefix || "WB";
   const all=[
     ...Object.values(state.materials||{}).filter(m=>m&&m.batches).flatMap(m=>m.batches).map(b=>b.batchNo),
     ...(state.closedBatches||[]).map(b=>b.batchNo),
     ...Object.values(state.openBatches||{}).map(b=>b.batchNo),
-  ].map(n=>{const m=n?.match(/^B(\d+)$/);return m?parseInt(m[1],10):0;});
-  const next=all.length>0?Math.max(...all)+1:1;
-  return "B"+String(next).padStart(3,"0");
+    ...(state.socketInventory||[]).map(b=>b.batchNo),
+    ...(state.screwInventory||[]).map(b=>b.batchNo),
+    ...(state.finishedBrushes||[]).map(b=>b.batchNo),
+    ...Object.keys(state.batchGenealogy||{}),
+  ];
+  const re = new RegExp("^"+prefix+"(\\d+)$");
+  const nums = all.map(n=>{const m=n?.match(re);return m?parseInt(m[1],10):0;});
+  const next=nums.length>0?Math.max(...nums)+1:1;
+  return prefix+String(next).padStart(3,"0");
 }
 
 // ==================== VOID / FLAG PERMISSIONS ====================
@@ -780,13 +787,8 @@ function renderProduction(){
     </div>`;
 
     if(runs.length>0){
-      const canVoidHere = canVoidInDept('Wood Finishing');
-      const canFlagHere = canFlagInDept('Wood Finishing');
-      const voidsLeft = isAdminOrOwner() ? '∞' : Math.max(0,(getDeptPerm('Wood Finishing').maxVoids||0) - getVoidsUsedToday('Wood Finishing'));
-      html+=`<div class="card"><div class="label">📋 Runs in ${openBatch.batchNo}</div>`;
-      if(canVoidHere && !isAdminOrOwner()){
-        html+=`<div style="font-size:11px;color:#888;margin-bottom:8px;">Voids remaining today: ${voidsLeft}</div>`;
-      }
+      html+=`<div class="card"><div class="label">📋 Runs in ${openBatch.batchNo}</div>
+        <div style="font-size:11px;color:#888;margin-bottom:8px;">Void/Flag actions are available in Recent Production Runs below.</div>`;
       runs.forEach((r,ri)=>{
         const isVoided = !!r.voided;
         html+=`<div class="prod-item" style="${isVoided?'opacity:0.55;':''}">
@@ -806,10 +808,6 @@ function renderProduction(){
           ${r.notes?`<div style="font-size:11px;color:#aaa;margin-top:2px;">${r.notes}</div>`:''}
           ${isVoided?`<div style="font-size:11px;color:#e74c3c;margin-top:6px;background:#fdecea;border-radius:6px;padding:6px 8px;">Voided by ${r.voidedBy} on ${r.voidedDate}<br/><span style="font-style:italic;">"${r.voidedReason}"</span></div>`:''}
           ${r.flagged&&!isVoided?`<div style="font-size:11px;color:#3498db;margin-top:6px;background:#e8f4fd;border-radius:6px;padding:6px 8px;">Flagged by ${r.flaggedBy} on ${r.flaggedDate}<br/><span style="font-style:italic;">"${r.flagNote}"</span></div>`:''}
-          ${!isVoided?`<div style="display:flex;gap:6px;margin-top:8px;">
-            ${canVoidHere?`<button class="btn btn-red" style="font-size:10px;padding:5px 10px;" onclick="openVoidModal(${JSON.stringify(r.id)})">🚫 Void</button>`:''}
-            ${canFlagHere&&!isAdminOrOwner()?`<button class="btn" style="background:#3498db;font-size:10px;padding:5px 10px;" onclick="openFlagModal(${JSON.stringify(r.id)})">🚩 Flag</button>`:''}
-          </div>`:''}
         </div>`;
       });
       html+=`</div>`;
@@ -1607,17 +1605,26 @@ function recordBrushProcessing(){
     }];
   }
 
-  // Brush Machine → finished brushes stock
+  // Brush Machine → finished brushes stock (gets its own FB batch number, tracing back to the wood batch)
   if(brushMachine>0){
-    const idx=(state.finishedBrushes||[]).findIndex(b=>b.productName===stock.productName&&b.batchNo===stock.batchNo);
-    if(idx>=0){ state.finishedBrushes[idx].qty += brushMachine; }
-    else{
+    const idx=(state.finishedBrushes||[]).findIndex(b=>b.productName===stock.productName&&b.sourceBatch===stock.batchNo);
+    let fbNo;
+    if(idx>=0){
+      state.finishedBrushes[idx].qty += brushMachine;
+      fbNo = state.finishedBrushes[idx].batchNo;
+    } else {
+      fbNo = getNextBatchNo('FB');
       state.finishedBrushes=[...(state.finishedBrushes||[]),{
-        id:Date.now()+Math.random(), productName:stock.productName, batchNo:stock.batchNo,
+        id:Date.now()+Math.random(), productName:stock.productName, batchNo:fbNo, sourceBatch:stock.batchNo,
         qty:brushMachine, dateAdded:today
       }];
+      state.batchGenealogy = state.batchGenealogy||{};
+      state.batchGenealogy[fbNo] = {
+        productName:stock.productName, sourceWoodBatch:stock.batchNo, dateCreated:today,
+        socketUsage:[], screwUsage:[]
+      };
     }
-    addLedgerEntry('finished', stock.productName+' (Brush)', stock.batchNo, brushMachine, 'IN', `Brush machine output from ${total} processed`, '');
+    addLedgerEntry('finished', stock.productName+' (Brush)', fbNo, brushMachine, 'IN', `Brush machine output from ${total} processed (Wood Batch ${stock.batchNo})`, '');
   }
 
   addLedgerEntry('finished', stock.productName, stock.batchNo, total, 'OUT', `Sent to Brush Dept for processing`, '');
@@ -1689,7 +1696,7 @@ function renderSocketDept(){
     brushes.forEach(b=>{
       const sel = selectedId===b.id;
       html += `<button class="select-batch-btn ${sel?'selected':''}" onclick="selectSocketStock(${JSON.stringify(b.id)})">
-        <span>${b.productName} — ${b.batchNo}</span>
+        <span>${b.productName} — ${b.batchNo}${b.sourceBatch?` <span style="color:#aaa;font-weight:400;">(from ${b.sourceBatch})</span>`:''}</span>
         <span class="green" style="font-weight:700;">${b.qty} pcs</span>
       </button>`;
     });
@@ -1709,14 +1716,35 @@ function renderSocketDept(){
     if(!hasBOM){
       html += `<div style="background:#fdecea;border-radius:8px;padding:10px;font-size:12px;color:#e74c3c;">⚠️ No Bill of Materials set for ${selected.productName}. Go to Materials tab and set Socket Type + Screws Required first.</div>`;
     } else {
+      const socketBatches = (state.socketInventory||[]).filter(s=>s.socketType===socketType && s.qty>0);
+      const screwBatches = (state.screwInventory||[]).filter(s=>s.qty>0);
       html += `<div style="background:#f9f5f0;border-radius:8px;padding:10px;margin-bottom:10px;font-size:11px;">
         <b>BOM:</b> 1× ${socketType} + ${screwsPerPiece} screws per piece
       </div>
       <div class="label">Quantity to Process</div>
-      <input type="number" id="socketProcessQty" min="1" max="${selected.qty}" placeholder="e.g. 100" oninput="calcSocketNeed(${JSON.stringify(socketType)},${screwsPerPiece})" style="margin-bottom:8px;"/>
+      <input type="number" id="socketProcessQty" min="1" max="${selected.qty}" placeholder="e.g. 100" value="${state.socketProcessQty||''}" oninput="state.socketProcessQty=this.value;calcSocketNeed(${JSON.stringify(socketType)},${screwsPerPiece})" style="margin-bottom:8px;"/>
       <div id="socketNeedPreview" style="font-size:12px;color:#3498db;font-weight:700;margin-bottom:10px;"></div>
-      <div id="socketErr" style="font-size:12px;color:#e74c3c;margin-bottom:8px;display:none;"></div>
-      <button class="btn" style="background:#9b59b6;width:100%;" onclick="recordSocketProcessing()">Record Socket Attachment</button>
+
+      <div class="label">Select Socket Batch (${socketType})</div>
+      ${socketBatches.length===0?`<div style="color:#e74c3c;font-size:12px;margin-bottom:8px;">⚠️ No ${socketType} stock available — add in Materials tab.</div>`:socketBatches.map(b=>{
+        const sel = state.socketSelectedBatch===b.batchNo;
+        return `<button class="select-batch-btn ${sel?'selected':''}" onclick="selectSocketBatch('${b.batchNo}')">
+          <span>${b.batchNo} — ${b.dateAdded}</span>
+          <span class="green" style="font-weight:700;">${b.qty} pcs</span>
+        </button>`;
+      }).join('')}
+
+      <div class="label" style="margin-top:8px;">Select Screw Batch</div>
+      ${screwBatches.length===0?`<div style="color:#e74c3c;font-size:12px;margin-bottom:8px;">⚠️ No screw stock available — add in Materials tab.</div>`:screwBatches.map(b=>{
+        const sel = state.screwSelectedBatch===b.batchNo;
+        return `<button class="select-batch-btn ${sel?'selected':''}" onclick="selectScrewBatch('${b.batchNo}')">
+          <span>${b.batchNo} — ${b.vendor||'-'} (${b.dateAdded})</span>
+          <span class="green" style="font-weight:700;">${b.qty} pcs</span>
+        </button>`;
+      }).join('')}
+
+      <div id="socketErr" style="font-size:12px;color:#e74c3c;margin-top:8px;margin-bottom:8px;display:none;"></div>
+      <button class="btn" style="background:#9b59b6;width:100%;" onclick="recordSocketProcessing()" ${(!state.socketSelectedBatch||!state.screwSelectedBatch)?'disabled':''}>Record Socket Attachment</button>
       <div id="socketProcMsg" class="msg"></div>`;
     }
     html += `</div>`;
@@ -1728,9 +1756,12 @@ function renderSocketDept(){
     html += `<div class="card" style="border:2px solid #27ae60;">
       <div class="label" style="color:#27ae60;">✅ Ready for Sale</div>`;
     ready.forEach(r=>{
-      html += `<div style="display:flex;justify-content:space-between;font-size:12px;padding:5px 0;border-bottom:1px solid #f0e8de;">
+      html += `<div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;padding:5px 0;border-bottom:1px solid #f0e8de;">
         <span>${r.productName} — ${r.batchNo}</span>
-        <span style="font-weight:700;color:#27ae60;">${r.qty} pcs</span>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span style="font-weight:700;color:#27ae60;">${r.qty} pcs</span>
+          <button class="btn" style="background:#8e44ad;font-size:10px;padding:4px 8px;" onclick="openBatchTraceModal('${r.batchNo}')">🧬 Trace</button>
+        </div>
       </div>`;
     });
     html += `</div>`;
@@ -1741,7 +1772,29 @@ function renderSocketDept(){
 
 function selectSocketStock(id){
   state.socketSelectedStock = id;
+  state.socketSelectedBatch = '';
+  state.screwSelectedBatch = '';
+  state.socketProcessQty = '';
   re();
+}
+
+function selectSocketBatch(bno){
+  state.socketSelectedBatch = bno;
+  re();
+  setTimeout(()=>{
+    const stock = (state.finishedBrushes||[]).find(b=>b.id===state.socketSelectedStock);
+    const wp = stock ? (state.woodPieces||[]).find(w=>w.name===stock.productName) : null;
+    if(wp) calcSocketNeed(wp.socketType, wp.screwsRequired);
+  }, 50);
+}
+function selectScrewBatch(bno){
+  state.screwSelectedBatch = bno;
+  re();
+  setTimeout(()=>{
+    const stock = (state.finishedBrushes||[]).find(b=>b.id===state.socketSelectedStock);
+    const wp = stock ? (state.woodPieces||[]).find(w=>w.name===stock.productName) : null;
+    if(wp) calcSocketNeed(wp.socketType, wp.screwsRequired);
+  }, 50);
 }
 
 function calcSocketNeed(socketType, screwsPerPiece){
@@ -1749,19 +1802,20 @@ function calcSocketNeed(socketType, screwsPerPiece){
   const preview = document.getElementById('socketNeedPreview');
   const errEl = document.getElementById('socketErr');
   if(!preview) return;
-  if(qty<=0){ preview.textContent=''; return; }
+  if(qty<=0){ preview.textContent=''; if(errEl) errEl.style.display='none'; return; }
   const socketsNeeded = qty;
   const screwsNeeded = qty*screwsPerPiece;
-  const socketAvailable = (state.socketInventory||[]).filter(s=>s.socketType===socketType).reduce((s,x)=>s+x.qty,0);
-  const screwsAvailable = (state.screwInventory||[]).reduce((s,x)=>s+x.qty,0);
   preview.textContent = `Needs: ${socketsNeeded} × ${socketType}, ${screwsNeeded} screws`;
   if(errEl){
-    if(socketsNeeded>socketAvailable || screwsNeeded>screwsAvailable){
-      errEl.textContent = `⚠️ Not enough stock — have ${socketAvailable} ${socketType}, ${screwsAvailable} screws`;
-      errEl.style.display='block';
-    } else {
-      errEl.style.display='none';
-    }
+    const sBatch = (state.socketInventory||[]).find(s=>s.batchNo===state.socketSelectedBatch);
+    const scBatch = (state.screwInventory||[]).find(s=>s.batchNo===state.screwSelectedBatch);
+    const errs=[];
+    if(!sBatch) errs.push('select a socket batch');
+    else if(sBatch.qty<socketsNeeded) errs.push(`socket batch ${sBatch.batchNo} only has ${sBatch.qty}`);
+    if(!scBatch) errs.push('select a screw batch');
+    else if(scBatch.qty<screwsNeeded) errs.push(`screw batch ${scBatch.batchNo} only has ${scBatch.qty}`);
+    if(errs.length){ errEl.textContent = '⚠️ '+errs.join(' | '); errEl.style.display='block'; }
+    else errEl.style.display='none';
   }
 }
 
@@ -1786,12 +1840,17 @@ function recordSocketProcessing(){
   if(!qty||qty<=0){ if(msgEl){msgEl.textContent="⚠️ Enter quantity to process";msgEl.className="msg err";} return; }
   if(qty>stock.qty){ if(msgEl){msgEl.textContent=`⚠️ Only ${stock.qty} pcs available`;msgEl.className="msg err";} return; }
 
+  const socketBatchNo = state.socketSelectedBatch;
+  const screwBatchNo = state.screwSelectedBatch;
+  if(!socketBatchNo){ if(msgEl){msgEl.textContent="⚠️ Select a socket batch to use";msgEl.className="msg err";} return; }
+  if(!screwBatchNo){ if(msgEl){msgEl.textContent="⚠️ Select a screw batch to use";msgEl.className="msg err";} return; }
+
   const socketsNeeded = qty;
   const screwsNeeded = qty*screwsPerPiece;
-  const socketAvailable = (state.socketInventory||[]).filter(s=>s.socketType===socketType).reduce((s,x)=>s+x.qty,0);
-  const screwsAvailable = (state.screwInventory||[]).reduce((s,x)=>s+x.qty,0);
-  if(socketsNeeded>socketAvailable){ if(msgEl){msgEl.textContent=`⚠️ Not enough ${socketType} sockets! Have ${socketAvailable}, need ${socketsNeeded}`;msgEl.className="msg err";} return; }
-  if(screwsNeeded>screwsAvailable){ if(msgEl){msgEl.textContent=`⚠️ Not enough screws! Have ${screwsAvailable}, need ${screwsNeeded}`;msgEl.className="msg err";} return; }
+  const socketBatch = (state.socketInventory||[]).find(s=>s.batchNo===socketBatchNo && s.socketType===socketType);
+  const screwBatch = (state.screwInventory||[]).find(s=>s.batchNo===screwBatchNo);
+  if(!socketBatch || socketBatch.qty<socketsNeeded){ if(msgEl){msgEl.textContent=`⚠️ Socket batch ${socketBatchNo} doesn't have enough stock (has ${socketBatch?.qty||0}, need ${socketsNeeded})`;msgEl.className="msg err";} return; }
+  if(!screwBatch || screwBatch.qty<screwsNeeded){ if(msgEl){msgEl.textContent=`⚠️ Screw batch ${screwBatchNo} doesn't have enough stock (has ${screwBatch?.qty||0}, need ${screwsNeeded})`;msgEl.className="msg err";} return; }
 
   const today = new Date().toISOString().slice(0,10);
   const preSnapshot = takeSnapshot(['finishedBrushes','socketInventory','screwInventory','readyForSale']);
@@ -1799,21 +1858,26 @@ function recordSocketProcessing(){
   // Deduct finished brushes stock
   state.finishedBrushes = brushes.map(b=>b.id===stock.id?{...b,qty:b.qty-qty}:b).filter(b=>b.qty>0);
 
-  // Deduct socket stock (FIFO across entries of that type)
-  let toDeductSockets = socketsNeeded;
-  state.socketInventory = (state.socketInventory||[]).map(s=>{
-    if(s.socketType!==socketType||toDeductSockets<=0) return s;
-    const d=Math.min(s.qty,toDeductSockets); toDeductSockets-=d;
-    return {...s, qty:s.qty-d};
-  }).filter(s=>s.qty>0);
+  // Deduct from the specifically selected socket batch
+  state.socketInventory = (state.socketInventory||[]).map(s=>
+    s.batchNo===socketBatchNo ? {...s, qty:s.qty-socketsNeeded} : s
+  ).filter(s=>s.qty>0);
 
-  // Deduct screw stock (FIFO)
-  let toDeductScrews = screwsNeeded;
-  state.screwInventory = (state.screwInventory||[]).map(s=>{
-    if(toDeductScrews<=0) return s;
-    const d=Math.min(s.qty,toDeductScrews); toDeductScrews-=d;
-    return {...s, qty:s.qty-d};
-  }).filter(s=>s.qty>0);
+  // Deduct from the specifically selected screw batch
+  state.screwInventory = (state.screwInventory||[]).map(s=>
+    s.batchNo===screwBatchNo ? {...s, qty:s.qty-screwsNeeded} : s
+  ).filter(s=>s.qty>0);
+
+  // Record usage against this FB batch's genealogy (defensive init for older entries pre-dating this feature)
+  state.batchGenealogy = state.batchGenealogy||{};
+  if(!state.batchGenealogy[stock.batchNo]){
+    state.batchGenealogy[stock.batchNo] = {
+      productName:stock.productName, sourceWoodBatch:stock.sourceBatch||'', dateCreated:today,
+      socketUsage:[], screwUsage:[]
+    };
+  }
+  state.batchGenealogy[stock.batchNo].socketUsage.push({batchNo:socketBatchNo, socketType, qty:socketsNeeded, date:today});
+  state.batchGenealogy[stock.batchNo].screwUsage.push({batchNo:screwBatchNo, qty:screwsNeeded, date:today});
 
   // Add to Ready for Sale stock
   const idx=(state.readyForSale||[]).findIndex(r=>r.productName===stock.productName&&r.batchNo===stock.batchNo);
@@ -1824,12 +1888,17 @@ function recordSocketProcessing(){
     }];
   }
 
-  addLedgerEntry('finished', stock.productName, stock.batchNo, qty, 'OUT', `Sent to Socket Dept (used ${socketsNeeded} ${socketType}, ${screwsNeeded} screws)`, '');
+  addLedgerEntry('finished', stock.productName, stock.batchNo, qty, 'OUT', `Sent to Socket Dept (used ${socketsNeeded} ${socketType} from ${socketBatchNo}, ${screwsNeeded} screws from ${screwBatchNo})`, '');
   addLedgerEntry('finished', stock.productName+' (Ready for Sale)', stock.batchNo, qty, 'IN', `Socket + screws attached — ready for sale`, '');
+  addLedgerEntry('socket', socketType, socketBatchNo, socketsNeeded, 'OUT', `Used on ${stock.productName} — Batch ${stock.batchNo}`, '');
+  addLedgerEntry('screw', 'Screws', screwBatchNo, screwsNeeded, 'OUT', `Used on ${stock.productName} — Batch ${stock.batchNo}`, '');
 
   saveAll();
   state.socketSelectedStock = null;
-  if(msgEl){msgEl.textContent=`✅ Processed ${qty} pcs! Used ${socketsNeeded} ${socketType} + ${screwsNeeded} screws.`;msgEl.className="msg ok";}
+  state.socketSelectedBatch = '';
+  state.screwSelectedBatch = '';
+  state.socketProcessQty = '';
+  if(msgEl){msgEl.textContent=`✅ Processed ${qty} pcs! Used ${socketsNeeded} ${socketType} (${socketBatchNo}) + ${screwsNeeded} screws (${screwBatchNo}).`;msgEl.className="msg ok";}
   const stockNameForUndo = stock.productName, batchForUndo = stock.batchNo;
   setTimeout(()=>{
     re();
@@ -2393,10 +2462,11 @@ function renderMaterials(){
     <div id="wpMsg" class="msg"></div>
   </div>`;
 
-  // Add Socket Stock
+  // Add Socket Stock — produced in-house, no vendor needed, but track batch + date
   const socketTypesForStock = state.socketTypes||[];
   html+=`<div class="card" style="border:2px solid #9b59b6;">
     <div class="label" style="color:#9b59b6;">🧩 Add Socket Stock</div>
+    <div style="font-size:11px;color:#888;margin-bottom:8px;">Produced in-house — no vendor needed.</div>
     ${socketTypesForStock.length===0?`<div style="color:#e74c3c;font-size:12px;margin-bottom:8px;">⚠️ Add a Socket Type first in the Bill of Materials tab.</div>`:''}
     <div class="grid2">
       <div><div class="label">Socket Type</div>
@@ -2406,23 +2476,34 @@ function renderMaterials(){
         </select></div>
       <div><div class="label">Quantity</div>
         <input type="number" min="0" placeholder="0" id="socketQty" value="${state.newSocketQty||''}" oninput="state.newSocketQty=this.value"/></div>
+      <div><div class="label">Date</div>
+        <input type="date" id="socketDate" value="${state.newSocketDate||new Date().toISOString().slice(0,10)}" oninput="state.newSocketDate=this.value"/></div>
     </div>
-    <button class="btn" style="background:#9b59b6;width:100%;" onclick="addSocketStock()">Add Socket Stock</button>
-
+    <button class="btn" style="background:#9b59b6;width:100%;margin-top:8px;" onclick="addSocketStock()">Add Socket Stock</button>
     <div id="socketMsg" class="msg"></div>
     ${(state.socketInventory||[]).length>0?`<div style="margin-top:10px;font-size:11px;">
-      ${Object.entries((state.socketInventory||[]).reduce((acc,s)=>{acc[s.socketType]=(acc[s.socketType]||0)+s.qty;return acc;},{})).map(([t,q])=>`<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #f0e8de;"><span>${t}</span><span style="font-weight:700;">${q} pcs</span></div>`).join('')}
+      ${state.socketInventory.map(s=>`<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #f0e8de;"><span>${s.socketType} — ${s.batchNo} (${s.dateAdded})</span><span style="font-weight:700;">${s.qty} pcs</span></div>`).join('')}
     </div>`:''}
   </div>`;
 
-  // Add Screw Stock
+  // Add Screw Stock — purchased from vendors, vendor name required
   html+=`<div class="card" style="border:2px solid #7f8c8d;">
     <div class="label" style="color:#7f8c8d;">🔧 Add Screw Stock</div>
-    <div class="label">Quantity</div>
-    <input type="number" min="0" placeholder="0" id="screwQty" value="${state.newScrewQty||''}" oninput="state.newScrewQty=this.value"/>
+    <div style="font-size:11px;color:#888;margin-bottom:8px;">Purchased from vendors — vendor name required.</div>
+    <div class="grid2">
+      <div><div class="label">Vendor Name</div>
+        <input type="text" placeholder="e.g. Karim Hardware" id="screwVendor" value="${state.newScrewVendor||''}" oninput="state.newScrewVendor=this.value"/></div>
+      <div><div class="label">Quantity</div>
+        <input type="number" min="0" placeholder="0" id="screwQty" value="${state.newScrewQty||''}" oninput="state.newScrewQty=this.value"/></div>
+      <div style="grid-column:1/-1;"><div class="label">Date</div>
+        <input type="date" id="screwDate" value="${state.newScrewDate||new Date().toISOString().slice(0,10)}" oninput="state.newScrewDate=this.value"/></div>
+    </div>
     <button class="btn" style="background:#7f8c8d;width:100%;margin-top:8px;" onclick="addScrewStock()">Add Screw Stock</button>
     <div id="screwMsg" class="msg"></div>
     <div style="margin-top:10px;font-size:13px;font-weight:700;">Total Screws Available: ${(state.screwInventory||[]).reduce((s,x)=>s+x.qty,0)}</div>
+    ${(state.screwInventory||[]).length>0?`<div style="margin-top:8px;font-size:11px;">
+      ${state.screwInventory.map(s=>`<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #f0e8de;"><span>${s.batchNo} — ${s.vendor||'-'} (${s.dateAdded})</span><span style="font-weight:700;">${s.qty} pcs</span></div>`).join('')}
+    </div>`:''}
   </div>`;
 
   return html;
@@ -2457,8 +2538,8 @@ function renderLedger(){
   const totalOut = filtered.filter(e=>e.direction==='OUT').reduce((s,e)=>s+e.qty,0);
   const hasFilters = fromDate||toDate||section!=='all'||filterSize!=='all'||filterBatch!=='all'||filterDir!=='all'||filterVendor!=='all';
 
-  const sectionColors = {plank:'#5c3d1e', scrap:'#e67e22', finished:'#27ae60'};
-  const sectionLabels = {plank:'🪵 Wooden Planks', scrap:'♻️ Scrap', finished:'✅ Finished Pieces'};
+  const sectionColors = {plank:'#5c3d1e', scrap:'#e67e22', finished:'#27ae60', socket:'#9b59b6', screw:'#7f8c8d'};
+  const sectionLabels = {plank:'🪵 Wooden Planks', scrap:'♻️ Scrap', finished:'✅ Finished Pieces', socket:'🔌 Sockets', screw:'🔩 Screws'};
 
   let html=`<div class="card" style="border:2px solid #5c3d1e;">
     <div class="label">📒 Stock Ledger — Filters</div>
@@ -2468,6 +2549,8 @@ function renderLedger(){
       <option value="plank" ${section==='plank'?'selected':''}>🪵 Wooden Planks</option>
       <option value="scrap" ${section==='scrap'?'selected':''}>♻️ Scrap</option>
       <option value="finished" ${section==='finished'?'selected':''}>✅ Finished Pieces</option>
+      <option value="socket" ${section==='socket'?'selected':''}>🔌 Sockets</option>
+      <option value="screw" ${section==='screw'?'selected':''}>🔩 Screws</option>
     </select>
     ${section==='plank'&&allSizes.length>0?`
     <div class="label">Plank Size</div>
@@ -2518,7 +2601,7 @@ function renderLedger(){
     return html;
   }
 
-  const sections = section==='all'?['plank','scrap','finished']:[section];
+  const sections = section==='all'?['plank','scrap','finished','socket','screw']:[section];
   sections.forEach(sec=>{
     const entries=filtered.filter(e=>e.type===sec);
     if(entries.length===0) return;
@@ -2918,6 +3001,53 @@ function findRunEverywhere(runId){
   return results;
 }
 
+function openBatchTraceModal(fbBatchNo){
+  const body = document.getElementById('batchTraceBody');
+  const gen = (state.batchGenealogy||{})[fbBatchNo];
+  const modal = document.getElementById('batchTraceModal');
+  if(!gen){
+    body.innerHTML = `<div style="color:#aaa;font-size:13px;">No trace data found for ${fbBatchNo}. This batch may have been created before batch tracing was added.</div>`;
+    modal.classList.remove('hidden');
+    return;
+  }
+
+  const fieldBox = (val) => `<div style="padding:8px 10px;background:#f9f5f0;border-radius:6px;font-weight:600;font-size:14px;">${val!==undefined&&val!==null&&val!==''?val:'—'}</div>`;
+
+  let html = `<div class="card" style="border:2px solid #8e44ad;margin-bottom:12px;">
+    <div class="label" style="color:#8e44ad;">🪥 Finished Brush Batch — ${fbBatchNo}</div>
+    <div class="grid2">
+      <div><div class="label">Product</div>${fieldBox(gen.productName)}</div>
+      <div><div class="label">Date Created</div>${fieldBox(gen.dateCreated)}</div>
+    </div>
+  </div>`;
+
+  html += `<div class="card" style="border:2px solid #5c3d1e;margin-bottom:12px;">
+    <div class="label" style="color:#5c3d1e;">🪵 Source Wood Batch</div>
+    ${fieldBox(gen.sourceWoodBatch||'—')}
+  </div>`;
+
+  html += `<div class="card" style="border:2px solid #9b59b6;margin-bottom:12px;">
+    <div class="label" style="color:#9b59b6;">🔌 Sockets Used</div>
+    ${(gen.socketUsage||[]).length===0?`<div style="color:#aaa;font-size:12px;">None yet — not sent through Socket Dept.</div>`:
+      (gen.socketUsage||[]).map(u=>`<div style="display:flex;justify-content:space-between;font-size:12px;padding:4px 0;border-bottom:1px solid #f0e8de;">
+        <span>${u.batchNo} — ${u.socketType} (${u.date})</span>
+        <span style="font-weight:700;">${u.qty} pcs</span>
+      </div>`).join('')}
+  </div>`;
+
+  html += `<div class="card" style="border:2px solid #7f8c8d;">
+    <div class="label" style="color:#7f8c8d;">🔩 Screws Used</div>
+    ${(gen.screwUsage||[]).length===0?`<div style="color:#aaa;font-size:12px;">None yet — not sent through Socket Dept.</div>`:
+      (gen.screwUsage||[]).map(u=>`<div style="display:flex;justify-content:space-between;font-size:12px;padding:4px 0;border-bottom:1px solid #f0e8de;">
+        <span>${u.batchNo} (${u.date})</span>
+        <span style="font-weight:700;">${u.qty} pcs</span>
+      </div>`).join('')}
+  </div>`;
+
+  body.innerHTML = html;
+  modal.classList.remove('hidden');
+}
+
 function openViewEntryModal(runId){
   const found = findRunEverywhere(runId);
   const r = found.production || found.openRun || found.closedRun;
@@ -3250,7 +3380,7 @@ function addPurchaseBatch(){
   if(sizeEntries.length===0){ if(msg){msg.textContent="⚠️ Enter quantity for at least one size";msg.className="msg err";} return; }
 
   // One batch number covers this entire vendor lot, across all sizes
-  const bno = getNextBatchNo();
+  const bno = getNextBatchNo('WB');
 
   sizeEntries.forEach(({size, qty, price})=>{
     if(!state.materials[size]) state.materials[size]={name:size+'" Planks',size:+size,low:50,batches:[]};
@@ -3326,33 +3456,42 @@ function addSocketType(){
 function addSocketStock(){
   const typeEl = document.getElementById('socketType');
   const qtyEl = document.getElementById('socketQty');
+  const dateEl = document.getElementById('socketDate');
   const msg = document.getElementById('socketMsg');
   const socketType = (typeEl?.value||state.newSocketType||'').trim();
   const qty = +(qtyEl?.value||state.newSocketQty||0);
+  const date = dateEl?.value || state.newSocketDate || new Date().toISOString().slice(0,10);
   if(!socketType){ if(msg){msg.textContent="⚠️ Enter socket type";msg.className="msg err";} return; }
   if(!qty||qty<=0){ if(msg){msg.textContent="⚠️ Enter quantity";msg.className="msg err";} return; }
-  const idx=(state.socketInventory||[]).findIndex(s=>s.socketType===socketType);
-  if(idx>=0){ state.socketInventory[idx].qty += qty; }
-  else{ state.socketInventory=[...(state.socketInventory||[]),{socketType, qty, dateAdded:new Date().toISOString().slice(0,10)}]; }
-  state.newSocketType=''; state.newSocketQty='';
+  const batchNo = getNextBatchNo('SOB');
+  state.socketInventory=[...(state.socketInventory||[]),{socketType, qty, batchNo, dateAdded:date}];
+  addLedgerEntry('socket', socketType, batchNo, qty, 'IN', `Produced in-house`, '');
+  state.newSocketType=''; state.newSocketQty=''; state.newSocketDate='';
   saveAll(); re();
   setTimeout(()=>{
     const m=document.getElementById('socketMsg');
-    if(m){m.textContent=`✅ ${qty} pcs of ${socketType} added!`;m.className="msg ok";setTimeout(()=>{if(m)m.textContent='';},3000);}
+    if(m){m.textContent=`✅ Batch ${batchNo}: ${qty} pcs of ${socketType} added!`;m.className="msg ok";setTimeout(()=>{if(m)m.textContent='';},3000);}
   },50);
 }
 
 function addScrewStock(){
+  const vendorEl = document.getElementById('screwVendor');
   const qtyEl = document.getElementById('screwQty');
+  const dateEl = document.getElementById('screwDate');
   const msg = document.getElementById('screwMsg');
+  const vendor = (vendorEl?.value||state.newScrewVendor||'').trim();
   const qty = +(qtyEl?.value||state.newScrewQty||0);
+  const date = dateEl?.value || state.newScrewDate || new Date().toISOString().slice(0,10);
+  if(!vendor){ if(msg){msg.textContent="⚠️ Enter vendor name";msg.className="msg err";} return; }
   if(!qty||qty<=0){ if(msg){msg.textContent="⚠️ Enter quantity";msg.className="msg err";} return; }
-  state.screwInventory=[...(state.screwInventory||[]),{qty, dateAdded:new Date().toISOString().slice(0,10)}];
-  state.newScrewQty='';
+  const batchNo = getNextBatchNo('SCB');
+  state.screwInventory=[...(state.screwInventory||[]),{qty, batchNo, vendor, dateAdded:date}];
+  addLedgerEntry('screw', 'Screws', batchNo, qty, 'IN', `Purchased from ${vendor}`, '', vendor);
+  state.newScrewVendor=''; state.newScrewQty=''; state.newScrewDate='';
   saveAll(); re();
   setTimeout(()=>{
     const m=document.getElementById('screwMsg');
-    if(m){m.textContent=`✅ ${qty} screws added!`;m.className="msg ok";setTimeout(()=>{if(m)m.textContent='';},3000);}
+    if(m){m.textContent=`✅ Batch ${batchNo}: ${qty} screws from ${vendor} added!`;m.className="msg ok";setTimeout(()=>{if(m)m.textContent='';},3000);}
   },50);
 }
 
@@ -3812,6 +3951,16 @@ loadFromSheets();
       <button onclick="document.getElementById('viewEntryModal').classList.add('hidden')" style="background:none;border:none;font-size:20px;cursor:pointer;color:#888;">✕</button>
     </div>
     <div id="viewEntryBody" style="max-height:60vh;overflow-y:auto;"></div>
+  </div>
+</div>
+
+<div id="batchTraceModal" class="modal-overlay hidden">
+  <div class="modal">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+      <div style="font-size:16px;font-weight:700;">🧬 Batch Trace</div>
+      <button onclick="document.getElementById('batchTraceModal').classList.add('hidden')" style="background:none;border:none;font-size:20px;cursor:pointer;color:#888;">✕</button>
+    </div>
+    <div id="batchTraceBody" style="max-height:60vh;overflow-y:auto;"></div>
   </div>
 </div>
 
