@@ -192,6 +192,11 @@ input,select{width:100%;padding:8px 10px;border:1px solid #d4b896;border-radius:
   </div>
 </div>
 
+<!-- Firebase (Firestore) — replaces Google Sheets as the data backend, adds real-time multi-device sync -->
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+
 <script>
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -221,64 +226,63 @@ const DEFAULT_WOOD_PIECES = [
   {id:3,name:"Rainbow Broom",size:17}
 ];
 
-const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzu3TXN0zoqKwPQyMkwUY34D3yQOg3CX_kq8YLcBd7mahmySvsW1gMSEaWVP4AeocHd/exec';
+// ==================== FIREBASE CONFIG ====================
+// 1. Go to https://console.firebase.google.com -> Create project -> Build > Firestore Database -> Create database (production mode)
+// 2. Project settings (gear icon) -> Your apps -> Add app -> Web (</> icon) -> copy the config object below
+// 3. Project settings -> also enable Authentication -> Sign-in method -> Anonymous (turn ON)
+// 4. In Firestore -> Rules, paste this and Publish:
+//      rules_version = '2';
+//      service cloud.firestore {
+//        match /databases/{database}/documents {
+//          match /brushTrackerData/{doc} {
+//            allow read, write: if request.auth != null;
+//          }
+//        }
+//      }
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyCpQrSCCGebJXddsI-WC8VikECFp27FaVY",
+  authDomain: "royal-manufacturing-module.firebaseapp.com",
+  projectId: "royal-manufacturing-module",
+  storageBucket: "royal-manufacturing-module.firebasestorage.app",
+  messagingSenderId: "744764736209",
+  appId: "1:744764736209:web:94a22c20c7d1e15165fbf0"
+};
+const FIRESTORE_COLLECTION = 'brushTrackerData';
+let fbApp = null, fbDb = null, fbReady = false, applyingRemoteUpdate = false;
+try{
+  fbApp = firebase.initializeApp(FIREBASE_CONFIG);
+  fbDb = firebase.firestore();
+}catch(e){ console.error('Firebase init failed:', e); }
+
 let syncTimeout = null;
-let syncStatus = 'idle'; // idle | saving | error
+let syncStatus = 'idle'; // idle | saving | error | live
 
 // Local storage fallback functions
 function ld(k,fb){try{const v=localStorage.getItem(k);return v?JSON.parse(v):fb;}catch(e){return fb;}}
 function sv(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch(e){}}
 
-// Sync all state to Google Sheets (debounced 1.5s)
-function syncToSheets(){
+// ==================== FIRESTORE SYNC (real-time, replaces Google Sheets) ====================
+let firestoreUnsub = null;
+let hasLoadedOnce = false;
+
+function syncToFirestore(){
+  if(!fbDb) return;
   clearTimeout(syncTimeout);
   syncTimeout = setTimeout(async ()=>{
     syncStatus='saving';
     updateSyncIndicator();
-    const payload = {
-      [SK.materials]: JSON.stringify(state.materials),
-      [SK.woodPieces]: JSON.stringify(state.woodPieces),
-      [SK.production]: JSON.stringify(state.production),
-      [SK.scrapInventory]: JSON.stringify(state.scrapInventory),
-      [SK.wastage]: JSON.stringify(state.wastage),
-      [SK.openBatches]: JSON.stringify(state.openBatches),
-      [SK.closedBatches]: JSON.stringify(state.closedBatches),
-      [SK.ledger]: JSON.stringify(state.ledger),
-      [SK.sales]: JSON.stringify(state.sales),
-      [SK.users]: JSON.stringify(state.users),
-      [SK.finishedInventory]: JSON.stringify(state.finishedInventory),
-      [SK.reworkStock]: JSON.stringify(state.reworkStock),
-      [SK.finishedBrushes]: JSON.stringify(state.finishedBrushes),
-      [SK.brushScrapLog]: JSON.stringify(state.brushScrapLog),
-      [SK.socketInventory]: JSON.stringify(state.socketInventory),
-      [SK.socketTypes]: JSON.stringify(state.socketTypes),
-      [SK.screwInventory]: JSON.stringify(state.screwInventory),
-      [SK.readyForSale]: JSON.stringify(state.readyForSale),
-      [SK.voidLog]: JSON.stringify(state.voidLog),
-    };
     try{
-      // Try normal fetch first (works on https)
-      let saved = false;
-      try{
-        const res = await fetch(SCRIPT_URL, {
-          method:'POST',
-          headers:{'Content-Type':'text/plain'},
-          body: JSON.stringify({action:'setAll', data:payload})
-        });
-        if(res.ok || res.type==='opaque') saved=true;
-      } catch(e){
-        // Fallback to no-cors
-        await fetch(SCRIPT_URL, {
-          method:'POST',
-          mode:'no-cors',
-          body: JSON.stringify({action:'setAll', data:payload})
-        });
-        saved=true;
-      }
-      syncStatus = saved ? 'saved' : 'error';
+      const batch = fbDb.batch();
+      const now = new Date().toISOString();
+      Object.entries(SK).forEach(([stateKey, docKey])=>{
+        const ref = fbDb.collection(FIRESTORE_COLLECTION).doc(docKey);
+        batch.set(ref, { value: JSON.stringify(state[stateKey]), updatedAt: now }, {merge:true});
+      });
+      await batch.commit();
+      syncStatus='saved';
     } catch(err){
       syncStatus='error';
-      console.error('Sync error:',err);
+      console.error('Firestore sync error:', err);
     }
     updateSyncIndicator();
     setTimeout(()=>{syncStatus='idle';updateSyncIndicator();},2000);
@@ -290,65 +294,75 @@ function updateSyncIndicator(){
   if(!el) return;
   if(syncStatus==='saving') { el.textContent='⏳ Syncing...'; el.style.color='#e67e22'; }
   else if(syncStatus==='saved') { el.textContent='✅ Synced'; el.style.color='#27ae60'; }
-  else if(syncStatus==='error') { el.textContent='❌ Sync failed'; el.style.color='#e74c3c'; }
+  else if(syncStatus==='error') { el.textContent='❌ Sync failed — saved locally only'; el.style.color='#e74c3c'; }
+  else if(syncStatus==='live') { el.textContent='🔄 Live update from another device'; el.style.color='#27ae60'; }
   else { el.textContent=''; }
 }
 
-// Load all data from Google Sheets using iframe trick (avoids CORS)
-function loadFromSheets(){
+// Signs in anonymously (so Firestore rules can require an authenticated request without
+// needing full user accounts), then attaches ONE real-time listener across all documents.
+// Any device with the app open sees changes from other devices within ~1 second — no reload needed.
+function loadFromFirestore(){
   const loadingEl = document.getElementById('loadingScreen');
   if(loadingEl) loadingEl.style.display='flex';
 
-  // Timeout fallback — use local data if sheets unreachable
   const timer = setTimeout(()=>{
-    console.log('Sheets timeout, using local data');
+    console.log('Firestore timeout, using local data');
     if(loadingEl) loadingEl.style.display='none';
     initApp();
   }, 10000);
 
-  // Use fetch with no-cors for GET via a workaround:
-  // Append data as URL param to GET request using script tag
-  const cbName = 'btLoad'+Math.random().toString(36).slice(2);
-  window[cbName] = function(json){
+  if(!fbDb){
     clearTimeout(timer);
-    try{
-      if(json && json.success && json.data){
-        Object.entries(SK).forEach(([stateKey, sheetKey])=>{
-          if(json.data[sheetKey]){
-            try{ state[stateKey]=JSON.parse(json.data[sheetKey]); }catch(e){}
-          }
-        });
-        Object.entries(SK).forEach(([k,v])=>{ sv(v,state[k]); });
-        console.log('Loaded from Google Sheets successfully');
-      }
-    } catch(e){ console.log('Parse error:', e); }
-    delete window[cbName];
-    document.getElementById('btLoadScript')?.remove();
     if(loadingEl) loadingEl.style.display='none';
     initApp();
-  };
+    return;
+  }
 
-  // Try fetch first (works when hosted on https)
-  fetch(SCRIPT_URL+'?action=getAll')
-    .then(r=>r.json())
-    .then(json=>{
-      clearTimeout(timer);
-      window[cbName](json);
-    })
-    .catch(()=>{
-      // Fallback to JSONP
-      const s=document.createElement('script');
-      s.id='btLoadScript';
-      s.src=SCRIPT_URL+'?action=getAll&callback='+cbName;
-      s.onerror=()=>{
+  firebase.auth().signInAnonymously().then(()=>{
+    firestoreUnsub = fbDb.collection(FIRESTORE_COLLECTION).onSnapshot(snapshot=>{
+      // Skip snapshots that are purely our own optimistic (not-yet-confirmed) writes echoing back —
+      // avoids re-rendering mid-edit and fighting with in-flight local changes.
+      const changes = snapshot.docChanges();
+      const isLocalEcho = changes.length>0 && changes.every(c=>c.doc.metadata.hasPendingWrites);
+      if(isLocalEcho && hasLoadedOnce) return;
+
+      snapshot.forEach(doc=>{
+        const stateKey = Object.keys(SK).find(k=>SK[k]===doc.id);
+        if(!stateKey) return;
+        const data = doc.data();
+        if(data && data.value){
+          try{ state[stateKey] = JSON.parse(data.value); }catch(e){}
+        }
+      });
+      Object.entries(SK).forEach(([k,v])=>{ sv(v,state[k]); });
+
+      if(!hasLoadedOnce){
+        hasLoadedOnce = true;
         clearTimeout(timer);
-        console.log('All load methods failed, using local data');
-        delete window[cbName];
         if(loadingEl) loadingEl.style.display='none';
         initApp();
-      };
-      document.head.appendChild(s);
+      } else if(typeof re==='function' && state.currentTab){
+        re(); // live update from another device
+        syncStatus='live';
+        updateSyncIndicator();
+        setTimeout(()=>{syncStatus='idle';updateSyncIndicator();},2500);
+      }
+    }, err=>{
+      console.error('Firestore listener error:', err);
+      clearTimeout(timer);
+      if(!hasLoadedOnce){
+        hasLoadedOnce = true;
+        if(loadingEl) loadingEl.style.display='none';
+        initApp();
+      }
     });
+  }).catch(err=>{
+    console.error('Firebase anonymous sign-in failed:', err);
+    clearTimeout(timer);
+    if(loadingEl) loadingEl.style.display='none';
+    initApp();
+  });
 }
 function emptyMats(){return{"12":{name:'Wooden Planks 12"',size:12,low:50,batches:[]},"24":{name:'Wooden Planks 24"',size:24,low:30,batches:[]},"36":{name:'Wooden Planks 36"',size:36,low:20,batches:[]}};}
 
@@ -406,7 +420,7 @@ function saveAll(){
   sv(SK.screwInventory,state.screwInventory);
   sv(SK.readyForSale,state.readyForSale);
   sv(SK.voidLog,state.voidLog);
-  syncToSheets();
+  syncToFirestore();
 }
 
 function addLedgerEntry(type, material, batchNo, qty, direction, note, size='', vendor=''){
@@ -3909,8 +3923,8 @@ function syncLedgerFromExistingData(){
 
   if((state.ledger||[]).length > 0) saveAll();
 }
-// Start app — load from Google Sheets first
-loadFromSheets();
+// Start app — load from Firestore first (real-time sync across devices)
+loadFromFirestore();
 </script>
 
 <div id="saleModal" class="modal-overlay hidden">
