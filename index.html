@@ -82,8 +82,8 @@ input,select{width:100%;padding:8px 10px;border:1px solid #d4b896;border-radius:
     <div class="header-sub">Multi-Department with Smart Production</div>
   </div>
   <div style="display:flex;gap:6px;">
-    <button class="btn btn-orange" onclick="confirmResetProd()" style="font-size:11px;padding:7px 10px;">🗑️ Prod</button>
-    <button class="btn btn-red" onclick="confirmResetAll()" style="font-size:11px;padding:7px 10px;">🗑️ All</button>
+    <button id="resetProdBtn" class="btn btn-orange" onclick="confirmResetProd()" style="font-size:11px;padding:7px 10px;">🗑️ Prod</button>
+    <button id="resetAllBtn" class="btn btn-red" onclick="confirmResetAll()" style="font-size:11px;padding:7px 10px;">🗑️ All</button>
     <button onclick="logout()" style="background:#a0522d;color:#fff;border:none;border-radius:6px;padding:7px 10px;font-size:11px;font-weight:700;cursor:pointer;">🚪 Logout</button>
   </div>
 </div>
@@ -3942,25 +3942,37 @@ function addScrewStock(){
 }
 
 // ---- RESET ----
-function confirmResetProd(){document.getElementById('resetProdBar').classList.remove('hidden');document.getElementById('resetAllBar').classList.add('hidden');}
-function confirmResetAll(){document.getElementById('resetAllBar').classList.remove('hidden');document.getElementById('resetProdBar').classList.add('hidden');}
+function confirmResetProd(){
+  if(!isAdminOrOwner()){ alert("Only Admin or Owner can do this."); return; }
+  document.getElementById('resetProdBar').classList.remove('hidden');document.getElementById('resetAllBar').classList.add('hidden');
+}
+function confirmResetAll(){
+  if(!isAdminOrOwner()){ alert("Only Admin or Owner can do this."); return; }
+  document.getElementById('resetAllBar').classList.remove('hidden');document.getElementById('resetProdBar').classList.add('hidden');
+}
 function hideResetBars(){document.getElementById('resetProdBar').classList.add('hidden');document.getElementById('resetAllBar').classList.add('hidden');}
 
 function resetProduction(){
-  [SK.production,SK.scrapInventory,SK.wastage,SK.openBatches,SK.closedBatches,SK.ledger,SK.sales,SK.finishedInventory,SK.reworkStock,SK.finishedBrushes,SK.brushScrapLog,SK.readyForSale,SK.voidLog].forEach(k=>localStorage.removeItem(k));
+  if(!isAdminOrOwner()){ alert("Only Admin or Owner can do this."); return; }
+  [SK.production,SK.scrapInventory,SK.wastage,SK.openBatches,SK.closedBatches,SK.sales,SK.finishedInventory,SK.reworkStock,SK.finishedBrushes,SK.brushScrapLog,SK.readyForSale,SK.voidLog,SK.batchGenealogy,SK.brushProcessingLog,SK.socketProcessingLog].forEach(k=>localStorage.removeItem(k));
   state.production=[]; state.scrapInventory=[]; state.wastage=[];
-  state.openBatches={}; state.closedBatches=[]; state.ledger=[]; state.sales=[];
+  state.openBatches={}; state.closedBatches=[]; state.sales=[];
   state.finishedInventory=[]; state.reworkStock=[]; state.finishedBrushes=[]; state.brushScrapLog=[];
-  state.readyForSale=[]; state.voidLog=[];
+  state.readyForSale=[]; state.voidLog=[]; state.batchGenealogy={}; state.brushProcessingLog=[]; state.socketProcessingLog=[];
+  // Keep material stock-in history (plank/socket/screw purchases) — that stock still exists,
+  // only production activity built on top of it is being cleared.
+  state.ledger = (state.ledger||[]).filter(e => (e.type==='plank'||e.type==='socket'||e.type==='screw') && e.direction==='IN');
   hideResetBars(); saveAll(); re();
 }
 function resetAll(){
+  if(!isAdminOrOwner()){ alert("Only Admin or Owner can do this."); return; }
   Object.values(SK).forEach(k=>localStorage.removeItem(k));
   state.materials=emptyMats(); state.woodPieces=DEFAULT_WOOD_PIECES;
   state.production=[]; state.scrapInventory=[]; state.wastage=[];
   state.openBatches={}; state.closedBatches=[]; state.ledger=[]; state.sales=[];
   state.finishedInventory=[]; state.reworkStock=[]; state.finishedBrushes=[]; state.brushScrapLog=[];
   state.socketInventory=[]; state.screwInventory=[]; state.readyForSale=[]; state.voidLog=[];
+  state.batchGenealogy={}; state.brushProcessingLog=[]; state.socketProcessingLog=[];
   hideResetBars(); saveAll(); re();
 }
 
@@ -4015,6 +4027,10 @@ function renderAuthenticatedApp(){
   // Update header with user info
   const userInfo = document.getElementById('userInfo');
   if(userInfo) userInfo.innerHTML = `<span style="font-size:11px;opacity:0.8;">👤 ${currentUser.loginName} (${currentUser.name})</span>`;
+  const resetProdBtn = document.getElementById('resetProdBtn');
+  const resetAllBtn = document.getElementById('resetAllBtn');
+  if(resetProdBtn) resetProdBtn.style.display = isAdmin ? '' : 'none';
+  if(resetAllBtn) resetAllBtn.style.display = isAdmin ? '' : 'none';
   renderTab(firstTab);
 }
 
