@@ -88,6 +88,10 @@ input,select{width:100%;padding:8px 10px;border:1px solid #d4b896;border-radius:
   </div>
 </div>
 
+<div id="offlineWarning" class="hidden" style="background:#fdecea;color:#c0392b;padding:10px 14px;font-size:12px;font-weight:600;text-align:center;border-bottom:2px solid #e74c3c;">
+  ⚠️ Couldn't confirm the latest shared data — you're viewing a local copy that may be out of date. Anything you do here will NOT sync to other devices until you refresh with a working connection.
+</div>
+
 <!-- Admin Modal -->
 <div id="adminModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:200;align-items:center;justify-content:center;padding:20px;">
   <div style="background:#fff;border-radius:12px;padding:24px;max-width:400px;width:100%;max-height:90vh;overflow-y:auto;">
@@ -251,6 +255,11 @@ const FIREBASE_CONFIG = {
 };
 const FIRESTORE_COLLECTION = 'brushTrackerData';
 let fbApp = null, fbDb = null, fbReady = false, applyingRemoteUpdate = false;
+// True only once we've actually received and applied real data from Firestore.
+// While this is false, saveAll() must NOT push to Firestore — the local copy may be stale
+// (e.g. this device missed a wipe/change another device made while it was offline), and pushing
+// it would silently overwrite the real shared data.
+let firestoreConfirmed = false;
 try{
   fbApp = firebase.initializeApp(FIREBASE_CONFIG);
   fbDb = firebase.firestore();
@@ -324,6 +333,7 @@ function loadFromFirestore(){
   const timer = setTimeout(()=>{
     console.log('Firestore timeout, using local data');
     if(loadingEl) loadingEl.style.display='none';
+    showOfflineWarning();
     initApp();
   }, 10000);
 
@@ -351,6 +361,7 @@ function loadFromFirestore(){
         }
       });
       Object.entries(SK).forEach(([k,v])=>{ sv(v,state[k]); });
+      firestoreConfirmed = true;
 
       if(!hasLoadedOnce){
         hasLoadedOnce = true;
@@ -369,6 +380,7 @@ function loadFromFirestore(){
       if(!hasLoadedOnce){
         hasLoadedOnce = true;
         if(loadingEl) loadingEl.style.display='none';
+        showOfflineWarning();
         initApp();
       }
     });
@@ -376,8 +388,18 @@ function loadFromFirestore(){
     console.error('Firebase anonymous sign-in failed:', err);
     clearTimeout(timer);
     if(loadingEl) loadingEl.style.display='none';
+    showOfflineWarning();
     initApp();
   });
+}
+
+// Shown whenever we could NOT confirm the current shared data — this device's saves will stay
+// local-only (never pushed to Firestore) until a refresh succeeds in reconnecting, so nothing
+// stale ever overwrites what other devices have done in the meantime.
+function showOfflineWarning(){
+  if(!fbDb) return; // Firestore isn't configured at all — not a "connection" issue, nothing to warn about
+  const el = document.getElementById('offlineWarning');
+  if(el) el.classList.remove('hidden');
 }
 function emptyMats(){return{"12":{name:'Wooden Planks 12"',size:12,low:50,batches:[]},"24":{name:'Wooden Planks 24"',size:24,low:30,batches:[]},"36":{name:'Wooden Planks 36"',size:36,low:20,batches:[]}};}
 
@@ -441,7 +463,10 @@ function saveAll(){
   sv(SK.batchGenealogy,state.batchGenealogy);
   sv(SK.brushProcessingLog,state.brushProcessingLog);
   sv(SK.socketProcessingLog,state.socketProcessingLog);
-  syncToFirestore();
+  // Never push to Firestore until we've actually confirmed we have the real shared state —
+  // otherwise a device that missed another device's change (offline, slow connection, failed
+  // reconnect) would silently overwrite that change with its own stale local copy.
+  if(firestoreConfirmed || !fbDb) syncToFirestore();
 }
 
 function addLedgerEntry(type, material, batchNo, qty, direction, note, size='', vendor=''){
