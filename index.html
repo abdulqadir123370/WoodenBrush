@@ -298,6 +298,9 @@ function recKey(rec){
 // Snapshot of {docId: recordJSON} per collection as last seen/pushed — used to diff so we
 // only write records that actually changed, and delete docs for records that were removed.
 let syncShadow = {};
+// True per collection only once we've received a real, confirmed first snapshot for it —
+// doFirestoreSync refuses to touch (add/update/delete) any collection until this is true.
+let collectionReady = {};
 
 function recordsOf(stateKey){
   const out = {};
@@ -329,6 +332,10 @@ function doFirestoreSync(){
     const ops = [];
     const now = new Date().toISOString();
     Object.keys(SK).forEach(stateKey=>{
+      // Never touch a collection we haven't received a confirmed first snapshot for yet —
+      // this is the guard that prevents the exact bug that caused data loss: syncing (and
+      // possibly deleting) against a shadow that doesn't actually reflect the server yet.
+      if(!collectionReady[stateKey]) return;
       const col = SK[stateKey];
       const recs = recordsOf(stateKey);
       const shadow = syncShadow[stateKey] || {};
@@ -354,6 +361,7 @@ function doFirestoreSync(){
     }
     // Update the shadow optimistically — the writes are durably queued.
     Object.keys(SK).forEach(stateKey=>{
+      if(!collectionReady[stateKey]) return;
       const recs = recordsOf(stateKey);
       const sh = {};
       Object.entries(recs).forEach(([k,r])=>{ sh[k]=JSON.stringify(r); });
@@ -419,6 +427,7 @@ function attachFirestoreListeners(onAllFirstSnapshots){
           state[stateKey] = Object.values(recs).sort((a,b)=>((a._ord??0)-(b._ord??0)) || String(recKey(a)).localeCompare(String(recKey(b))));
         }
         syncShadow[stateKey] = sh;
+        collectionReady[stateKey] = true;
         sv(SK[stateKey], state[stateKey]);
 
         if(hasLoadedOnce && !isLocalEcho && typeof re==='function' && state.currentTab){
@@ -432,13 +441,17 @@ function attachFirestoreListeners(onAllFirstSnapshots){
       checkAllFirst();
     }, err=>{
       console.error('Firestore listener error ('+col+'):', err);
-      firstSeen[stateKey] = true; // don't block startup on one failing collection
+      // Do NOT mark ready on error — leave this collection un-synced (local-only) rather
+      // than risk touching it with an unconfirmed view.
+      firstSeen[stateKey] = true; // don't block overall startup on one failing collection
       checkAllFirst();
     });
   });
 }
 
-// ---- Startup: migrate old whole-list data if needed, then attach listeners ----
+// ---- Startup: just attach listeners. No automatic migration — that's a manual, one-time,
+// owner-triggered action (see migrateLegacyDataNow) to avoid any risk of multiple devices
+// racing each other through a migration at the same time. ----
 function loadFromFirestore(){
   const loadingEl = document.getElementById('loadingScreen');
   if(loadingEl) loadingEl.style.display='flex';
@@ -455,49 +468,80 @@ function loadFromFirestore(){
   }
 
   const timer = setTimeout(()=>{
-    console.log('Firestore first-load timeout — starting with local data. Offline writes will still be queued and synced when the connection returns.');
+    console.log('Firestore first-load timeout — starting with local data.');
     startApp(true);
   }, 10000);
 
   if(!fbDb){ startApp(false); return; }
 
   firebase.auth().signInAnonymously().then(()=>{
-    const metaRef = fbDb.collection(META_COLLECTION).doc('sync');
-    metaRef.get().then(meta=>{
-      const migrated = meta.exists && meta.data() && meta.data().migrated;
-      if(migrated){
-        attachFirestoreListeners(()=>startApp(false));
-        return;
-      }
-      // First run with the new format — pull whatever exists in the old whole-list format,
-      // convert it into per-record documents, then flip the migration flag.
-      fbDb.collection(LEGACY_COLLECTION).get().then(old=>{
-        old.forEach(doc=>{
-          const sk = Object.keys(SK).find(k=>SK[k]===doc.id);
-          if(!sk) return;
-          const data = doc.data();
-          if(data && data.value){
-            try{ state[sk] = JSON.parse(data.value); sv(SK[sk], state[sk]); }catch(e){}
-          }
-        });
-        syncShadow = {}; // force a full push of everything currently in state
-        doFirestoreSync();
-        metaRef.set({migrated:true, at:new Date().toISOString()});
-        attachFirestoreListeners(()=>startApp(false));
-      }).catch(err=>{
-        console.error('Legacy data read failed:', err);
-        // Can't read old data (offline?) — still attach listeners; worst case we start empty-ish
-        // from local data and the queued writes reconcile once online.
-        attachFirestoreListeners(()=>startApp(false));
-      });
-    }).catch(err=>{
-      console.error('Migration meta read failed:', err);
-      attachFirestoreListeners(()=>startApp(false));
-    });
+    attachFirestoreListeners(()=>startApp(false));
   }).catch(err=>{
     console.error('Firebase anonymous sign-in failed:', err);
     startApp(true);
   });
+}
+
+// ---- Manual, one-time migration from the old whole-list format ----
+// Run this ONCE, from ONE device, from the Admin panel (Owner only). It reads the old
+// brushTrackerData collection, converts every record into its own document in the new
+// per-record collections, and marks migration complete so the button disables itself.
+// The old collection is left untouched as a permanent backup — never deleted automatically.
+async function migrateLegacyDataNow(){
+  if(!fbDb){ alert('Firestore is not connected.'); return; }
+  const metaRef = fbDb.collection(META_COLLECTION).doc('sync');
+  const meta = await metaRef.get();
+  if(meta.exists && meta.data() && meta.data().migrated){
+    alert('Already migrated — nothing to do.');
+    return;
+  }
+  const old = await fbDb.collection(LEGACY_COLLECTION).get();
+  if(old.empty){
+    alert('No legacy data found to migrate.');
+    return;
+  }
+  const legacyState = {};
+  old.forEach(doc=>{
+    const sk = Object.keys(SK).find(k=>SK[k]===doc.id);
+    if(!sk) return;
+    const data = doc.data();
+    if(data && data.value){
+      try{ legacyState[sk] = JSON.parse(data.value); }catch(e){}
+    }
+  });
+
+  // Clear out any partial/corrupted per-record data from the failed automatic migration
+  // before writing clean data from the trusted legacy backup.
+  for(const sk of Object.keys(SK)){
+    const col = SK[sk];
+    const existing = await fbDb.collection(col).get();
+    let batch = fbDb.batch(); let n=0;
+    for(const doc of existing.docs){
+      batch.delete(doc.ref); n++;
+      if(n>=400){ await batch.commit(); batch = fbDb.batch(); n=0; }
+    }
+    if(n>0) await batch.commit();
+  }
+
+  // Write clean per-record documents from the legacy backup.
+  for(const sk of Object.keys(SK)){
+    const col = SK[sk];
+    const val = legacyState[sk];
+    if(val===undefined) continue;
+    const isMap = MAP_COLLECTIONS[sk];
+    const entries = isMap ? Object.entries(val||{}) : (val||[]).map((r,i)=>{ r._ord=i; return [recKey(r), r]; });
+    let batch = fbDb.batch(); let n=0;
+    for(const [docId, rec] of entries){
+      if(docId===null || docId===undefined) continue;
+      batch.set(fbDb.collection(col).doc(String(docId)), {v:JSON.stringify(rec), updatedAt:new Date().toISOString()});
+      n++;
+      if(n>=400){ await batch.commit(); batch = fbDb.batch(); n=0; }
+    }
+    if(n>0) await batch.commit();
+  }
+
+  await metaRef.set({migrated:true, at:new Date().toISOString(), by: currentUser?.loginName||'unknown'});
+  alert('✅ Migration complete. Please tell everyone else to refresh the app now.');
 }
 
 // Shown when we couldn't reach Firestore on startup. With offline persistence enabled,
@@ -4171,14 +4215,33 @@ function renderAdminPanel(){
   const allTabs = ["Dashboard","Wood Finishing","Brush Dept","Socket Dept","Inventory","Wastage","Materials","BOM","Ledger","Sales"];
   const isOwnerRole = currentUser?.role==='owner';
 
-  let html = `<div class="card" style="border:2px solid #27ae60;background:#f0fff4;">
-    <div class="label" style="color:#27ae60;">📤 Export Data</div>
-    <div style="font-size:11px;color:#888;margin-bottom:12px;">Download a snapshot of your data. PDF is a readable report — open it and use your browser's "Save as PDF" option.</div>
-    <button class="btn btn-brown" style="width:100%;margin-bottom:8px;" onclick="exportDataPDF()">📄 Export PDF Report</button>
-    ${isOwnerRole?`<button class="btn" style="background:#3498db;width:100%;" onclick="exportDataJSON()">💾 Export Raw Data (JSON backup)</button>`:''}
-  </div>
+  let html = ``;
+  if(isOwnerRole){
+    html += `<div class="card" style="border:2px solid #8e44ad;background:#f8f0fc;">
+      <div class="label" style="color:#8e44ad;">🔄 Data Migration</div>
+      <div style="font-size:11px;color:#888;margin-bottom:12px;">Run this ONCE, from ONE device only, after updating the app to a new data format. It's safe to click more than once — it checks whether migration is already done.</div>
+      <button class="btn" style="background:#8e44ad;width:100%;" onclick="if(confirm('Run migration now? Do this from only ONE device.')) migrateLegacyDataNow()">🔄 Migrate Legacy Data Now</button>
+    </div>
 
-  <div class="card" style="border:2px solid #5c3d1e;">
+    <div class="card" style="border:2px solid #27ae60;background:#f0fff4;">
+      <div class="label" style="color:#27ae60;">📤 Export Data</div>
+      <div style="font-size:11px;color:#888;margin-bottom:12px;">Download a snapshot of your data. PDF is a readable report — open it and use your browser's "Save as PDF" option.</div>
+      <button class="btn btn-brown" style="width:100%;margin-bottom:8px;" onclick="exportDataPDF()">📄 Export PDF Report</button>
+      <button class="btn" style="background:#3498db;width:100%;" onclick="exportDataJSON()">💾 Export Raw Data (JSON backup)</button>
+    </div>
+
+  `;
+  } else {
+    html += `<div class="card" style="border:2px solid #27ae60;background:#f0fff4;">
+      <div class="label" style="color:#27ae60;">📤 Export Data</div>
+      <div style="font-size:11px;color:#888;margin-bottom:12px;">Download a snapshot of your data. PDF is a readable report — open it and use your browser's "Save as PDF" option.</div>
+      <button class="btn btn-brown" style="width:100%;margin-bottom:8px;" onclick="exportDataPDF()">📄 Export PDF Report</button>
+    </div>
+
+  `;
+  }
+
+  html += `<div class="card" style="border:2px solid #5c3d1e;">
     <div class="label">👥 User Management</div>
     <div style="font-size:12px;color:#888;margin-bottom:12px;">Tap a user to edit their details</div>`;
 
