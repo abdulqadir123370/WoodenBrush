@@ -270,26 +270,39 @@ let hasLoadedOnce = false;
 function syncToFirestore(){
   if(!fbDb) return;
   clearTimeout(syncTimeout);
-  syncTimeout = setTimeout(async ()=>{
-    syncStatus='saving';
-    updateSyncIndicator();
-    try{
-      const batch = fbDb.batch();
-      const now = new Date().toISOString();
-      Object.entries(SK).forEach(([stateKey, docKey])=>{
-        const ref = fbDb.collection(FIRESTORE_COLLECTION).doc(docKey);
-        batch.set(ref, { value: JSON.stringify(state[stateKey]), updatedAt: now }, {merge:true});
-      });
-      await batch.commit();
-      syncStatus='saved';
-    } catch(err){
-      syncStatus='error';
-      console.error('Firestore sync error:', err);
-    }
-    updateSyncIndicator();
-    setTimeout(()=>{syncStatus='idle';updateSyncIndicator();},2000);
-  }, 1500);
+  syncTimeout = setTimeout(doFirestoreSync, 1500);
 }
+
+async function doFirestoreSync(){
+  if(!fbDb) return;
+  clearTimeout(syncTimeout);
+  syncTimeout = null;
+  syncStatus='saving';
+  updateSyncIndicator();
+  try{
+    const batch = fbDb.batch();
+    const now = new Date().toISOString();
+    Object.entries(SK).forEach(([stateKey, docKey])=>{
+      const ref = fbDb.collection(FIRESTORE_COLLECTION).doc(docKey);
+      batch.set(ref, { value: JSON.stringify(state[stateKey]), updatedAt: now }, {merge:true});
+    });
+    await batch.commit();
+    syncStatus='saved';
+  } catch(err){
+    syncStatus='error';
+    console.error('Firestore sync error:', err);
+  }
+  updateSyncIndicator();
+  setTimeout(()=>{syncStatus='idle';updateSyncIndicator();},2000);
+}
+
+// Safety net: if a sync is still waiting on its debounce timer when the person closes the tab,
+// switches apps, or their phone locks, flush it immediately instead of losing that save.
+function flushPendingSync(){
+  if(syncTimeout){ doFirestoreSync(); }
+}
+document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='hidden') flushPendingSync(); });
+window.addEventListener('pagehide', flushPendingSync);
 
 function updateSyncIndicator(){
   const el = document.getElementById('syncIndicator');
@@ -4014,6 +4027,7 @@ function renderAdminPanel(){
     <div class="label" style="color:#27ae60;">📤 Export Data</div>
     <div style="font-size:11px;color:#888;margin-bottom:12px;">Download a snapshot of your data. PDF is a readable report — open it and use your browser's "Save as PDF" option.</div>
     <button class="btn btn-brown" style="width:100%;margin-bottom:8px;" onclick="exportDataPDF()">📄 Export PDF Report</button>
+    ${isOwnerRole?`<button class="btn" style="background:#3498db;width:100%;" onclick="exportDataJSON()">💾 Export Raw Data (JSON backup)</button>`:''}
   </div>
 
   <div class="card" style="border:2px solid #5c3d1e;">
@@ -4140,6 +4154,25 @@ function exportDataPDF(){
 
   document.getElementById('printReport').innerHTML = html;
   setTimeout(()=>{ window.print(); }, 100);
+}
+
+function exportDataJSON(){
+  const exportObj = {};
+  Object.entries(SK).forEach(([stateKey, sheetKey])=>{
+    exportObj[stateKey] = state[stateKey];
+  });
+  exportObj._exportedAt = new Date().toISOString();
+  exportObj._exportedBy = currentUser?.loginName || currentUser?.name || 'Unknown';
+
+  const blob = new Blob([JSON.stringify(exportObj, null, 2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'brushtracker-backup-' + new Date().toISOString().slice(0,10) + '.json';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 function togglePermPanel(userId){
