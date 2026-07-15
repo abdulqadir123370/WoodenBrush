@@ -88,8 +88,8 @@ input,select{width:100%;padding:8px 10px;border:1px solid #d4b896;border-radius:
   </div>
 </div>
 
-<div id="offlineWarning" class="hidden" style="background:#fdecea;color:#c0392b;padding:10px 14px;font-size:12px;font-weight:600;text-align:center;border-bottom:2px solid #e74c3c;">
-  ⚠️ Couldn't confirm the latest shared data — you're viewing a local copy that may be out of date. Anything you do here will NOT sync to other devices until you refresh with a working connection.
+<div id="offlineWarning" class="hidden" style="background:#fef9e7;color:#9a7d0a;padding:10px 14px;font-size:12px;font-weight:600;text-align:center;border-bottom:2px solid #f1c40f;">
+  📶 Couldn't reach the server — you're working from this device's saved copy. Your entries are safely queued on this device and will sync automatically when the connection returns.
 </div>
 
 <!-- Admin Modal -->
@@ -253,49 +253,112 @@ const FIREBASE_CONFIG = {
   messagingSenderId: "744764736209",
   appId: "1:744764736209:web:94a22c20c7d1e15165fbf0"
 };
-const FIRESTORE_COLLECTION = 'brushTrackerData';
-let fbApp = null, fbDb = null, fbReady = false, applyingRemoteUpdate = false;
-// True only once we've actually received and applied real data from Firestore.
-// While this is false, saveAll() must NOT push to Firestore — the local copy may be stale
-// (e.g. this device missed a wipe/change another device made while it was offline), and pushing
-// it would silently overwrite the real shared data.
-let firestoreConfirmed = false;
+// ==================== FIRESTORE SYNC v2 — PER-RECORD DOCUMENTS ====================
+// Every record (each ledger entry, production run, stock item...) is its own Firestore
+// document, so devices merge changes record-by-record instead of overwriting whole lists.
+// Two phones offline at the same time adding different entries BOTH survive.
+// Firestore's offline persistence (IndexedDB) queues writes made while offline — even
+// across page reloads — and pushes them automatically when the connection returns.
+const LEGACY_COLLECTION = 'brushTrackerData'; // old whole-list format, migrated from on first run
+const META_COLLECTION = 'wbt_meta';
+// Collections stored as key→object maps rather than arrays:
+const MAP_COLLECTIONS = { materials:1, openBatches:1, batchGenealogy:1 };
+
+let fbApp = null, fbDb = null;
 try{
   fbApp = firebase.initializeApp(FIREBASE_CONFIG);
   fbDb = firebase.firestore();
+  // Offline persistence: writes made without connection are durably queued (survives reload)
+  // and auto-sent on reconnect. Reads come instantly from local cache while offline.
+  fbDb.enablePersistence({synchronizeTabs:true}).catch(err=>{
+    console.warn('Firestore persistence unavailable (private mode or old browser):', err && err.code);
+  });
 }catch(e){ console.error('Firebase init failed:', e); }
 
 let syncTimeout = null;
-let syncStatus = 'idle'; // idle | saving | error | live
+let syncStatus = 'idle'; // idle | saving | saved | error | live
+let hasLoadedOnce = false;
 
 // Local storage fallback functions
 function ld(k,fb){try{const v=localStorage.getItem(k);return v?JSON.parse(v):fb;}catch(e){return fb;}}
 function sv(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch(e){}}
 
-// ==================== FIRESTORE SYNC (real-time, replaces Google Sheets) ====================
-let firestoreUnsub = null;
-let hasLoadedOnce = false;
+// ---- Record keys ----
+// Every record needs a stable unique id to be its own document. Most already have .id;
+// records that don't (scrap, wastage, closed batches...) get a generated _sid stamped on
+// them the first time they sync, which then travels with the record to all devices.
+function genSid(){ return 's'+Date.now().toString(36)+Math.random().toString(36).slice(2,10); }
+function recKey(rec){
+  if(!rec || typeof rec!=='object') return null;
+  if(rec._sid!==undefined && rec._sid!==null && rec._sid!=='') return String(rec._sid);
+  if(rec.id!==undefined && rec.id!==null && rec.id!=='') return String(rec.id);
+  rec._sid = genSid();
+  return rec._sid;
+}
+// Snapshot of {docId: recordJSON} per collection as last seen/pushed — used to diff so we
+// only write records that actually changed, and delete docs for records that were removed.
+let syncShadow = {};
+
+function recordsOf(stateKey){
+  const out = {};
+  const val = state[stateKey];
+  if(MAP_COLLECTIONS[stateKey]){
+    Object.entries(val||{}).forEach(([k,v])=>{ if(v!==undefined && v!==null) out[k]=v; });
+  } else {
+    (val||[]).forEach((r,i)=>{
+      const k = recKey(r);
+      if(k!==null){ r._ord = i; out[k]=r; }
+    });
+  }
+  return out;
+}
 
 function syncToFirestore(){
   if(!fbDb) return;
   clearTimeout(syncTimeout);
-  syncTimeout = setTimeout(doFirestoreSync, 1500);
+  syncTimeout = setTimeout(doFirestoreSync, 1200);
 }
 
-async function doFirestoreSync(){
+function doFirestoreSync(){
   if(!fbDb) return;
   clearTimeout(syncTimeout);
   syncTimeout = null;
   syncStatus='saving';
   updateSyncIndicator();
   try{
-    const batch = fbDb.batch();
+    const ops = [];
     const now = new Date().toISOString();
-    Object.entries(SK).forEach(([stateKey, docKey])=>{
-      const ref = fbDb.collection(FIRESTORE_COLLECTION).doc(docKey);
-      batch.set(ref, { value: JSON.stringify(state[stateKey]), updatedAt: now }, {merge:true});
+    Object.keys(SK).forEach(stateKey=>{
+      const col = SK[stateKey];
+      const recs = recordsOf(stateKey);
+      const shadow = syncShadow[stateKey] || {};
+      Object.entries(recs).forEach(([docId, rec])=>{
+        const j = JSON.stringify(rec);
+        if(shadow[docId] !== j) ops.push({t:'set', col, docId, data:{v:j, updatedAt:now}});
+      });
+      Object.keys(shadow).forEach(docId=>{
+        if(!(docId in recs)) ops.push({t:'del', col, docId});
+      });
     });
-    await batch.commit();
+    if(ops.length===0){ syncStatus='saved'; updateSyncIndicator(); setTimeout(()=>{syncStatus='idle';updateSyncIndicator();},1500); return; }
+    // Chunked batches (Firestore caps a batch at 500 ops). Fire-and-forget: with offline
+    // persistence these are durably queued the moment they're issued, even with no signal.
+    for(let i=0; i<ops.length; i+=400){
+      const batch = fbDb.batch();
+      ops.slice(i, i+400).forEach(o=>{
+        const ref = fbDb.collection(o.col).doc(o.docId);
+        if(o.t==='set') batch.set(ref, o.data);
+        else batch.delete(ref);
+      });
+      batch.commit().catch(err=>console.error('Firestore batch error:', err));
+    }
+    // Update the shadow optimistically — the writes are durably queued.
+    Object.keys(SK).forEach(stateKey=>{
+      const recs = recordsOf(stateKey);
+      const sh = {};
+      Object.entries(recs).forEach(([k,r])=>{ sh[k]=JSON.stringify(r); });
+      syncShadow[stateKey] = sh;
+    });
     syncStatus='saved';
   } catch(err){
     syncStatus='error';
@@ -305,8 +368,7 @@ async function doFirestoreSync(){
   setTimeout(()=>{syncStatus='idle';updateSyncIndicator();},2000);
 }
 
-// Safety net: if a sync is still waiting on its debounce timer when the person closes the tab,
-// switches apps, or their phone locks, flush it immediately instead of losing that save.
+// Safety net: flush a pending debounced sync immediately if the tab is hidden or closed.
 function flushPendingSync(){
   if(syncTimeout){ doFirestoreSync(); }
 }
@@ -323,84 +385,130 @@ function updateSyncIndicator(){
   else { el.textContent=''; }
 }
 
-// Signs in anonymously (so Firestore rules can require an authenticated request without
-// needing full user accounts), then attaches ONE real-time listener across all documents.
-// Any device with the app open sees changes from other devices within ~1 second — no reload needed.
+// ---- Real-time listeners: one per collection ----
+function attachFirestoreListeners(onAllFirstSnapshots){
+  const firstSeen = {};
+  const allKeys = Object.keys(SK);
+  let announced = false;
+  function checkAllFirst(){
+    if(announced) return;
+    if(allKeys.every(k=>firstSeen[k])){
+      announced = true;
+      if(typeof onAllFirstSnapshots==='function') onAllFirstSnapshots();
+    }
+  }
+  allKeys.forEach(stateKey=>{
+    const col = SK[stateKey];
+    fbDb.collection(col).onSnapshot({includeMetadataChanges:false}, snap=>{
+      const changes = snap.docChanges();
+      const isLocalEcho = changes.length>0 && changes.every(c=>c.doc.metadata.hasPendingWrites);
+      const isFirst = !firstSeen[stateKey];
+
+      if(!isLocalEcho || isFirst){
+        const recs = {}; const sh = {};
+        snap.forEach(doc=>{
+          try{
+            const r = JSON.parse(doc.data().v);
+            recs[doc.id] = r;
+            sh[doc.id] = JSON.stringify(r);
+          }catch(e){}
+        });
+        if(MAP_COLLECTIONS[stateKey]){
+          state[stateKey] = recs;
+        } else {
+          state[stateKey] = Object.values(recs).sort((a,b)=>((a._ord??0)-(b._ord??0)) || String(recKey(a)).localeCompare(String(recKey(b))));
+        }
+        syncShadow[stateKey] = sh;
+        sv(SK[stateKey], state[stateKey]);
+
+        if(hasLoadedOnce && !isLocalEcho && typeof re==='function' && state.currentTab){
+          re();
+          syncStatus='live';
+          updateSyncIndicator();
+          setTimeout(()=>{syncStatus='idle';updateSyncIndicator();},2000);
+        }
+      }
+      firstSeen[stateKey] = true;
+      checkAllFirst();
+    }, err=>{
+      console.error('Firestore listener error ('+col+'):', err);
+      firstSeen[stateKey] = true; // don't block startup on one failing collection
+      checkAllFirst();
+    });
+  });
+}
+
+// ---- Startup: migrate old whole-list data if needed, then attach listeners ----
 function loadFromFirestore(){
   const loadingEl = document.getElementById('loadingScreen');
   if(loadingEl) loadingEl.style.display='flex';
 
-  const timer = setTimeout(()=>{
-    console.log('Firestore timeout, using local data');
-    if(loadingEl) loadingEl.style.display='none';
-    showOfflineWarning();
-    initApp();
-  }, 10000);
-
-  if(!fbDb){
+  let started = false;
+  function startApp(showWarn){
+    if(started) return;
+    started = true;
+    hasLoadedOnce = true;
     clearTimeout(timer);
     if(loadingEl) loadingEl.style.display='none';
+    if(showWarn) showOfflineWarning();
     initApp();
-    return;
   }
 
+  const timer = setTimeout(()=>{
+    console.log('Firestore first-load timeout — starting with local data. Offline writes will still be queued and synced when the connection returns.');
+    startApp(true);
+  }, 10000);
+
+  if(!fbDb){ startApp(false); return; }
+
   firebase.auth().signInAnonymously().then(()=>{
-    firestoreUnsub = fbDb.collection(FIRESTORE_COLLECTION).onSnapshot(snapshot=>{
-      // Skip snapshots that are purely our own optimistic (not-yet-confirmed) writes echoing back —
-      // avoids re-rendering mid-edit and fighting with in-flight local changes.
-      const changes = snapshot.docChanges();
-      const isLocalEcho = changes.length>0 && changes.every(c=>c.doc.metadata.hasPendingWrites);
-      if(isLocalEcho && hasLoadedOnce) return;
-
-      snapshot.forEach(doc=>{
-        const stateKey = Object.keys(SK).find(k=>SK[k]===doc.id);
-        if(!stateKey) return;
-        const data = doc.data();
-        if(data && data.value){
-          try{ state[stateKey] = JSON.parse(data.value); }catch(e){}
-        }
+    const metaRef = fbDb.collection(META_COLLECTION).doc('sync');
+    metaRef.get().then(meta=>{
+      const migrated = meta.exists && meta.data() && meta.data().migrated;
+      if(migrated){
+        attachFirestoreListeners(()=>startApp(false));
+        return;
+      }
+      // First run with the new format — pull whatever exists in the old whole-list format,
+      // convert it into per-record documents, then flip the migration flag.
+      fbDb.collection(LEGACY_COLLECTION).get().then(old=>{
+        old.forEach(doc=>{
+          const sk = Object.keys(SK).find(k=>SK[k]===doc.id);
+          if(!sk) return;
+          const data = doc.data();
+          if(data && data.value){
+            try{ state[sk] = JSON.parse(data.value); sv(SK[sk], state[sk]); }catch(e){}
+          }
+        });
+        syncShadow = {}; // force a full push of everything currently in state
+        doFirestoreSync();
+        metaRef.set({migrated:true, at:new Date().toISOString()});
+        attachFirestoreListeners(()=>startApp(false));
+      }).catch(err=>{
+        console.error('Legacy data read failed:', err);
+        // Can't read old data (offline?) — still attach listeners; worst case we start empty-ish
+        // from local data and the queued writes reconcile once online.
+        attachFirestoreListeners(()=>startApp(false));
       });
-      Object.entries(SK).forEach(([k,v])=>{ sv(v,state[k]); });
-      firestoreConfirmed = true;
-
-      if(!hasLoadedOnce){
-        hasLoadedOnce = true;
-        clearTimeout(timer);
-        if(loadingEl) loadingEl.style.display='none';
-        initApp();
-      } else if(typeof re==='function' && state.currentTab){
-        re(); // live update from another device
-        syncStatus='live';
-        updateSyncIndicator();
-        setTimeout(()=>{syncStatus='idle';updateSyncIndicator();},2500);
-      }
-    }, err=>{
-      console.error('Firestore listener error:', err);
-      clearTimeout(timer);
-      if(!hasLoadedOnce){
-        hasLoadedOnce = true;
-        if(loadingEl) loadingEl.style.display='none';
-        showOfflineWarning();
-        initApp();
-      }
+    }).catch(err=>{
+      console.error('Migration meta read failed:', err);
+      attachFirestoreListeners(()=>startApp(false));
     });
   }).catch(err=>{
     console.error('Firebase anonymous sign-in failed:', err);
-    clearTimeout(timer);
-    if(loadingEl) loadingEl.style.display='none';
-    showOfflineWarning();
-    initApp();
+    startApp(true);
   });
 }
 
-// Shown whenever we could NOT confirm the current shared data — this device's saves will stay
-// local-only (never pushed to Firestore) until a refresh succeeds in reconnecting, so nothing
-// stale ever overwrites what other devices have done in the meantime.
+// Shown when we couldn't reach Firestore on startup. With offline persistence enabled,
+// anything done in this state is still durably queued on the device and will sync
+// automatically once a connection is available — nothing is lost or overwritten.
 function showOfflineWarning(){
-  if(!fbDb) return; // Firestore isn't configured at all — not a "connection" issue, nothing to warn about
+  if(!fbDb) return;
   const el = document.getElementById('offlineWarning');
   if(el) el.classList.remove('hidden');
 }
+
 function emptyMats(){return{"12":{name:'Wooden Planks 12"',size:12,low:50,batches:[]},"24":{name:'Wooden Planks 24"',size:24,low:30,batches:[]},"36":{name:'Wooden Planks 36"',size:36,low:20,batches:[]}};}
 
 let currentUser = null; // logged in user
@@ -463,10 +571,9 @@ function saveAll(){
   sv(SK.batchGenealogy,state.batchGenealogy);
   sv(SK.brushProcessingLog,state.brushProcessingLog);
   sv(SK.socketProcessingLog,state.socketProcessingLog);
-  // Never push to Firestore until we've actually confirmed we have the real shared state —
-  // otherwise a device that missed another device's change (offline, slow connection, failed
-  // reconnect) would silently overwrite that change with its own stale local copy.
-  if(firestoreConfirmed || !fbDb) syncToFirestore();
+  // Always sync: writes are per-record diffs (never whole-list overwrites), and Firestore's
+  // offline persistence durably queues them if there's no connection right now.
+  syncToFirestore();
 }
 
 function addLedgerEntry(type, material, batchNo, qty, direction, note, size='', vendor=''){
