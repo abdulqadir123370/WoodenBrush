@@ -1032,12 +1032,14 @@ function renderProduction(){
     .sort((a,b)=>(b.date||'').localeCompare(a.date||'')||(b.id||0)-(a.id||0))
     .slice(0,20);
   if(allSizeRuns.length>0){
-    const canVoidHere2 = canVoidInDept('Wood Finishing');
     const canFlagHere2 = canFlagInDept('Wood Finishing');
     html+=`<div class="card"><div class="label">📋 Recent Production Runs (last 24 hours)</div>
       <div style="font-size:11px;color:#888;margin-bottom:8px;">Entries older than 24 hours can no longer be voided or flagged by anyone and drop off this list.</div>`;
     allSizeRuns.forEach(r=>{
       const isVoided2 = !!r.voided;
+      // Admin/Owner: only voidable once flagged. Everyone else: their own dept-level
+      // canVoid permission (self-service voids within their daily cap), unrelated to flagging.
+      const canVoidHere2 = isAdminOrOwner() ? !!r.flagged : canVoidInDept('Wood Finishing');
       html+=`<div class="prod-item" style="${isVoided2?'opacity:0.55;':''}">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;">
           <div style="font-weight:600;${isVoided2?'text-decoration:line-through;':''}">${r.woodPieceName} <span style="color:#7a5230;font-size:11px;">(${r.batchNo})</span></div>
@@ -1406,6 +1408,7 @@ function recordProduction(){
     state.openBatches[size].runWastageKg += wastageKgFromReject;
     // Also record immediately in wastage state so it shows in Wastage tab
     state.wastage=[...(state.wastage||[]),{
+      id: Date.now()+Math.random(), time: new Date().toTimeString().slice(0,5), voided:false,
       date:prodDate?.value||new Date().toISOString().slice(0,10),
       batchNo:openBatch.batchNo,
       plankSizeName:state.materials[size]?.name||`${size}" Planks`,
@@ -1572,6 +1575,7 @@ function confirmClose(){
       return;
     }
     state.wastage=[...(state.wastage||[]),{
+      id: Date.now()+Math.random(), time: new Date().toTimeString().slice(0,5), voided:false,
       date:new Date().toISOString().slice(0,10),
       batchNo:rootBno,
       plankSizeName:state.materials[cb.size]?.name||`${cb.size}" Planks`,
@@ -1705,21 +1709,30 @@ function renderBrushDept(){
     html += `</div>`;
   }
 
-  // Recent Brush Processing (last 24 hours) — voidable
+  // Recent Brush Processing (last 24 hours) — flag then void, same mechanism as every other dept
   const recentBrushLog = (state.brushProcessingLog||[]).filter(r=>isWithin24Hours(r.date, r.time)).sort((a,b)=>b.id-a.id);
   if(recentBrushLog.length>0){
+    const canFlagHereBrush = canFlagInDept('Brush Dept');
     html += `<div class="card"><div class="label">📋 Recent Brush Processing (last 24 hours)</div>
-      <div style="font-size:11px;color:#888;margin-bottom:8px;">Entries older than 24 hours can no longer be voided by anyone.</div>`;
+      <div style="font-size:11px;color:#888;margin-bottom:8px;">Entries older than 24 hours can no longer be voided or flagged by anyone.</div>`;
     recentBrushLog.forEach(r=>{
       const isVoided = !!r.voided;
+      const canVoidHereBrush = isAdminOrOwner() ? !!r.flagged : canVoidInDept('Brush Dept');
       html += `<div class="prod-item" style="${isVoided?'opacity:0.55;':''}">
         <div style="display:flex;justify-content:space-between;align-items:center;">
           <div style="font-weight:600;${isVoided?'text-decoration:line-through;':''}">${r.date} ${r.time} — ${r.productName}</div>
-          ${isVoided?'<span style="font-size:10px;padding:2px 8px;border-radius:6px;background:#fdecea;color:#e74c3c;font-weight:700;">VOIDED</span>':''}
+          <div style="display:flex;gap:4px;">
+            ${isVoided?'<span style="font-size:10px;padding:2px 8px;border-radius:6px;background:#fdecea;color:#e74c3c;font-weight:700;">VOIDED</span>':''}
+            ${r.flagged&&!isVoided?'<span style="font-size:10px;padding:2px 8px;border-radius:6px;background:#e8f4fd;color:#3498db;font-weight:700;">🚩 FLAGGED</span>':''}
+          </div>
         </div>
         <div style="color:#666;font-size:11px;${isVoided?'text-decoration:line-through;':''}">${r.qty} pcs → Batch ${r.fbBatchNo} (from ${r.sourceBatch})</div>
-        ${isVoided?`<div style="font-size:11px;color:#e74c3c;margin-top:6px;background:#fdecea;border-radius:6px;padding:6px 8px;">Voided by ${r.voidedBy} on ${r.voidedDate}<br/><span style="font-style:italic;">"${r.voidedReason}"</span></div>`
-          :`<button class="btn btn-red" style="font-size:10px;padding:5px 10px;margin-top:6px;" onclick="openVoidModal(${r.id},'brush')">🚫 Void</button>`}
+        ${isVoided?`<div style="font-size:11px;color:#e74c3c;margin-top:6px;background:#fdecea;border-radius:6px;padding:6px 8px;">Voided by ${r.voidedBy} on ${r.voidedDate}<br/><span style="font-style:italic;">"${r.voidedReason}"</span></div>`:''}
+        ${r.flagged&&!isVoided?`<div style="font-size:11px;color:#3498db;margin-top:6px;background:#e8f4fd;border-radius:6px;padding:6px 8px;">Flagged by ${r.flaggedBy} on ${r.flaggedDate} ${r.flaggedTime||''}<br/><span style="font-style:italic;">"${r.flagNote}"</span></div>`:''}
+        ${!isVoided?`<div style="display:flex;gap:6px;margin-top:8px;">
+          ${canVoidHereBrush?`<button class="btn btn-red" style="font-size:10px;padding:5px 10px;" onclick="openVoidModal(${r.id},'brush')">🚫 Void</button>`:''}
+          ${canFlagHereBrush&&!isAdminOrOwner()&&!r.flagged?`<button class="btn" style="background:#3498db;font-size:10px;padding:5px 10px;" onclick="openFlagModal(${r.id},'brush')">🚩 Flag</button>`:''}
+        </div>`:''}
       </div>`;
     });
     html += `</div>`;
@@ -1830,6 +1843,7 @@ function recordBrushProcessing(){
   // Keere Wala → wastage (piece count + KG + Bhusa/Patti/Gitta split)
   if(wastageQty>0){
     state.wastage=[...(state.wastage||[]),{
+      id: Date.now()+Math.random(), time: new Date().toTimeString().slice(0,5), voided:false,
       date:today, batchNo:stock.batchNo, plankSizeName:stock.productName,
       woodPieceName:stock.productName, rejectedPieces:wastageQty, wastageKg:wastageKg,
       typeSplit: wasteTypeSplit,
@@ -2004,21 +2018,30 @@ function renderSocketDept(){
     html += `</div>`;
   }
 
-  // Recent Socket Processing (last 24 hours) — voidable
+  // Recent Socket Processing (last 24 hours) — flag then void, same mechanism as every other dept
   const recentSocketLog = (state.socketProcessingLog||[]).filter(r=>isWithin24Hours(r.date, r.time)).sort((a,b)=>b.id-a.id);
   if(recentSocketLog.length>0){
+    const canFlagHereSocket = canFlagInDept('Socket Dept');
     html += `<div class="card"><div class="label">📋 Recent Socket Processing (last 24 hours)</div>
-      <div style="font-size:11px;color:#888;margin-bottom:8px;">Entries older than 24 hours can no longer be voided by anyone.</div>`;
+      <div style="font-size:11px;color:#888;margin-bottom:8px;">Entries older than 24 hours can no longer be voided or flagged by anyone.</div>`;
     recentSocketLog.forEach(r=>{
       const isVoided = !!r.voided;
+      const canVoidHereSocket = isAdminOrOwner() ? !!r.flagged : canVoidInDept('Socket Dept');
       html += `<div class="prod-item" style="${isVoided?'opacity:0.55;':''}">
         <div style="display:flex;justify-content:space-between;align-items:center;">
           <div style="font-weight:600;${isVoided?'text-decoration:line-through;':''}">${r.date} ${r.time} — ${r.productName}</div>
-          ${isVoided?'<span style="font-size:10px;padding:2px 8px;border-radius:6px;background:#fdecea;color:#e74c3c;font-weight:700;">VOIDED</span>':''}
+          <div style="display:flex;gap:4px;">
+            ${isVoided?'<span style="font-size:10px;padding:2px 8px;border-radius:6px;background:#fdecea;color:#e74c3c;font-weight:700;">VOIDED</span>':''}
+            ${r.flagged&&!isVoided?'<span style="font-size:10px;padding:2px 8px;border-radius:6px;background:#e8f4fd;color:#3498db;font-weight:700;">🚩 FLAGGED</span>':''}
+          </div>
         </div>
         <div style="color:#666;font-size:11px;${isVoided?'text-decoration:line-through;':''}">${r.qty} pcs socketed — Batch ${r.fbBatchNo} (${r.socketQty} ${r.socketType} from ${r.socketBatchNo}, ${r.screwQty} screws from ${r.screwBatchNo})</div>
-        ${isVoided?`<div style="font-size:11px;color:#e74c3c;margin-top:6px;background:#fdecea;border-radius:6px;padding:6px 8px;">Voided by ${r.voidedBy} on ${r.voidedDate}<br/><span style="font-style:italic;">"${r.voidedReason}"</span></div>`
-          :`<button class="btn btn-red" style="font-size:10px;padding:5px 10px;margin-top:6px;" onclick="openVoidModal(${r.id},'socket')">🚫 Void</button>`}
+        ${isVoided?`<div style="font-size:11px;color:#e74c3c;margin-top:6px;background:#fdecea;border-radius:6px;padding:6px 8px;">Voided by ${r.voidedBy} on ${r.voidedDate}<br/><span style="font-style:italic;">"${r.voidedReason}"</span></div>`:''}
+        ${r.flagged&&!isVoided?`<div style="font-size:11px;color:#3498db;margin-top:6px;background:#e8f4fd;border-radius:6px;padding:6px 8px;">Flagged by ${r.flaggedBy} on ${r.flaggedDate} ${r.flaggedTime||''}<br/><span style="font-style:italic;">"${r.flagNote}"</span></div>`:''}
+        ${!isVoided?`<div style="display:flex;gap:6px;margin-top:8px;">
+          ${canVoidHereSocket?`<button class="btn btn-red" style="font-size:10px;padding:5px 10px;" onclick="openVoidModal(${r.id},'socket')">🚫 Void</button>`:''}
+          ${canFlagHereSocket&&!isAdminOrOwner()&&!r.flagged?`<button class="btn" style="background:#3498db;font-size:10px;padding:5px 10px;" onclick="openFlagModal(${r.id},'socket')">🚩 Flag</button>`:''}
+        </div>`:''}
       </div>`;
     });
     html += `</div>`;
@@ -2269,6 +2292,7 @@ function cleanupDeadEndScrap(){
     const rootBatchNo = s.batch.split('-Rejected-')[0].split('-Salvage-')[0].split('-Scrap-')[0];
     const isClosed = (state.closedBatches||[]).some(b=>b.batchNo===rootBatchNo);
     state.wastage=[...(state.wastage||[]),{
+      id: Date.now()+Math.random(), time: new Date().toTimeString().slice(0,5), voided:false,
       date:new Date().toISOString().slice(0,10),
       batchNo:rootBatchNo,
       plankSizeName:`${s.size}" pieces (auto-moved from dead-end scrap)`,
@@ -2391,14 +2415,14 @@ function renderWastage(){
   const typeColors = {Bhusa:'#8b6f47', Patti:'#e67e22', Gitta:'#5c3d1e'};
 
   // QC wastage — only show entries for OPEN batches (closed ones are merged into batch card)
-  const qcWastage=(state.wastage||[]).filter(w=>w.type==='QualityControl'&&w.status==='open');
+  const qcWastage=(state.wastage||[]).filter(w=>w.type==='QualityControl'&&w.status==='open'&&!w.voided);
   const qcTotalKg=qcWastage.reduce((s,w)=>s+(w.wastageKg||0),0);
 
   // Brush Dept wastage tied to a Wood Finishing batch that hasn't been closed yet — show separately
   // so it's not invisible while waiting, then it folds into the batch card automatically once closed.
   const closedBatchNos = new Set((state.closedBatches||[]).map(b=>b.batchNo));
   const pendingBrushWastage = (state.wastage||[]).filter(w=>w.type==='BrushDeptWastage' && !closedBatchNos.has(w.batchNo));
-  const pendingBrushWastageKg = pendingBrushWastage.reduce((s,w)=>s+(w.wastageKg||0),0);
+  const pendingBrushWastageKg = pendingBrushWastage.filter(w=>!w.voided).reduce((s,w)=>s+(w.wastageKg||0),0);
 
   let html=`<div class="card" style="background:#fff8f0;border:2px solid #e67e22;">
     <div class="label">🗑️ Wastage by Type</div>
@@ -2496,23 +2520,35 @@ function renderWastage(){
   }
 
   if(pendingBrushWastage.length>0){
+    const canFlagHereWastage = canFlagInDept('Wastage');
     html+=`<div class="card" style="border:2px solid #e67e22;">
       <div class="label" style="color:#e67e22;">🐛 Brush Dept Wastage (Keere Wala) — Batch Still Open</div>
-      <div style="font-size:12px;color:#888;margin-bottom:10px;">This will fold into the batch's total once its Wood Finishing batch is closed.</div>
-      ${pendingBrushWastage.map(w=>`
-        <div style="padding:8px;background:#fff3cd;border-radius:6px;margin-bottom:6px;border-left:3px solid #e67e22;">
+      <div style="font-size:12px;color:#888;margin-bottom:10px;">This will fold into the batch's total once its Wood Finishing batch is closed. Entries older than 24 hours can no longer be voided or flagged by anyone.</div>
+      ${pendingBrushWastage.map(w=>{
+        const isVoidedW = !!w.voided;
+        const withinWindow = isWithin24Hours(w.date, w.time);
+        const canVoidHereWastage = isAdminOrOwner() ? !!w.flagged : canVoidInDept('Wastage');
+        return `
+        <div style="padding:8px;background:${isVoidedW?'#f5f5f5':'#fff3cd'};border-radius:6px;margin-bottom:6px;border-left:3px solid ${isVoidedW?'#aaa':'#e67e22'};${isVoidedW?'opacity:0.6;':''}">
           <div class="row">
             <div>
-              <div style="font-size:13px;font-weight:700;">${w.batchNo}</div>
-              <div style="font-size:11px;color:#666;">${w.plankSizeName||w.woodPieceName}</div>
-              <div style="font-size:11px;color:#888;">${w.rejectedPieces||0} pcs · ${w.reason}</div>
+              <div style="font-size:13px;font-weight:700;${isVoidedW?'text-decoration:line-through;':''}">${w.batchNo}</div>
+              <div style="font-size:11px;color:#666;${isVoidedW?'text-decoration:line-through;':''}">${w.plankSizeName||w.woodPieceName}</div>
+              <div style="font-size:11px;color:#888;${isVoidedW?'text-decoration:line-through;':''}">${w.rejectedPieces||0} pcs · ${w.reason}</div>
             </div>
             <div style="text-align:right;">
-              <div style="font-size:18px;font-weight:700;color:#e67e22;">${(w.wastageKg||0).toFixed(1)} KG</div>
-              <div style="font-size:10px;color:#e67e22;">⏳ Batch Open</div>
+              <div style="font-size:18px;font-weight:700;color:#e67e22;${isVoidedW?'text-decoration:line-through;':''}">${(w.wastageKg||0).toFixed(1)} KG</div>
+              <div style="font-size:10px;color:${isVoidedW?'#e74c3c':'#e67e22'};">${isVoidedW?'🚫 VOIDED':'⏳ Batch Open'}</div>
             </div>
           </div>
-        </div>`).join('')}
+          ${w.flagged&&!isVoidedW?`<div style="font-size:11px;color:#3498db;margin-top:6px;background:#e8f4fd;border-radius:6px;padding:6px 8px;">🚩 Flagged by ${w.flaggedBy} on ${w.flaggedDate} ${w.flaggedTime||''}<br/><span style="font-style:italic;">"${w.flagNote}"</span></div>`:''}
+          ${isVoidedW?`<div style="font-size:11px;color:#e74c3c;margin-top:6px;">Voided by ${w.voidedBy} on ${w.voidedDate}<br/><span style="font-style:italic;">"${w.voidedReason}"</span></div>`:''}
+          ${!isVoidedW&&withinWindow&&w.id?`<div style="display:flex;gap:6px;margin-top:8px;">
+            ${canVoidHereWastage?`<button class="btn btn-red" style="font-size:10px;padding:5px 10px;" onclick="openVoidModal(${JSON.stringify(w.id)},'wastage')">🚫 Void</button>`:''}
+            ${canFlagHereWastage&&!isAdminOrOwner()&&!w.flagged?`<button class="btn" style="background:#3498db;font-size:10px;padding:5px 10px;" onclick="openFlagModal(${JSON.stringify(w.id)},'wastage')">🚩 Flag</button>`:''}
+          </div>`:''}
+        </div>`;
+      }).join('')}
       <div style="padding-top:8px;border-top:1px solid #f0e8de;font-size:12px;font-weight:700;color:#e67e22;">
         Total Pending: ${pendingBrushWastageKg.toFixed(1)} KG
       </div>
@@ -2599,18 +2635,29 @@ function renderWastage(){
       ${(() => {
         const batchQcEntries = (state.wastage||[]).filter(w=>w.batchNo===b.batchNo&&(w.type==='QualityControl'||w.type==='ManualClose'||w.type==='BrushDeptWastage'));
         if(batchQcEntries.length===0) return '';
+        const canFlagHereWastage2 = canFlagInDept('Wastage');
         return `<details style="margin-bottom:10px;font-size:11px;">
           <summary style="cursor:pointer;color:#7a5230;font-weight:700;">📋 View ${batchQcEntries.length} rejection record${batchQcEntries.length>1?'s':''} (total ${b.qcWastageKg||0} KG)</summary>
           <div style="margin-top:6px;background:#f9f5f0;border-radius:6px;padding:8px;">
-            ${batchQcEntries.map(w=>`
-              <div style="padding:4px 0;border-bottom:1px solid #f0e8de;">
+            <div style="color:#aaa;font-size:10px;margin-bottom:6px;">Voiding a record here removes it from the live Wastage tab totals, but this batch's own KG summary above was fixed when the batch closed and won't recalculate.</div>
+            ${batchQcEntries.map(w=>{
+              const isVoidedW2 = !!w.voided;
+              const withinWindow2 = isWithin24Hours(w.date, w.time);
+              const canVoidHereWastage2 = isAdminOrOwner() ? !!w.flagged : canVoidInDept('Wastage');
+              return `
+              <div style="padding:4px 0;border-bottom:1px solid #f0e8de;${isVoidedW2?'opacity:0.55;':''}">
                 <div style="display:flex;justify-content:space-between;">
-                  <span>${w.woodPieceName||'—'} · ${w.rejectedPieces||0} pcs · ${w.reason||'—'}</span>
-                  <span style="font-weight:700;color:#e74c3c;">${(w.wastageKg||0).toFixed(1)} KG</span>
+                  <span style="${isVoidedW2?'text-decoration:line-through;':''}">${w.woodPieceName||'—'} · ${w.rejectedPieces||0} pcs · ${w.reason||'—'}</span>
+                  <span style="font-weight:700;color:#e74c3c;${isVoidedW2?'text-decoration:line-through;':''}">${(w.wastageKg||0).toFixed(1)} KG</span>
                 </div>
                 ${w.typeSplit?`<div style="color:#888;font-size:10px;">${WASTE_TYPES.map(t=>w.typeSplit[t]?t+': '+w.typeSplit[t].toFixed(1)+'KG':'').filter(Boolean).join(' · ')}</div>`:''}
-                <div style="color:#aaa;font-size:10px;">${w.date||''}</div>
-              </div>`).join('')}
+                <div style="color:#aaa;font-size:10px;">${w.date||''} ${isVoidedW2?' · 🚫 VOIDED':(w.flagged?' · 🚩 FLAGGED':'')}</div>
+                ${!isVoidedW2&&withinWindow2&&w.id&&(canVoidHereWastage2||(canFlagHereWastage2&&!isAdminOrOwner()&&!w.flagged))?`<div style="display:flex;gap:6px;margin-top:4px;">
+                  ${canVoidHereWastage2?`<button class="btn btn-red" style="font-size:9px;padding:3px 8px;" onclick="openVoidModal(${JSON.stringify(w.id)},'wastage')">🚫 Void</button>`:''}
+                  ${canFlagHereWastage2&&!isAdminOrOwner()&&!w.flagged?`<button class="btn" style="background:#3498db;font-size:9px;padding:3px 8px;" onclick="openFlagModal(${JSON.stringify(w.id)},'wastage')">🚩 Flag</button>`:''}
+                </div>`:''}
+              </div>`;
+            }).join('')}
           </div>
         </details>`;
       })()}
@@ -2960,10 +3007,11 @@ function renderLedger(){
 
 function renderSales(){
   const sales = [...(state.sales||[])].sort((a,b)=>b.datetime.localeCompare(a.datetime));
-  const totalRevenue = sales.reduce((s,x)=>s+x.totalAmount,0);
-  const totalReceived = sales.reduce((s,x)=>s+x.amountReceived,0);
-  const totalKgSold = sales.reduce((s,x)=>s+x.kgSold,0);
-  const totalOwedToOwner = sales.reduce((s,x)=>s+Math.max(0,(x.amountReceived||0)-(x.ownerReceivedAmount||0)),0);
+  const activeSales = sales.filter(s=>!s.voided);
+  const totalRevenue = activeSales.reduce((s,x)=>s+x.totalAmount,0);
+  const totalReceived = activeSales.reduce((s,x)=>s+x.amountReceived,0);
+  const totalKgSold = activeSales.reduce((s,x)=>s+x.kgSold,0);
+  const totalOwedToOwner = activeSales.reduce((s,x)=>s+Math.max(0,(x.amountReceived||0)-(x.ownerReceivedAmount||0)),0);
 
   let html=`<div class="card" style="border:2px solid #27ae60;background:#f0fff4;">
     <div class="label">💰 Sales Report</div>
@@ -2997,7 +3045,7 @@ function renderSales(){
   html+=`<div class="card" style="border:1px solid #d4b896;">
     <div class="label">🗑️ By Wastage Type</div>`;
   WASTE_TYPES.forEach(t=>{
-    const ts = sales.filter(s=>s.wasteType===t);
+    const ts = activeSales.filter(s=>s.wasteType===t);
     if(ts.length===0) return;
     const tTotal = ts.reduce((s,x)=>s+x.totalAmount,0);
     const tKg = ts.reduce((s,x)=>s+x.kgSold,0);
@@ -3013,11 +3061,11 @@ function renderSales(){
   html+=`</div>`;
 
   // Group by buyer
-  const buyers = [...new Set(sales.map(s=>s.buyer))];
+  const buyers = [...new Set(activeSales.map(s=>s.buyer))];
   html+=`<div class="card" style="border:1px solid #d4b896;">
     <div class="label">📊 By Buyer</div>`;
   buyers.forEach(buyer=>{
-    const bs = sales.filter(s=>s.buyer===buyer);
+    const bs = activeSales.filter(s=>s.buyer===buyer);
     const bTotal = bs.reduce((s,x)=>s+x.totalAmount,0);
     const bReceived = bs.reduce((s,x)=>s+x.amountReceived,0);
     const bPending = bs.reduce((s,x)=>s+x.pendingAmount,0);
@@ -3034,9 +3082,12 @@ function renderSales(){
   html+=`</div>`;
 
   // All transactions
-  html+=`<div class="card"><div class="label">🧾 All Transactions</div>`;
+  html+=`<div class="card"><div class="label">🧾 All Transactions</div>
+    <div style="font-size:11px;color:#888;margin-bottom:8px;">Entries older than 24 hours can no longer be voided or flagged by anyone.</div>`;
   const isOwner = currentUser?.role==='owner';
+  const canFlagHereSales = canFlagInDept('Sales');
   sales.forEach((s,idx)=>{
+    const isVoidedSale = !!s.voided;
     const payColor = s.payment==='Paid'?'#27ae60':s.payment==='Unpaid'?'#e74c3c':'#e67e22';
     const payIcon = s.payment==='Paid'?'✅':s.payment==='Unpaid'?'❌':'⏳';
     const realIdx = (state.sales||[]).findIndex(x=>x.id===s.id);
@@ -3045,21 +3096,26 @@ function renderSales(){
     const receivedByOwner = s.ownerReceivedAmount||0;
     const owedToOwner = Math.max(0, collectedByAccountant - receivedByOwner);
     // Button only makes sense once accountant has actually collected something (Paid/Partial) —
-    // nothing to hand over to owner if buyer hasn't paid the accountant yet (Unpaid).
-    const showCashBtn = isOwner && (s.payment==='Paid'||s.payment==='Partial') && owedToOwner>0.001;
-    html+=`<div style="padding:10px 0;border-bottom:1px solid #f0e8de;">
+    // nothing to hand over to owner if buyer hasn't paid the accountant yet (Unpaid). Also hidden
+    // once a sale is voided — nothing further should happen against a reversed transaction.
+    const showCashBtn = isOwner && !isVoidedSale && (s.payment==='Paid'||s.payment==='Partial') && owedToOwner>0.001;
+    const withinWindowSale = isWithin24Hours(s.date, s.time);
+    const canVoidHereSales = isAdminOrOwner() ? !!s.flagged : canVoidInDept('Sales');
+    html+=`<div style="padding:10px 0;border-bottom:1px solid #f0e8de;${isVoidedSale?'opacity:0.55;':''}">
       <div class="row" style="margin-bottom:4px;">
         <div>
-          <div style="font-size:13px;font-weight:700;">${s.buyer}</div>
+          <div style="font-size:13px;font-weight:700;${isVoidedSale?'text-decoration:line-through;':''}">${s.buyer}</div>
           <div style="font-size:11px;color:${typeColors[s.wasteType]||'#666'};font-weight:700;">${s.wasteType||'—'} · ${s.date}</div>
         </div>
         <div style="text-align:right;">
-          <div style="font-size:14px;font-weight:700;color:#27ae60;">Rs.${s.totalAmount.toFixed(0)}</div>
-          <div style="font-size:10px;color:${payColor};font-weight:700;">${payIcon} ${s.payment}</div>
+          <div style="font-size:14px;font-weight:700;color:#27ae60;${isVoidedSale?'text-decoration:line-through;':''}">Rs.${s.totalAmount.toFixed(0)}</div>
+          <div style="font-size:10px;color:${isVoidedSale?'#e74c3c':payColor};font-weight:700;">${isVoidedSale?'🚫 VOIDED':`${payIcon} ${s.payment}`}</div>
         </div>
       </div>
-        <div style="font-size:11px;color:#888;">${s.kgSold} KG @ Rs.${s.pricePerKg}/KG</div>
-      ${isOwner && collectedByAccountant>0?`
+        <div style="font-size:11px;color:#888;${isVoidedSale?'text-decoration:line-through;':''}">${s.kgSold} KG @ Rs.${s.pricePerKg}/KG</div>
+      ${s.flagged&&!isVoidedSale?`<div style="font-size:11px;color:#3498db;margin-top:6px;background:#e8f4fd;border-radius:6px;padding:6px 8px;">🚩 Flagged by ${s.flaggedBy} on ${s.flaggedDate} ${s.flaggedTime||''}<br/><span style="font-style:italic;">"${s.flagNote}"</span></div>`:''}
+      ${isVoidedSale?`<div style="font-size:11px;color:#e74c3c;margin-top:6px;">Voided by ${s.voidedBy} on ${s.voidedDate}<br/><span style="font-style:italic;">"${s.voidedReason}"</span></div>`:''}
+      ${isOwner && collectedByAccountant>0 && !isVoidedSale?`
       <div style="display:flex;gap:8px;margin-top:8px;">
         <div style="flex:1;background:#e8f5e9;border-radius:8px;padding:10px;text-align:center;">
           <div style="font-size:10px;color:#27ae60;font-weight:700;">HANDED TO YOU</div>
@@ -3082,6 +3138,10 @@ function renderSales(){
       ${showCashBtn?`
       <button class="btn btn-green" style="font-size:11px;padding:6px 12px;margin-top:6px;" onclick="openCashReceivedModal(${realIdx})">💵 Cash Received</button>
       `:''}
+      ${!isVoidedSale&&withinWindowSale?`<div style="display:flex;gap:6px;margin-top:8px;">
+        ${canVoidHereSales?`<button class="btn btn-red" style="font-size:10px;padding:5px 10px;" onclick="openVoidModal(${JSON.stringify(s.id)},'sales')">🚫 Void</button>`:''}
+        ${canFlagHereSales&&!isAdminOrOwner()&&!s.flagged?`<button class="btn" style="background:#3498db;font-size:10px;padding:5px 10px;" onclick="openFlagModal(${JSON.stringify(s.id)},'sales')">🚩 Flag</button>`:''}
+      </div>`:''}
     </div>`;
   });
   html+=`</div>`;
@@ -3094,6 +3154,7 @@ function renderSales(){
 function getWasteTypeStock(){
   const produced = {Bhusa:0, Patti:0, Gitta:0};
   (state.wastage||[]).forEach(w=>{
+    if(w.voided) return;
     if(w.typeSplit){
       WASTE_TYPES.forEach(t=>{ produced[t] += (w.typeSplit[t]||0); });
     } else if((w.wastageKg||0)>0){
@@ -3104,6 +3165,7 @@ function getWasteTypeStock(){
   });
   const sold = {Bhusa:0, Patti:0, Gitta:0};
   (state.sales||[]).forEach(s=>{
+    if(s.voided) return;
     if(s.wasteType && sold[s.wasteType]!==undefined) sold[s.wasteType] += (s.kgSold||0);
   });
   const available = {};
@@ -3171,10 +3233,11 @@ function confirmSale(){
   const preSnapshot = takeSnapshot(['sales']);
   // Every wastage sale is paid in full at the time of recording — no credit sales.
   state.sales=[...(state.sales||[]),{
-    id:Date.now(), wasteType,
+    id:Date.now()+Math.random(), wasteType,
     buyer, kgSold:kg, pricePerKg:price, totalAmount,
     amountReceived:totalAmount, pendingAmount:0,
-    payment:'Paid', date, datetime:new Date().toISOString()
+    payment:'Paid', date, time: new Date().toTimeString().slice(0,5), datetime:new Date().toISOString(),
+    voided:false
   }];
   document.getElementById('saleModal').classList.add('hidden');
   state.saleModal=null;
@@ -3571,13 +3634,20 @@ function applyVoidToRun(runId, reason){
 }
 
 function findVoidableEntry(kind, id){
+  if(id===undefined || id===null) return null;
   if(kind==='brush') return (state.brushProcessingLog||[]).find(r=>r.id===id);
   if(kind==='socket') return (state.socketProcessingLog||[]).find(r=>r.id===id);
+  if(kind==='wastage') return (state.wastage||[]).find(r=>r.id===id);
+  if(kind==='sales') return (state.sales||[]).find(r=>r.id===id);
   const found = findRunEverywhere(id);
   return found.production || found.openRun || found.closedRun;
 }
 function deptForVoidKind(kind){
-  return kind==='brush' ? 'Brush Dept' : kind==='socket' ? 'Socket Dept' : 'Wood Finishing';
+  if(kind==='brush') return 'Brush Dept';
+  if(kind==='socket') return 'Socket Dept';
+  if(kind==='wastage') return 'Wastage';
+  if(kind==='sales') return 'Sales';
+  return 'Wood Finishing';
 }
 
 // Voiding a Brush Dept entry cascades forward into Socket Dept (Ready for Sale), but does NOT
@@ -3695,15 +3765,49 @@ function applyVoidToSocketRun(runId, reason){
   return summary;
 }
 
-function applyFlagToRun(runId, note){
+// Voiding a Wastage log entry doesn't need to restore any stock — recording wastage never
+// removed anything from a sellable pool, it only added to the wastage tally. So voiding it
+// just marks it voided and it drops out of the live "produced" total in getWasteTypeStock().
+// Note: if this entry's parent batch has already been closed, the batch card's own frozen
+// KG totals (set at close time) won't retroactively update — only the live Wastage tab totals do.
+function applyVoidToWastageEntry(id, reason){
   const by = currentUser?.loginName || currentUser?.name || 'Unknown';
   const date = new Date().toISOString().slice(0,10);
   const time = new Date().toTimeString().slice(0,5);
-  const found = findRunEverywhere(runId);
-  [found.production, found.openRun, found.closedRun].forEach(r=>{
-    if(!r) return;
-    r.flagged = true; r.flagNote = note; r.flaggedBy = by; r.flaggedDate = date; r.flaggedTime = time;
-  });
+  const entry = (state.wastage||[]).find(w=>w.id===id);
+  if(!entry || entry.voided) return null;
+  entry.voided = true; entry.voidedBy = by; entry.voidedReason = reason; entry.voidedDate = date; entry.voidedTime = time;
+  return { wastageEntryKgRemoved: entry.wastageKg||0, wasteType: null };
+}
+
+// Voiding a Sale reverses it out of revenue/collection totals and frees the KG it sold back
+// up as available wastage stock — both handled automatically since getWasteTypeStock() and
+// the Sales tab totals recompute live from state.sales, skipping voided entries.
+function applyVoidToSaleEntry(id, reason){
+  const by = currentUser?.loginName || currentUser?.name || 'Unknown';
+  const date = new Date().toISOString().slice(0,10);
+  const time = new Date().toTimeString().slice(0,5);
+  const entry = (state.sales||[]).find(s=>s.id===id);
+  if(!entry || entry.voided) return null;
+  entry.voided = true; entry.voidedBy = by; entry.voidedReason = reason; entry.voidedDate = date; entry.voidedTime = time;
+  return { saleKgRestored: entry.kgSold||0, saleAmountReversed: entry.totalAmount||0, wasteType: entry.wasteType };
+}
+
+// ==================== FLAG (works across every kind: wood/brush/socket/wastage/sales) ====================
+function applyFlagToKind(kind, runId, note){
+  const by = currentUser?.loginName || currentUser?.name || 'Unknown';
+  const date = new Date().toISOString().slice(0,10);
+  const time = new Date().toTimeString().slice(0,5);
+  if(kind==='wood' || !kind){
+    const found = findRunEverywhere(runId);
+    [found.production, found.openRun, found.closedRun].forEach(r=>{
+      if(!r) return;
+      r.flagged = true; r.flagNote = note; r.flaggedBy = by; r.flaggedDate = date; r.flaggedTime = time;
+    });
+    return;
+  }
+  const r = findVoidableEntry(kind, runId);
+  if(r){ r.flagged = true; r.flagNote = note; r.flaggedBy = by; r.flaggedDate = date; r.flaggedTime = time; }
 }
 
 function openVoidModal(runId, kind){
@@ -3714,6 +3818,15 @@ function openVoidModal(runId, kind){
     return;
   }
   const dept = deptForVoidKind(kind);
+  // Every department follows the same rule: Admin/Owner only get to void an entry after
+  // someone with flag permission (e.g. Production Manager, Accountant) has flagged it for
+  // review — they don't have blanket void access anywhere. Other roles with an explicit
+  // canVoid permission for this dept can still self-void within their own daily cap,
+  // independent of flagging.
+  if(isAdminOrOwner() && !run0.flagged){
+    alert("This entry hasn't been flagged for review yet. Ask the department to flag it first — Admin/Owner can only void entries once they've been flagged.");
+    return;
+  }
   if(!isAdminOrOwner() && !canVoidInDept(dept)){
     alert("You don't have permission to void entries in this department.");
     return;
@@ -3727,6 +3840,8 @@ function openVoidModal(runId, kind){
   if(kind==='wood') subText = `${run0.date} ${run0.time||''} — ${run0.woodPieceName} — ${run0.planksUsed} planks, ${run0.piecesProduced} good pcs`;
   else if(kind==='brush') subText = `${run0.date} ${run0.time||''} — ${run0.productName} — ${run0.qty} pcs (Batch ${run0.fbBatchNo})`;
   else if(kind==='socket') subText = `${run0.date} ${run0.time||''} — ${run0.productName} — ${run0.qty} pcs socketed (Batch ${run0.fbBatchNo})`;
+  else if(kind==='wastage') subText = `${run0.date} ${run0.time||''} — ${run0.batchNo||'—'} — ${(run0.wastageKg||0).toFixed(1)} KG (${run0.reason||'—'})`;
+  else if(kind==='sales') subText = `${run0.date} ${run0.time||''} — ${run0.buyer} — ${run0.kgSold} KG of ${run0.wasteType} for Rs.${(run0.totalAmount||0).toFixed(0)}`;
   document.getElementById('voidModalSub').textContent = subText;
   document.getElementById('voidReason').value = '';
   document.getElementById('voidErr').classList.add('hidden');
@@ -3738,6 +3853,8 @@ function formatVoidSummary(summary){
   if(summary.plankRestoreMethod) msg += `${summary.plankRestoreMethod}\n`;
   if(summary.woodRestored>0) msg += `${summary.woodRestored} pcs will be restored to Wood Finishing output stock.\n`;
   if(summary.socketsRestored>0 || summary.screwsRestored>0) msg += `Restored: ${summary.socketsRestored} sockets, ${summary.screwsRestored} screws.\n`;
+  if(summary.wastageEntryKgRemoved>0) msg += `${summary.wastageEntryKgRemoved.toFixed(1)} KG of ${summary.wasteType||'wastage'} will be removed from the wastage tally.\n`;
+  if(summary.saleKgRestored>0) msg += `${summary.saleKgRestored} KG of ${summary.wasteType||'wastage'} will be added back to available wastage stock (Rs.${(summary.saleAmountReversed||0).toFixed(0)} removed from revenue).\n`;
   const parts = [];
   if(summary.finishedRemoved>0) parts.push(`${summary.finishedRemoved} pcs removed from Wood Finishing output`);
   if(summary.brushRemoved>0) parts.push(`${summary.brushRemoved} pcs removed from Brush Dept stock`);
@@ -3766,13 +3883,15 @@ function previewVoid(){
 
   const cloneKeys = ['materials','finishedInventory','finishedBrushes','readyForSale','socketInventory','screwInventory',
     'scrapInventory','production','openBatches','closedBatches','brushProcessingLog','socketProcessingLog',
-    'batchGenealogy','ledger'];
+    'batchGenealogy','ledger','wastage','sales'];
   const backup = {};
   cloneKeys.forEach(k=>{ backup[k]=state[k]; if(state[k]!==undefined) state[k]=JSON.parse(JSON.stringify(state[k])); });
 
   let summary;
   if(kind==='brush') summary = applyVoidToBrushRun(target.runId, reason);
   else if(kind==='socket') summary = applyVoidToSocketRun(target.runId, reason);
+  else if(kind==='wastage') summary = applyVoidToWastageEntry(target.runId, reason);
+  else if(kind==='sales') summary = applyVoidToSaleEntry(target.runId, reason);
   else summary = applyVoidToRun(target.runId, reason);
   const brushVoidedCount = (state.brushProcessingLog||[]).filter(r=>r.voided && (r.voidedReason===reason)).length;
   const socketVoidedCount = (state.socketProcessingLog||[]).filter(r=>r.voided && (r.voidedReason===reason)).length;
@@ -3807,6 +3926,8 @@ function confirmVoidFinal(){
   let summary;
   if(kind==='brush') summary = applyVoidToBrushRun(target.runId, reason);
   else if(kind==='socket') summary = applyVoidToSocketRun(target.runId, reason);
+  else if(kind==='wastage') summary = applyVoidToWastageEntry(target.runId, reason);
+  else if(kind==='sales') summary = applyVoidToSaleEntry(target.runId, reason);
   else summary = applyVoidToRun(target.runId, reason);
 
   logVoidUsage(target.dept);
@@ -3816,24 +3937,26 @@ function confirmVoidFinal(){
   saveAll(); re();
 }
 
-function openFlagModal(runId){
-  const found0 = findRunEverywhere(runId);
-  const run0 = found0.production || found0.openRun || found0.closedRun;
+function openFlagModal(runId, kind){
+  kind = kind || 'wood';
+  const run0 = findVoidableEntry(kind, runId);
   if(!run0 || !isWithin24Hours(run0.date, run0.time)){
     alert("⏰ This entry is more than 24 hours old and can no longer be flagged.");
     return;
   }
-  const dept = 'Wood Finishing';
+  const dept = deptForVoidKind(kind);
   if(!isAdminOrOwner() && !canFlagInDept(dept)){
     alert("You don't have permission to flag entries in this department.");
     return;
   }
-  state.flagTarget = {runId};
-  const found = findRunEverywhere(runId);
-  const run = found.production || found.openRun || found.closedRun;
-  document.getElementById('flagModalSub').textContent = run
-    ? `${run.date} ${run.time||''} — ${run.woodPieceName} — ${run.planksUsed} planks, ${run.piecesProduced} good pcs`
-    : '';
+  state.flagTarget = {runId, kind};
+  let subText = '';
+  if(kind==='wood') subText = `${run0.date} ${run0.time||''} — ${run0.woodPieceName} — ${run0.planksUsed} planks, ${run0.piecesProduced} good pcs`;
+  else if(kind==='brush') subText = `${run0.date} ${run0.time||''} — ${run0.productName} — ${run0.qty} pcs (Batch ${run0.fbBatchNo})`;
+  else if(kind==='socket') subText = `${run0.date} ${run0.time||''} — ${run0.productName} — ${run0.qty} pcs socketed (Batch ${run0.fbBatchNo})`;
+  else if(kind==='wastage') subText = `${run0.date} ${run0.time||''} — ${run0.batchNo||'—'} — ${(run0.wastageKg||0).toFixed(1)} KG (${run0.reason||'—'})`;
+  else if(kind==='sales') subText = `${run0.date} ${run0.time||''} — ${run0.buyer} — ${run0.kgSold} KG of ${run0.wasteType} for Rs.${(run0.totalAmount||0).toFixed(0)}`;
+  document.getElementById('flagModalSub').textContent = subText;
   document.getElementById('flagNote').value = '';
   document.getElementById('flagErr').classList.add('hidden');
   document.getElementById('flagModal').classList.remove('hidden');
@@ -3846,7 +3969,7 @@ function confirmFlag(){
   const err = document.getElementById('flagErr');
   if(!note){ err.textContent="⚠️ Please describe what looks wrong"; err.classList.remove('hidden'); return; }
 
-  applyFlagToRun(target.runId, note);
+  applyFlagToKind(target.kind||'wood', target.runId, note);
 
   document.getElementById('flagModal').classList.add('hidden');
 
@@ -4264,7 +4387,7 @@ function renderAdminPanel(){
   const DEPT_TABS = ["Wood Finishing","Brush Dept","Socket Dept","Wastage","Sales","Materials"];
   html+=`<div class="card" style="border:2px solid #9b59b6;">
     <div class="label" style="color:#9b59b6;">🚫 Void &amp; Flag Permissions</div>
-    <div style="font-size:11px;color:#888;margin-bottom:12px;">Control who can void their own entries (with a daily cap) and who can flag entries for your review. Admin and Owner always have full access, so they aren't listed here.</div>`;
+    <div style="font-size:11px;color:#888;margin-bottom:12px;">Control who can void their own entries (with a daily cap) and who can flag entries for Admin/Owner review. Admin and Owner can always flag and void anything — but only once it's been flagged; they aren't listed here since that access isn't per-user.</div>`;
   const nonAdminUsers = users.filter(u=>u.role!=='admin'&&u.role!=='owner');
   if(nonAdminUsers.length===0){
     html+=`<div style="color:#aaa;font-size:12px;">No employees to configure yet.</div>`;
