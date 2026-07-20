@@ -556,6 +556,8 @@ function showOfflineWarning(){
 function emptyMats(){return{"12":{name:'Wooden Planks 12"',size:12,low:50,batches:[]},"24":{name:'Wooden Planks 24"',size:24,low:30,batches:[]},"36":{name:'Wooden Planks 36"',size:36,low:20,batches:[]}};}
 
 let currentUser = null; // logged in user
+const IDLE_TIMEOUT_MS = 5*60*1000; // auto-logout after 5 minutes of no activity
+let idleTimer = null;
 
 
 let state = {
@@ -1699,7 +1701,7 @@ function renderBrushDept(){
   const brushes = state.finishedBrushes||[];
   if(brushes.length>0){
     html += `<div class="card" style="border:2px solid #27ae60;">
-      <div class="label" style="color:#27ae60;">✅ Finished Brushes Ready</div>`;
+      <div class="label" style="color:#27ae60;">✅ Brushed Stock — Ready for Socket</div>`;
     brushes.forEach(b=>{
       html += `<div style="display:flex;justify-content:space-between;font-size:12px;padding:5px 0;border-bottom:1px solid #f0e8de;">
         <span>${b.productName} — ${b.batchNo}</span>
@@ -1851,29 +1853,30 @@ function recordBrushProcessing(){
     }];
   }
 
-  // Brush Machine → finished brushes stock (gets its own FB batch number, tracing back to the wood batch)
+  // Brush Machine → brushed stock (gets its own BB batch number, tracing back to the wood batch).
+  // This is pre-socket, not yet the final product — it only becomes an FB (Finished) batch
+  // once it's actually gone through Socket Dept and is ready for sale.
   if(brushMachine>0){
     const idx=(state.finishedBrushes||[]).findIndex(b=>b.productName===stock.productName&&b.sourceBatch===stock.batchNo);
-    let fbNo;
+    let bbNo;
     if(idx>=0){
       state.finishedBrushes[idx].qty += brushMachine;
-      fbNo = state.finishedBrushes[idx].batchNo;
+      bbNo = state.finishedBrushes[idx].batchNo;
     } else {
-      fbNo = getNextBatchNo('FB');
+      bbNo = getNextBatchNo('BB');
       state.finishedBrushes=[...(state.finishedBrushes||[]),{
-        id:Date.now()+Math.random(), productName:stock.productName, batchNo:fbNo, sourceBatch:stock.batchNo,
+        id:Date.now()+Math.random(), productName:stock.productName, batchNo:bbNo, sourceBatch:stock.batchNo,
         qty:brushMachine, dateAdded:today
       }];
       state.batchGenealogy = state.batchGenealogy||{};
-      state.batchGenealogy[fbNo] = {
-        productName:stock.productName, sourceWoodBatch:stock.batchNo, dateCreated:today,
-        socketUsage:[], screwUsage:[]
+      state.batchGenealogy[bbNo] = {
+        productName:stock.productName, sourceWoodBatch:stock.batchNo, dateCreated:today
       };
     }
-    addLedgerEntry('finished', stock.productName+' (Brush)', fbNo, brushMachine, 'IN', `Brush machine output from ${total} processed (Wood Batch ${stock.batchNo})`, '');
+    addLedgerEntry('finished', stock.productName+' (Brush)', bbNo, brushMachine, 'IN', `Brush machine output from ${total} processed (Wood Batch ${stock.batchNo})`, '');
     state.brushProcessingLog = [...(state.brushProcessingLog||[]), {
       id: Date.now()+Math.random(), date: today, time: new Date().toTimeString().slice(0,5),
-      productName: stock.productName, sourceBatch: stock.batchNo, fbBatchNo: fbNo,
+      productName: stock.productName, sourceBatch: stock.batchNo, fbBatchNo: bbNo,
       qty: brushMachine, voided:false
     }];
   }
@@ -1940,7 +1943,7 @@ function renderSocketDept(){
 
   // Available finished brushes to select from
   html += `<div class="card">
-    <div class="label">🪥 Finished Brushes (from Brush Dept)</div>`;
+    <div class="label">🪥 Brushed Stock (from Brush Dept)</div>`;
   if(brushes.length===0){
     html += `<div style="font-size:12px;color:#aaa;">No finished brushes available yet. Process some in Brush Dept first.</div>`;
   } else {
@@ -2035,7 +2038,7 @@ function renderSocketDept(){
             ${r.flagged&&!isVoided?'<span style="font-size:10px;padding:2px 8px;border-radius:6px;background:#e8f4fd;color:#3498db;font-weight:700;">🚩 FLAGGED</span>':''}
           </div>
         </div>
-        <div style="color:#666;font-size:11px;${isVoided?'text-decoration:line-through;':''}">${r.qty} pcs socketed — Batch ${r.fbBatchNo} (${r.socketQty} ${r.socketType} from ${r.socketBatchNo}, ${r.screwQty} screws from ${r.screwBatchNo})</div>
+        <div style="color:#666;font-size:11px;${isVoided?'text-decoration:line-through;':''}">${r.qty} pcs socketed — from Batch ${r.fbBatchNo} → Batch ${r.outputBatchNo||r.fbBatchNo} (${r.socketQty} ${r.socketType} from ${r.socketBatchNo}, ${r.screwQty} screws from ${r.screwBatchNo})</div>
         ${isVoided?`<div style="font-size:11px;color:#e74c3c;margin-top:6px;background:#fdecea;border-radius:6px;padding:6px 8px;">Voided by ${r.voidedBy} on ${r.voidedDate}<br/><span style="font-style:italic;">"${r.voidedReason}"</span></div>`:''}
         ${r.flagged&&!isVoided?`<div style="font-size:11px;color:#3498db;margin-top:6px;background:#e8f4fd;border-radius:6px;padding:6px 8px;">Flagged by ${r.flaggedBy} on ${r.flaggedDate} ${r.flaggedTime||''}<br/><span style="font-style:italic;">"${r.flagNote}"</span></div>`:''}
         ${!isVoided?`<div style="display:flex;gap:6px;margin-top:8px;">
@@ -2148,34 +2151,41 @@ function recordSocketProcessing(){
     s.batchNo===screwBatchNo ? {...s, qty:s.qty-screwsNeeded} : s
   ).filter(s=>s.qty>0);
 
-  // Record usage against this FB batch's genealogy (defensive init for older entries pre-dating this feature)
+  // Find or mint the FB (Finished — truly ready for sale) batch this socket run contributes to.
+  // Each BB batch gets its own FB number the first time it's socketed; further socket runs
+  // against the SAME BB batch reuse that same FB number rather than minting a new one each time.
   state.batchGenealogy = state.batchGenealogy||{};
-  if(!state.batchGenealogy[stock.batchNo]){
-    state.batchGenealogy[stock.batchNo] = {
-      productName:stock.productName, sourceWoodBatch:stock.sourceBatch||'', dateCreated:today,
+  let fbNo = Object.keys(state.batchGenealogy).find(k=>{
+    const g = state.batchGenealogy[k];
+    return g && g.sourceBrushBatch===stock.batchNo && g.productName===stock.productName;
+  });
+  if(!fbNo){
+    fbNo = getNextBatchNo('FB');
+    state.batchGenealogy[fbNo] = {
+      productName:stock.productName, sourceBrushBatch:stock.batchNo, dateCreated:today,
       socketUsage:[], screwUsage:[]
     };
   }
-  state.batchGenealogy[stock.batchNo].socketUsage.push({batchNo:socketBatchNo, socketType, qty:socketsNeeded, date:today});
-  state.batchGenealogy[stock.batchNo].screwUsage.push({batchNo:screwBatchNo, qty:screwsNeeded, date:today});
+  state.batchGenealogy[fbNo].socketUsage.push({batchNo:socketBatchNo, socketType, qty:socketsNeeded, date:today});
+  state.batchGenealogy[fbNo].screwUsage.push({batchNo:screwBatchNo, qty:screwsNeeded, date:today});
 
-  // Add to Ready for Sale stock
-  const idx=(state.readyForSale||[]).findIndex(r=>r.productName===stock.productName&&r.batchNo===stock.batchNo);
+  // Add to Ready for Sale stock, under the newly-minted (or reused) FB number
+  const idx=(state.readyForSale||[]).findIndex(r=>r.productName===stock.productName&&r.batchNo===fbNo);
   if(idx>=0){ state.readyForSale[idx].qty += qty; }
   else{
     state.readyForSale=[...(state.readyForSale||[]),{
-      id:Date.now()+Math.random(), productName:stock.productName, batchNo:stock.batchNo, qty, dateAdded:today
+      id:Date.now()+Math.random(), productName:stock.productName, batchNo:fbNo, qty, dateAdded:today
     }];
   }
 
   addLedgerEntry('finished', stock.productName, stock.batchNo, qty, 'OUT', `Sent to Socket Dept (used ${socketsNeeded} ${socketType} from ${socketBatchNo}, ${screwsNeeded} screws from ${screwBatchNo})`, '');
-  addLedgerEntry('finished', stock.productName+' (Ready for Sale)', stock.batchNo, qty, 'IN', `Socket + screws attached — ready for sale`, '');
+  addLedgerEntry('finished', stock.productName+' (Ready for Sale)', fbNo, qty, 'IN', `Socket + screws attached — ready for sale (from Brush Batch ${stock.batchNo})`, '');
   addLedgerEntry('socket', socketType, socketBatchNo, socketsNeeded, 'OUT', `Used on ${stock.productName} — Batch ${stock.batchNo}`, '');
   addLedgerEntry('screw', 'Screws', screwBatchNo, screwsNeeded, 'OUT', `Used on ${stock.productName} — Batch ${stock.batchNo}`, '');
 
   state.socketProcessingLog = [...(state.socketProcessingLog||[]), {
     id: Date.now()+Math.random(), date: today, time: new Date().toTimeString().slice(0,5),
-    productName: stock.productName, fbBatchNo: stock.batchNo, qty,
+    productName: stock.productName, fbBatchNo: stock.batchNo, outputBatchNo: fbNo, qty,
     socketType, socketBatchNo, socketQty: socketsNeeded,
     screwBatchNo, screwQty: screwsNeeded, voided:false
   }];
@@ -2384,17 +2394,25 @@ mergeDuplicateClosedBatches();
   });
   if(usersChanged) saveAll();
 
-  // Check if user was already logged in (persists across refresh)
+  // Check if user was already logged in (persists across refresh) — but only if they weren't
+  // idle for 5+ minutes since their last activity. Otherwise a refresh would bypass auto-logout.
   const savedUser = localStorage.getItem('wbt_currentUser');
   if(savedUser){
     try{
-      const parsed = JSON.parse(savedUser);
-      // Verify user still exists and password hasn't changed
-      const stillValid = (state.users||DEFAULT_USERS).find(u=>u.password===parsed.password && u.id===parsed.id);
-      if(stillValid){
-        currentUser = {...stillValid, loginName: parsed.loginName||stillValid.name};
-        renderAuthenticatedApp();
-        return;
+      const lastActivity = +(localStorage.getItem('wbt_lastActivity')||0);
+      if(lastActivity && (Date.now()-lastActivity) >= IDLE_TIMEOUT_MS){
+        localStorage.removeItem('wbt_currentUser');
+        localStorage.removeItem('wbt_lastActivity');
+      } else {
+        const parsed = JSON.parse(savedUser);
+        // Verify user still exists and password hasn't changed
+        const stillValid = (state.users||DEFAULT_USERS).find(u=>u.password===parsed.password && u.id===parsed.id);
+        if(stillValid){
+          currentUser = {...stillValid, loginName: parsed.loginName||stillValid.name};
+          resetIdleTimer();
+          renderAuthenticatedApp();
+          return;
+        }
       }
     } catch(e){}
   }
@@ -2820,6 +2838,36 @@ function renderMaterials(){
   return html;
 }
 
+// Attributes a ledger entry to the department where the movement happened. Works by
+// inference from the entry's type/material/note, so it applies retroactively to ALL
+// existing entries — no data migration needed, and old synced entries filter correctly.
+function ledgerDeptOf(e){
+  const note = e.note||'', mat = e.material||'';
+  // Purchases and stock intake belong to Materials regardless of item type
+  if(e.vendor || note.includes('Purchased') || note.includes('Existing stock') || note.includes('Existing scrap') || note.includes('Produced in-house')) return 'Materials';
+  if(e.type==='plank'){
+    // Planks leaving stock = consumed by Wood Finishing production; restores from voided runs too
+    if(e.direction==='OUT' || note.includes('Restored')) return 'Wood Finishing';
+    return 'Materials';
+  }
+  if(e.type==='scrap'){
+    return note.includes('Brush Dept') ? 'Brush Dept' : 'Wood Finishing';
+  }
+  if(e.type==='socket' || e.type==='screw'){
+    // Anything not a purchase (usage on products, void restores) happens in Socket Dept
+    return 'Socket Dept';
+  }
+  if(e.type==='finished'){
+    if(mat.includes('(Ready for Sale)')) return 'Socket Dept';
+    if(mat.includes('(Brush)')) return 'Brush Dept';
+    if(note.includes('Sent to Brush Dept')) return 'Brush Dept';
+    if(note.includes('Sent to Socket Dept')) return 'Socket Dept';
+    if(note.includes('voided Brush Dept')) return 'Brush Dept';
+    return 'Wood Finishing';
+  }
+  return 'Wood Finishing';
+}
+
 function renderLedger(){
   const ledger = (state.ledger||[]);
   const fromDate = state.ledgerFilterFrom||'';
@@ -2829,6 +2877,7 @@ function renderLedger(){
   const filterBatch = state.ledgerFilterBatch||'all';
   const filterDir = state.ledgerFilterDirection||'all';
   const filterVendor = state.ledgerFilterVendor||'all';
+  const filterDept = state.ledgerFilterDept||'all';
 
   const allBatches = [...new Set(ledger.map(e=>e.batchNo))].sort();
   const allSizes = [...new Set(ledger.filter(e=>e.type==='plank'&&e.size).map(e=>e.size))].sort();
@@ -2842,18 +2891,27 @@ function renderLedger(){
     if(filterBatch!=='all' && e.batchNo!==filterBatch) return false;
     if(filterDir!=='all' && e.direction!==filterDir) return false;
     if(filterVendor!=='all' && e.vendor!==filterVendor) return false;
+    if(filterDept!=='all' && ledgerDeptOf(e)!==filterDept) return false;
     return true;
   }).sort((a,b)=>b.datetime.localeCompare(a.datetime));
 
   const totalIn = filtered.filter(e=>e.direction==='IN').reduce((s,e)=>s+e.qty,0);
   const totalOut = filtered.filter(e=>e.direction==='OUT').reduce((s,e)=>s+e.qty,0);
-  const hasFilters = fromDate||toDate||section!=='all'||filterSize!=='all'||filterBatch!=='all'||filterDir!=='all'||filterVendor!=='all';
+  const hasFilters = fromDate||toDate||section!=='all'||filterSize!=='all'||filterBatch!=='all'||filterDir!=='all'||filterVendor!=='all'||filterDept!=='all';
 
   const sectionColors = {plank:'#5c3d1e', scrap:'#e67e22', finished:'#27ae60', socket:'#9b59b6', screw:'#7f8c8d'};
   const sectionLabels = {plank:'🪵 Wooden Planks', scrap:'♻️ Scrap', finished:'✅ Finished Pieces', socket:'🔌 Sockets', screw:'🔩 Screws'};
 
   let html=`<div class="card" style="border:2px solid #5c3d1e;">
     <div class="label">📒 Stock Ledger — Filters</div>
+    <div class="label">Department</div>
+    <select onchange="state.ledgerFilterDept=this.value;re()" style="margin-bottom:8px;">
+      <option value="all" ${filterDept==='all'?'selected':''}>All Departments</option>
+      <option value="Materials" ${filterDept==='Materials'?'selected':''}>📦 Materials (purchases & stock intake)</option>
+      <option value="Wood Finishing" ${filterDept==='Wood Finishing'?'selected':''}>🪚 Wood Finishing</option>
+      <option value="Brush Dept" ${filterDept==='Brush Dept'?'selected':''}>🪥 Brush Dept</option>
+      <option value="Socket Dept" ${filterDept==='Socket Dept'?'selected':''}>🔌 Socket Dept</option>
+    </select>
     <div class="label">Material Type</div>
     <select onchange="state.ledgerFilterSection=this.value;state.ledgerFilterSize='all';state.ledgerFilterBatch='all';re()" style="margin-bottom:8px;">
       <option value="all" ${section==='all'?'selected':''}>All Materials</option>
@@ -2890,7 +2948,7 @@ function renderLedger(){
       <div><div class="label">From Date</div><input type="date" value="${fromDate}" onchange="state.ledgerFilterFrom=this.value;re()"/></div>
       <div><div class="label">To Date</div><input type="date" value="${toDate}" onchange="state.ledgerFilterTo=this.value;re()"/></div>
     </div>
-    ${hasFilters?`<button class="btn btn-gray" style="font-size:12px;padding:6px 12px;margin-bottom:10px;" onclick="state.ledgerFilterFrom='';state.ledgerFilterTo='';state.ledgerFilterSection='all';state.ledgerFilterSize='all';state.ledgerFilterBatch='all';state.ledgerFilterDirection='all';state.ledgerFilterVendor='all';re()">✕ Clear All Filters</button>`:''}
+    ${hasFilters?`<button class="btn btn-gray" style="font-size:12px;padding:6px 12px;margin-bottom:10px;" onclick="state.ledgerFilterFrom='';state.ledgerFilterTo='';state.ledgerFilterSection='all';state.ledgerFilterSize='all';state.ledgerFilterBatch='all';state.ledgerFilterDirection='all';state.ledgerFilterVendor='all';state.ledgerFilterDept='all';re()">✕ Clear All Filters</button>`:''}
     <div class="grid3">
       <div style="background:#e8f5e9;border-radius:8px;padding:10px;text-align:center;">
         <div style="font-size:10px;color:#aaa;">Total IN</div>
@@ -2912,6 +2970,52 @@ function renderLedger(){
     return html;
   }
 
+  // Renders one group of entries as a classic ledger table: chronological (oldest first),
+  // separate IN (+) and OUT (−) columns, and a running Balance column. Used uniformly for
+  // every material type — this also fixes the old view, which showed all finished/socket/screw
+  // rows as "+IN" even when they were OUT movements.
+  const deptBadgeColors = {'Materials':'#7f8c8d','Wood Finishing':'#5c3d1e','Brush Dept':'#d35400','Socket Dept':'#9b59b6'};
+  function ledgerTable(bEntries){
+    // Oldest first, running balance top-to-bottom, like a physical ledger book
+    const chron = [...bEntries].sort((a,b)=>a.datetime.localeCompare(b.datetime));
+    let bal = 0;
+    const rows = chron.map(e=>{
+      bal += e.direction==='IN' ? e.qty : -e.qty;
+      return {...e, balance: bal};
+    });
+    const tIn = rows.filter(e=>e.direction==='IN').reduce((s,e)=>s+e.qty,0);
+    const tOut = rows.filter(e=>e.direction==='OUT').reduce((s,e)=>s+e.qty,0);
+    return `<table style="width:100%;border-collapse:collapse;font-size:11px;margin-bottom:4px;">
+      <thead><tr style="background:#f5f0eb;color:#7a5230;">
+        <th style="text-align:left;padding:5px 6px;border-bottom:2px solid #d4b896;">Date</th>
+        <th style="text-align:left;padding:5px 6px;border-bottom:2px solid #d4b896;">Particulars</th>
+        <th style="text-align:right;padding:5px 6px;border-bottom:2px solid #d4b896;color:#27ae60;">IN (+)</th>
+        <th style="text-align:right;padding:5px 6px;border-bottom:2px solid #d4b896;color:#e74c3c;">OUT (−)</th>
+        <th style="text-align:right;padding:5px 6px;border-bottom:2px solid #d4b896;">Balance</th>
+      </tr></thead>
+      <tbody>
+      ${rows.map(e=>{
+        const isIn = e.direction==='IN';
+        const dept = ledgerDeptOf(e);
+        return `<tr style="border-bottom:1px solid #f5f0eb;">
+          <td style="padding:5px 6px;color:#888;white-space:nowrap;vertical-align:top;">${e.date}<div style="font-size:9px;color:#bbb;">${e.time||''}</div></td>
+          <td style="padding:5px 6px;color:#444;vertical-align:top;">${e.note}
+            <div style="font-size:9px;font-weight:700;color:${deptBadgeColors[dept]||'#888'};margin-top:1px;">${dept}${e.vendor?' · '+e.vendor:''}</div></td>
+          <td style="padding:5px 6px;text-align:right;font-weight:700;color:#27ae60;vertical-align:top;">${isIn?e.qty:''}</td>
+          <td style="padding:5px 6px;text-align:right;font-weight:700;color:#e74c3c;vertical-align:top;">${!isIn?e.qty:''}</td>
+          <td style="padding:5px 6px;text-align:right;font-weight:700;color:${e.balance<0?'#e74c3c':'#5c3d1e'};vertical-align:top;">${e.balance}</td>
+        </tr>`;
+      }).join('')}
+      </tbody>
+      <tfoot><tr style="background:#f9f5f0;font-weight:700;">
+        <td style="padding:5px 6px;" colspan="2">Totals</td>
+        <td style="padding:5px 6px;text-align:right;color:#27ae60;">${tIn}</td>
+        <td style="padding:5px 6px;text-align:right;color:#e74c3c;">${tOut}</td>
+        <td style="padding:5px 6px;text-align:right;color:${(tIn-tOut)<0?'#e74c3c':'#5c3d1e'};">${tIn-tOut}</td>
+      </tr></tfoot>
+    </table>`;
+  }
+
   const sections = section==='all'?['plank','scrap','finished','socket','screw']:[section];
   sections.forEach(sec=>{
     const entries=filtered.filter(e=>e.type===sec);
@@ -2929,77 +3033,30 @@ function renderLedger(){
         </div>
       </div>`;
 
-    if(sec==='plank'||sec==='scrap'){
-      const sizes=[...new Set(entries.map(e=>e.size||e.material))];
-      sizes.forEach(sz=>{
-        const sizeEntries=entries.filter(e=>(e.size||e.material)===sz);
-        const szIn=sizeEntries.filter(e=>e.direction==='IN').reduce((s,e)=>s+e.qty,0);
-        const szOut=sizeEntries.filter(e=>e.direction==='OUT').reduce((s,e)=>s+e.qty,0);
-        html+=`<div style="margin-bottom:12px;">
-          <div style="font-size:12px;font-weight:700;color:${color};background:#f9f5f0;padding:6px 10px;border-radius:6px;margin-bottom:6px;display:flex;justify-content:space-between;">
-            <span>${sec==='plank'?sz+'" Planks':sz+'" Scrap'}</span>
-            <span style="font-size:11px;font-weight:400;">IN:${szIn} OUT:${szOut} Net:${szIn-szOut}</span>
-          </div>`;
-        const batchNos=[...new Set(sizeEntries.map(e=>e.batchNo))];
-        batchNos.forEach(bno=>{
-          const bEntries=sizeEntries.filter(e=>e.batchNo===bno);
-          const bIn=bEntries.filter(e=>e.direction==='IN').reduce((s,e)=>s+e.qty,0);
-          const bOut=bEntries.filter(e=>e.direction==='OUT').reduce((s,e)=>s+e.qty,0);
-          html+=`<div style="margin-left:8px;margin-bottom:8px;">
-            <div style="font-size:11px;font-weight:700;color:#888;margin-bottom:4px;display:flex;justify-content:space-between;">
-              <span>Batch: ${bno}</span><span>IN:${bIn} OUT:${bOut} Bal:${bIn-bOut}</span>
-            </div>`;
-          let bal=0;
-          const withBal=[...bEntries].reverse().map(e=>{bal+=e.direction==='IN'?e.qty:-e.qty;return{...e,balance:bal};}).reverse();
-          withBal.forEach(e=>{
-            const isIn=e.direction==='IN';
-            html+=`<div style="display:flex;gap:8px;padding:6px 0;border-bottom:1px solid #f9f5f0;align-items:flex-start;">
-              <div style="min-width:28px;height:28px;border-radius:6px;background:${isIn?'#e8f5e9':'#fdecea'};display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:${isIn?'#27ae60':'#e74c3c'};">${isIn?'↑':'↓'}</div>
-              <div style="flex:1;">
-                <div style="display:flex;justify-content:space-between;">
-                  <div style="font-size:12px;color:#444;">${e.note}</div>
-                  <div style="text-align:right;"><div style="font-size:13px;font-weight:700;color:${isIn?'#27ae60':'#e74c3c'};">${isIn?'+':'−'}${e.qty}</div><div style="font-size:10px;color:#aaa;">Bal:${e.balance}</div></div>
-                </div>
-                <div style="font-size:10px;color:#aaa;margin-top:2px;">📅 ${e.date} ⏰ ${e.time}</div>
-              </div>
-            </div>`;
-          });
-          html+=`</div>`;
-        });
-        html+=`</div>`;
+    // Group: planks/scrap by size first, everything else by material name — then by batch,
+    // with each batch rendered as its own running-balance ledger table.
+    const groupKey = (sec==='plank'||sec==='scrap') ? (e=>String(e.size||e.material)) : (e=>e.material);
+    const groupLabel = (sec==='plank') ? (g=>g+'" Planks') : (sec==='scrap') ? (g=>g+'" Scrap') : (g=>g);
+    const groups=[...new Set(entries.map(groupKey))];
+    groups.forEach(g=>{
+      const gEntries=entries.filter(e=>groupKey(e)===g);
+      const gIn=gEntries.filter(e=>e.direction==='IN').reduce((s,e)=>s+e.qty,0);
+      const gOut=gEntries.filter(e=>e.direction==='OUT').reduce((s,e)=>s+e.qty,0);
+      html+=`<div style="margin-bottom:14px;">
+        <div style="font-size:12px;font-weight:700;color:${color};background:#f9f5f0;padding:6px 10px;border-radius:6px;margin-bottom:6px;display:flex;justify-content:space-between;">
+          <span>${groupLabel(g)}</span>
+          <span style="font-size:11px;font-weight:400;">IN:${gIn} OUT:${gOut} Bal:${gIn-gOut}</span>
+        </div>`;
+      const batchNos=[...new Set(gEntries.map(e=>e.batchNo))];
+      batchNos.forEach(bno=>{
+        const bEntries=gEntries.filter(e=>e.batchNo===bno);
+        html+=`<div style="margin-left:4px;margin-bottom:10px;">
+          <div style="font-size:11px;font-weight:700;color:#888;margin-bottom:3px;">Batch: ${bno}</div>
+          ${ledgerTable(bEntries)}
+        </div>`;
       });
-    } else {
-      const mats=[...new Set(entries.map(e=>e.material))];
-      mats.forEach(mat=>{
-        const matEntries=entries.filter(e=>e.material===mat);
-        const mIn=matEntries.filter(e=>e.direction==='IN').reduce((s,e)=>s+e.qty,0);
-        html+=`<div style="margin-bottom:10px;">
-          <div style="font-size:12px;font-weight:700;color:${color};background:#f0fff4;padding:6px 10px;border-radius:6px;margin-bottom:6px;display:flex;justify-content:space-between;">
-            <span>${mat}</span><span style="font-size:11px;font-weight:400;">Total: ${mIn} pcs</span>
-          </div>`;
-        const batchNos=[...new Set(matEntries.map(e=>e.batchNo))];
-        batchNos.forEach(bno=>{
-          const bEntries=matEntries.filter(e=>e.batchNo===bno);
-          const bTotal=bEntries.reduce((s,e)=>s+e.qty,0);
-          html+=`<div style="margin-left:8px;margin-bottom:6px;">
-            <div style="font-size:11px;color:#888;margin-bottom:4px;font-weight:700;">Batch: ${bno} — Total: ${bTotal} pcs</div>`;
-          bEntries.forEach(e=>{
-            html+=`<div style="display:flex;gap:8px;padding:5px 0;border-bottom:1px solid #f9f5f0;align-items:flex-start;">
-              <div style="min-width:28px;height:28px;border-radius:6px;background:#e8f5e9;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#27ae60;">↑</div>
-              <div style="flex:1;">
-                <div style="display:flex;justify-content:space-between;">
-                  <div style="font-size:12px;color:#444;">${e.note}</div>
-                  <div style="font-size:13px;font-weight:700;color:#27ae60;">+${e.qty}</div>
-                </div>
-                <div style="font-size:10px;color:#aaa;margin-top:2px;">📅 ${e.date} ⏰ ${e.time}</div>
-              </div>
-            </div>`;
-          });
-          html+=`</div>`;
-        });
-        html+=`</div>`;
-      });
-    }
+      html+=`</div>`;
+    });
     html+=`</div>`;
   });
   return html;
@@ -3340,17 +3397,30 @@ function openBatchTraceModal(fbBatchNo){
 
   const fieldBox = (val) => `<div style="padding:8px 10px;background:#f9f5f0;border-radius:6px;font-weight:600;font-size:14px;">${val!==undefined&&val!==null&&val!==''?val:'—'}</div>`;
 
+  // New-style entries trace back through a BB (Brushed, pre-socket) batch to the WB wood batch.
+  // Old-style entries (from before the BB/FB split) had sourceWoodBatch set directly here.
+  const brushBatchNo = gen.sourceBrushBatch || null;
+  const brushGen = brushBatchNo ? (state.batchGenealogy||{})[brushBatchNo] : null;
+  const woodBatchNo = gen.sourceWoodBatch || brushGen?.sourceWoodBatch || '—';
+
   let html = `<div class="card" style="border:2px solid #8e44ad;margin-bottom:12px;">
-    <div class="label" style="color:#8e44ad;">🪥 Finished Brush Batch — ${fbBatchNo}</div>
+    <div class="label" style="color:#8e44ad;">🪥 Finished Batch — ${fbBatchNo}</div>
     <div class="grid2">
       <div><div class="label">Product</div>${fieldBox(gen.productName)}</div>
       <div><div class="label">Date Created</div>${fieldBox(gen.dateCreated)}</div>
     </div>
   </div>`;
 
+  if(brushBatchNo){
+    html += `<div class="card" style="border:2px solid #d35400;margin-bottom:12px;">
+      <div class="label" style="color:#d35400;">🪥 Source Brush Batch (pre-socket)</div>
+      ${fieldBox(brushBatchNo)}
+    </div>`;
+  }
+
   html += `<div class="card" style="border:2px solid #5c3d1e;margin-bottom:12px;">
     <div class="label" style="color:#5c3d1e;">🪵 Source Wood Batch</div>
-    ${fieldBox(gen.sourceWoodBatch||'—')}
+    ${fieldBox(woodBatchNo)}
   </div>`;
 
   html += `<div class="card" style="border:2px solid #9b59b6;margin-bottom:12px;">
@@ -3585,7 +3655,7 @@ function applyVoidToRun(runId, reason){
   }
   state.finishedInventory = (state.finishedInventory||[]).filter(f=>f.qty>0);
 
-  // b) Already turned into finished-brush (FB) stock in Brush Dept?
+  // b) Already turned into brushed (BB, pre-socket) stock in Brush Dept?
   if(toRemove>0){
     (state.finishedBrushes||[]).forEach(b=>{
       if(toRemove<=0) return;
@@ -3599,15 +3669,23 @@ function applyVoidToRun(runId, reason){
     state.finishedBrushes = (state.finishedBrushes||[]).filter(b=>b.qty>0);
   }
 
-  // c) Already moved to Ready for Sale via Socket Dept?
+  // c) Already moved to Ready for Sale via Socket Dept? Two hops now: find BB batches that trace
+  // back to this wood run, then FB batches chained from those BB batches. Old-style genealogy
+  // entries (pre BB/FB split) have sourceWoodBatch set directly on what's now called a BB-style
+  // key, and are already covered since they land in bbNumbers and match Ready-for-Sale directly.
   if(toRemove>0){
-    const fbNumbers = Object.keys(state.batchGenealogy||{}).filter(fb=>{
-      const g = state.batchGenealogy[fb];
+    const bbNumbers = Object.keys(state.batchGenealogy||{}).filter(bb=>{
+      const g = state.batchGenealogy[bb];
       return g && g.sourceWoodBatch===run.batchNo && g.productName===run.woodPieceName;
+    });
+    const fbNumbers = new Set(bbNumbers);
+    Object.keys(state.batchGenealogy||{}).forEach(fb=>{
+      const g = state.batchGenealogy[fb];
+      if(g && g.sourceBrushBatch && bbNumbers.includes(g.sourceBrushBatch) && g.productName===run.woodPieceName) fbNumbers.add(fb);
     });
     (state.readyForSale||[]).forEach(r=>{
       if(toRemove<=0) return;
-      if(r.productName===run.woodPieceName && fbNumbers.includes(r.batchNo)){
+      if(r.productName===run.woodPieceName && fbNumbers.has(r.batchNo)){
         const take = Math.min(r.qty, toRemove);
         r.qty -= take;
         toRemove -= take;
@@ -3689,11 +3767,19 @@ function applyVoidToBrushRun(runId, reason){
   });
   state.finishedBrushes = (state.finishedBrushes||[]).filter(b=>b.qty>0);
 
-  // b) Already moved to Ready for Sale via Socket Dept?
+  // b) Already moved to Ready for Sale via Socket Dept? Ready-for-Sale stock now lives under a
+  // separately-minted FB number, chained back to this BB batch via batchGenealogy — except for
+  // old-style entries (from before the BB/FB split) where the BB number itself IS the FB number,
+  // so we always include a direct match too for backward compatibility.
   if(toRemove>0){
+    const fbNumbers = new Set([run.fbBatchNo]);
+    Object.keys(state.batchGenealogy||{}).forEach(fb=>{
+      const g = state.batchGenealogy[fb];
+      if(g && g.sourceBrushBatch===run.fbBatchNo && g.productName===run.productName) fbNumbers.add(fb);
+    });
     (state.readyForSale||[]).forEach(r=>{
       if(toRemove<=0) return;
-      if(r.productName===run.productName && r.batchNo===run.fbBatchNo){
+      if(r.productName===run.productName && fbNumbers.has(r.batchNo)){
         const take = Math.min(r.qty, toRemove);
         r.qty -= take; toRemove -= take; summary.readySaleRemoved += take;
       }
@@ -3748,10 +3834,14 @@ function applyVoidToSocketRun(runId, reason){
   summary.screwsRestored = run.screwQty;
 
   // ---- 3. Remove its own output ----
+  // New-style entries store the FB number they created in outputBatchNo. Old entries (from
+  // before the BB/FB split) never had a separate FB number — their own fbBatchNo WAS the
+  // Ready-for-Sale batch number directly, so fall back to that for backward compatibility.
+  const outputBatch = run.outputBatchNo || run.fbBatchNo;
   let toRemove = run.qty;
   (state.readyForSale||[]).forEach(r=>{
     if(toRemove<=0) return;
-    if(r.productName===run.productName && r.batchNo===run.fbBatchNo){
+    if(r.productName===run.productName && r.batchNo===outputBatch){
       const take = Math.min(r.qty, toRemove);
       r.qty -= take; toRemove -= take; summary.readySaleRemoved += take;
     }
@@ -3759,7 +3849,7 @@ function applyVoidToSocketRun(runId, reason){
   state.readyForSale = (state.readyForSale||[]).filter(r=>r.qty>0);
 
   summary.unreachable = toRemove;
-  addLedgerEntry('finished', run.productName+' (Ready for Sale)', run.fbBatchNo, run.qty, 'OUT', `Voided (${reason}) — reversed by ${by}`, '');
+  addLedgerEntry('finished', run.productName+' (Ready for Sale)', outputBatch, run.qty, 'OUT', `Voided (${reason}) — reversed by ${by}`, '');
   addLedgerEntry('socket', run.socketType, run.socketBatchNo, run.socketQty, 'IN', `Restored — voided Socket Dept run (${reason})`, '');
   addLedgerEntry('screw', 'Screws', run.screwBatchNo, run.screwQty, 'IN', `Restored — voided Socket Dept run (${reason})`, '');
   return summary;
@@ -4288,17 +4378,42 @@ function doLogin(){
   }
   currentUser = {...user, loginName: name||user.name};
   localStorage.setItem('wbt_currentUser', JSON.stringify(currentUser));
+  resetIdleTimer();
   document.getElementById('loginScreen').style.display='none';
   renderAuthenticatedApp();
 }
 
-function logout(){
+// ==================== IDLE AUTO-LOGOUT (5 minutes of no activity) ====================
+// Tracks last-activity in localStorage (not just an in-memory timer) so that even reloading
+// the page after being idle 5+ minutes lands back on the login screen instead of silently
+// restoring the session — see the persisted-login check near app startup.
+function recordActivity(){
+  if(!currentUser) return;
+  localStorage.setItem('wbt_lastActivity', String(Date.now()));
+}
+function resetIdleTimer(){
+  clearTimeout(idleTimer);
+  if(!currentUser) return;
+  recordActivity();
+  idleTimer = setTimeout(()=>{
+    logout('You were logged out after 5 minutes of inactivity. Please log back in.');
+  }, IDLE_TIMEOUT_MS);
+}
+['mousedown','mousemove','keydown','touchstart','wheel','scroll'].forEach(evt=>{
+  document.addEventListener(evt, resetIdleTimer, {passive:true});
+});
+
+function logout(reason){
   currentUser = null;
+  clearTimeout(idleTimer);
   localStorage.removeItem('wbt_currentUser');
+  localStorage.removeItem('wbt_lastActivity');
   document.getElementById('loginScreen').style.display='flex';
   document.getElementById('loginName').value='';
   document.getElementById('loginPass').value='';
-  document.getElementById('loginErr').style.display='none';
+  const err = document.getElementById('loginErr');
+  if(reason){ err.textContent = reason; err.style.display='block'; }
+  else { err.style.display='none'; }
   document.querySelectorAll('.tab').forEach(t=>t.style.display='');
 }
 
@@ -4369,14 +4484,19 @@ function renderAdminPanel(){
     <div style="font-size:12px;color:#888;margin-bottom:12px;">Tap a user to edit their details</div>`;
 
   users.forEach((u,i)=>{
-    html+=`<div style="background:#f9f5f0;border-radius:8px;padding:12px;margin-bottom:10px;border-left:4px solid #5c3d1e;">
+    // Hierarchy rule: Owner manages everyone (including Admins). Admin manages everyone EXCEPT
+    // Owner accounts — those render locked, with password hidden, when an Admin is viewing.
+    const canManage = isOwnerRole || u.role!=='owner';
+    html+=`<div style="background:#f9f5f0;border-radius:8px;padding:12px;margin-bottom:10px;border-left:4px solid ${canManage?'#5c3d1e':'#8e44ad'};">
       <div class="row" style="margin-bottom:8px;">
         <div style="font-weight:700;font-size:14px;">${u.name}</div>
-        <div style="font-size:11px;color:#7a5230;font-weight:700;text-transform:uppercase;">${u.role}</div>
+        <div style="font-size:11px;color:${u.role==='owner'?'#8e44ad':'#7a5230'};font-weight:700;text-transform:uppercase;">${u.role}</div>
       </div>
-      <div style="font-size:11px;color:#888;margin-bottom:8px;">Password: <b>${u.password}</b></div>
+      ${canManage?`<div style="font-size:11px;color:#888;margin-bottom:8px;">Password: <b>${u.password}</b></div>`:''}
       <div style="font-size:11px;color:#888;margin-bottom:10px;">Access: ${(u.tabs||[]).join(', ')}</div>
-      <button class="btn btn-brown" style="font-size:12px;padding:6px 12px;width:100%;" onclick="editUser(${i})">✏️ Edit User ${i+1}</button>
+      ${canManage
+        ?`<button class="btn btn-brown" style="font-size:12px;padding:6px 12px;width:100%;" onclick="editUser(${i})">✏️ Edit User ${i+1}</button>`
+        :`<div style="font-size:11px;color:#8e44ad;font-weight:700;text-align:center;padding:6px;">🔒 Owner account — only the Owner can manage this</div>`}
     </div>`;
   });
 
@@ -4463,7 +4583,7 @@ function exportDataPDF(){
   });
   html += `</table>`;
 
-  html += `<h2>Finished Brushes</h2><table><tr><th>Product</th><th>Batch</th><th>Qty</th></tr>`;
+  html += `<h2>Brushed Stock (Pre-Socket)</h2><table><tr><th>Product</th><th>Batch</th><th>Qty</th></tr>`;
   (state.finishedBrushes||[]).forEach(f=>{
     html += `<tr><td>${f.productName}</td><td>${f.batchNo}</td><td>${f.qty}</td></tr>`;
   });
@@ -4529,6 +4649,12 @@ function updateVoidPerm(userIdx, dept, key, value){
 function editUser(idx){
   const users = state.users || DEFAULT_USERS;
   const u = users[idx];
+  if(!u) return;
+  // Hierarchy rule: only an Owner can edit an Owner account. Admin manages everyone below.
+  if(u.role==='owner' && currentUser?.role!=='owner'){
+    alert('🔒 Only the Owner can edit the Owner account.');
+    return;
+  }
   const allTabs = ["Dashboard","Wood Finishing","Brush Dept","Socket Dept","Inventory","Wastage","Materials","BOM","Ledger","Sales"];
   
   const modal = document.getElementById('adminModal');
@@ -4584,6 +4710,12 @@ function saveUser(idx){
   if(tabs.length===0){err.textContent="⚠️ Select at least one tab";err.style.display='block';return;}
   // Check duplicate password (excluding current user)
   const users = [...(state.users||DEFAULT_USERS)];
+  // Hierarchy rule (also enforced here, not just in the UI, so it can't be bypassed):
+  // a non-Owner can never modify an Owner account.
+  if(idx>=0 && users[idx]?.role==='owner' && currentUser?.role!=='owner'){
+    alert('🔒 Only the Owner can modify the Owner account.');
+    return;
+  }
   const dupIdx = users.findIndex((u,i)=>u.password===pass && i!==idx);
   if(dupIdx>=0){err.textContent="⚠️ Password already used by "+users[dupIdx].name;err.style.display='block';return;}
 
@@ -4599,8 +4731,21 @@ function saveUser(idx){
 }
 
 function deleteUser(idx){
-  if(!confirm('Delete this user?')) return;
   const users=[...(state.users||DEFAULT_USERS)];
+  const u = users[idx];
+  if(!u) return;
+  // Hierarchy rule: a non-Owner can never delete an Owner account.
+  if(u.role==='owner' && currentUser?.role!=='owner'){
+    alert('🔒 Only the Owner can delete the Owner account.');
+    return;
+  }
+  // Safety: never allow deleting the LAST Owner account — that would lock everyone out
+  // of owner-level functions (migration, JSON backup, owner cash tracking) permanently.
+  if(u.role==='owner' && users.filter(x=>x.role==='owner').length<=1){
+    alert("⚠️ This is the only Owner account — it can't be deleted. Create another Owner-role account first if you want to remove this one.");
+    return;
+  }
+  if(!confirm('Delete this user?')) return;
   users.splice(idx,1);
   state.users=users;
   saveAll();
