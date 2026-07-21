@@ -200,6 +200,7 @@ input,select{width:100%;padding:8px 10px;border:1px solid #d4b896;border-radius:
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-check-compat.js"></script>
 
 <script>
 const SK = {
@@ -264,9 +265,23 @@ const META_COLLECTION = 'wbt_meta';
 // Collections stored as key→object maps rather than arrays:
 const MAP_COLLECTIONS = { materials:1, openBatches:1, batchGenealogy:1 };
 
+// ==================== APP CHECK (anti-abuse shield) ====================
+// When configured, Firebase only accepts database requests coming from THIS app running on
+// YOUR real site — someone who copies the config into their own script gets rejected.
+// SETUP (one time, ~5 minutes):
+//   1. Firebase Console → your project → App Check → Apps → register your Web app
+//      → choose reCAPTCHA v3 → it gives you a "site key" (starts with 6L...)
+//   2. Paste that site key below and redeploy.
+//   3. Back in App Check → APIs → Cloud Firestore → click "Enforce".
+// Until a key is pasted here, this block does nothing and the app works exactly as before.
+const APP_CHECK_SITE_KEY = ''; // <-- paste your reCAPTCHA v3 site key here
+
 let fbApp = null, fbDb = null;
 try{
   fbApp = firebase.initializeApp(FIREBASE_CONFIG);
+  if(APP_CHECK_SITE_KEY && firebase.appCheck){
+    firebase.appCheck().activate(APP_CHECK_SITE_KEY, true); // true = auto-refresh tokens
+  }
   fbDb = firebase.firestore();
   // Offline persistence: writes made without connection are durably queued (survives reload)
   // and auto-sent on reconnect. Reads come instantly from local cache while offline.
@@ -558,6 +573,57 @@ function emptyMats(){return{"12":{name:'Wooden Planks 12"',size:12,low:50,batche
 let currentUser = null; // logged in user
 const IDLE_TIMEOUT_MS = 5*60*1000; // auto-logout after 5 minutes of no activity
 let idleTimer = null;
+
+// ==================== PASSWORD HASHING ====================
+// Passwords are stored ONLY as SHA-256 hashes — never as readable text — both locally and
+// in Firestore. Verified against reference test vectors. Synchronous so login/save flows
+// stay simple (the browser's crypto.subtle is async-only).
+function sha256Sync(str){
+  const K = [0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+    0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+    0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+    0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+    0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+    0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+    0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+    0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2];
+  let H = [0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19];
+  const bytes = [];
+  for(let i=0;i<str.length;i++){
+    let c = str.codePointAt(i);
+    if(c>0xFFFF) i++;
+    if(c<0x80) bytes.push(c);
+    else if(c<0x800){ bytes.push(0xC0|c>>6, 0x80|c&63); }
+    else if(c<0x10000){ bytes.push(0xE0|c>>12, 0x80|c>>6&63, 0x80|c&63); }
+    else { bytes.push(0xF0|c>>18, 0x80|c>>12&63, 0x80|c>>6&63, 0x80|c&63); }
+  }
+  const bitLen = bytes.length*8;
+  bytes.push(0x80);
+  while(bytes.length%64 !== 56) bytes.push(0);
+  bytes.push(0,0,0,0, bitLen>>>24&255, bitLen>>>16&255, bitLen>>>8&255, bitLen&255);
+  const rotr=(x,n)=>(x>>>n)|(x<<(32-n));
+  for(let i=0;i<bytes.length;i+=64){
+    const w = new Array(64);
+    for(let t=0;t<16;t++) w[t] = bytes[i+t*4]<<24 | bytes[i+t*4+1]<<16 | bytes[i+t*4+2]<<8 | bytes[i+t*4+3];
+    for(let t=16;t<64;t++){
+      const s0 = rotr(w[t-15],7)^rotr(w[t-15],18)^(w[t-15]>>>3);
+      const s1 = rotr(w[t-2],17)^rotr(w[t-2],19)^(w[t-2]>>>10);
+      w[t] = (w[t-16]+s0+w[t-7]+s1)|0;
+    }
+    let [a,b,c,d,e,f,g,h] = H;
+    for(let t=0;t<64;t++){
+      const S1 = rotr(e,6)^rotr(e,11)^rotr(e,25);
+      const ch = (e&f)^(~e&g);
+      const t1 = (h+S1+ch+K[t]+w[t])|0;
+      const S0 = rotr(a,2)^rotr(a,13)^rotr(a,22);
+      const maj = (a&b)^(a&c)^(b&c);
+      const t2 = (S0+maj)|0;
+      h=g; g=f; f=e; e=(d+t1)|0; d=c; c=b; b=a; a=(t1+t2)|0;
+    }
+    H = [ (H[0]+a)|0,(H[1]+b)|0,(H[2]+c)|0,(H[3]+d)|0,(H[4]+e)|0,(H[5]+f)|0,(H[6]+g)|0,(H[7]+h)|0 ];
+  }
+  return H.map(x=>(x>>>0).toString(16).padStart(8,'0')).join('');
+}
 
 
 let state = {
@@ -2394,6 +2460,21 @@ mergeDuplicateClosedBatches();
   });
   if(usersChanged) saveAll();
 
+  // SECURITY MIGRATION: convert any plain-text passwords to SHA-256 hashes. Runs once per
+  // device on first load after the update; the hashed users then sync to Firestore, replacing
+  // the readable passwords there too. Login compares hashes from then on.
+  let pwMigrated = false;
+  state.users = state.users.map(u=>{
+    if(u.password && !u.passwordHash){
+      pwMigrated = true;
+      const nu = {...u, passwordHash: sha256Sync(u.password)};
+      delete nu.password;
+      return nu;
+    }
+    return u;
+  });
+  if(pwMigrated) saveAll();
+
   // Check if user was already logged in (persists across refresh) — but only if they weren't
   // idle for 5+ minutes since their last activity. Otherwise a refresh would bypass auto-logout.
   const savedUser = localStorage.getItem('wbt_currentUser');
@@ -2405,10 +2486,13 @@ mergeDuplicateClosedBatches();
         localStorage.removeItem('wbt_lastActivity');
       } else {
         const parsed = JSON.parse(savedUser);
-        // Verify user still exists and password hasn't changed
-        const stillValid = (state.users||DEFAULT_USERS).find(u=>u.password===parsed.password && u.id===parsed.id);
+        // Verify user still exists and password hasn't changed. Sessions saved before the
+        // hashing update stored plain password — hash it on the fly for the comparison.
+        const parsedHash = parsed.passwordHash || (parsed.password ? sha256Sync(parsed.password) : null);
+        const stillValid = (state.users||DEFAULT_USERS).find(u=>u.passwordHash===parsedHash && u.id===parsed.id);
         if(stillValid){
           currentUser = {...stillValid, loginName: parsed.loginName||stillValid.name};
+          localStorage.setItem('wbt_currentUser', JSON.stringify(currentUser)); // re-save in hashed form
           resetIdleTimer();
           renderAuthenticatedApp();
           return;
@@ -2778,7 +2862,27 @@ function renderMaterials(){
     <div class="label">🪜 Wood Piece Types</div>
     <div style="margin-bottom:12px;">`;
   if(wp.length>0){
-    wp.forEach(w=>{html+=`<div style="font-size:12px;padding:4px 0;">• ${w.name} (${w.size}")</div>`;});
+    wp.forEach(w=>{
+      if(state.editingWoodPieceId===w.id){
+        html+=`<div style="background:#f0f8ff;border-radius:8px;padding:10px;margin-bottom:6px;">
+          <div class="grid2" style="margin-bottom:6px;">
+            <input type="text" placeholder="Name" value="${state.editWoodName||''}" oninput="state.editWoodName=this.value" style="margin-bottom:0;"/>
+            <input type="number" step="0.5" placeholder="Size (inches)" value="${state.editWoodSize||''}" oninput="state.editWoodSize=this.value" style="margin-bottom:0;"/>
+          </div>
+          <div style="font-size:10px;color:#888;margin-bottom:6px;">Renaming updates every existing record that references this product — production runs, brush/socket stock, ready-for-sale, and the ledger — so nothing gets orphaned.</div>
+          <div style="display:flex;gap:6px;">
+            <button class="btn btn-blue" style="font-size:11px;padding:5px 10px;" onclick="saveEditWoodPiece(${w.id})">✅ Save</button>
+            <button class="btn btn-gray" style="font-size:11px;padding:5px 10px;" onclick="cancelEditWoodPiece()">Cancel</button>
+          </div>
+          <div id="wpEditMsg_${w.id}" class="msg"></div>
+        </div>`;
+      } else {
+        html+=`<div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;padding:4px 0;">
+          <span>• ${w.name} (${w.size}")</span>
+          <button class="btn btn-gray" style="font-size:10px;padding:3px 8px;" onclick="startEditWoodPiece(${w.id})">✏️ Edit</button>
+        </div>`;
+      }
+    });
   } else {
     html+=`<div style="color:#aaa;font-size:12px;">None yet</div>`;
   }
@@ -2878,6 +2982,11 @@ function renderLedger(){
   const filterDir = state.ledgerFilterDirection||'all';
   const filterVendor = state.ledgerFilterVendor||'all';
   const filterDept = state.ledgerFilterDept||'all';
+  const filterWoodPiece = state.ledgerFilterWoodPiece||'all';
+  // Matches "Commando Broom", "Commando Broom (Brush)", "Commando Broom (Ready for Sale)",
+  // "Commando Broom (Kharab Maal)" etc. — anything that's clearly THIS product, across every
+  // department it passes through — without false-matching a differently-named product.
+  const materialIsProduct = (material, productName) => material===productName || (material && material.startsWith(productName+' ('));
 
   const allBatches = [...new Set(ledger.map(e=>e.batchNo))].sort();
   const allSizes = [...new Set(ledger.filter(e=>e.type==='plank'&&e.size).map(e=>e.size))].sort();
@@ -2892,12 +3001,13 @@ function renderLedger(){
     if(filterDir!=='all' && e.direction!==filterDir) return false;
     if(filterVendor!=='all' && e.vendor!==filterVendor) return false;
     if(filterDept!=='all' && ledgerDeptOf(e)!==filterDept) return false;
+    if(filterWoodPiece!=='all' && !materialIsProduct(e.material, filterWoodPiece)) return false;
     return true;
   }).sort((a,b)=>b.datetime.localeCompare(a.datetime));
 
   const totalIn = filtered.filter(e=>e.direction==='IN').reduce((s,e)=>s+e.qty,0);
   const totalOut = filtered.filter(e=>e.direction==='OUT').reduce((s,e)=>s+e.qty,0);
-  const hasFilters = fromDate||toDate||section!=='all'||filterSize!=='all'||filterBatch!=='all'||filterDir!=='all'||filterVendor!=='all'||filterDept!=='all';
+  const hasFilters = fromDate||toDate||section!=='all'||filterSize!=='all'||filterBatch!=='all'||filterDir!=='all'||filterVendor!=='all'||filterDept!=='all'||filterWoodPiece!=='all';
 
   const sectionColors = {plank:'#5c3d1e', scrap:'#e67e22', finished:'#27ae60', socket:'#9b59b6', screw:'#7f8c8d'};
   const sectionLabels = {plank:'🪵 Wooden Planks', scrap:'♻️ Scrap', finished:'✅ Finished Pieces', socket:'🔌 Sockets', screw:'🔩 Screws'};
@@ -2911,6 +3021,11 @@ function renderLedger(){
       <option value="Wood Finishing" ${filterDept==='Wood Finishing'?'selected':''}>🪚 Wood Finishing</option>
       <option value="Brush Dept" ${filterDept==='Brush Dept'?'selected':''}>🪥 Brush Dept</option>
       <option value="Socket Dept" ${filterDept==='Socket Dept'?'selected':''}>🔌 Socket Dept</option>
+    </select>
+    <div class="label">Wood Piece Type</div>
+    <select onchange="state.ledgerFilterWoodPiece=this.value;re()" style="margin-bottom:8px;">
+      <option value="all" ${filterWoodPiece==='all'?'selected':''}>All Products</option>
+      ${(state.woodPieces||[]).map(w=>`<option value="${w.name}" ${filterWoodPiece===w.name?'selected':''}>${w.name}</option>`).join('')}
     </select>
     <div class="label">Material Type</div>
     <select onchange="state.ledgerFilterSection=this.value;state.ledgerFilterSize='all';state.ledgerFilterBatch='all';re()" style="margin-bottom:8px;">
@@ -2948,7 +3063,7 @@ function renderLedger(){
       <div><div class="label">From Date</div><input type="date" value="${fromDate}" onchange="state.ledgerFilterFrom=this.value;re()"/></div>
       <div><div class="label">To Date</div><input type="date" value="${toDate}" onchange="state.ledgerFilterTo=this.value;re()"/></div>
     </div>
-    ${hasFilters?`<button class="btn btn-gray" style="font-size:12px;padding:6px 12px;margin-bottom:10px;" onclick="state.ledgerFilterFrom='';state.ledgerFilterTo='';state.ledgerFilterSection='all';state.ledgerFilterSize='all';state.ledgerFilterBatch='all';state.ledgerFilterDirection='all';state.ledgerFilterVendor='all';state.ledgerFilterDept='all';re()">✕ Clear All Filters</button>`:''}
+    ${hasFilters?`<button class="btn btn-gray" style="font-size:12px;padding:6px 12px;margin-bottom:10px;" onclick="state.ledgerFilterFrom='';state.ledgerFilterTo='';state.ledgerFilterSection='all';state.ledgerFilterSize='all';state.ledgerFilterBatch='all';state.ledgerFilterDirection='all';state.ledgerFilterVendor='all';state.ledgerFilterDept='all';state.ledgerFilterWoodPiece='all';re()">✕ Clear All Filters</button>`:''}
     <div class="grid3">
       <div style="background:#e8f5e9;border-radius:8px;padding:10px;text-align:center;">
         <div style="font-size:10px;color:#aaa;">Total IN</div>
@@ -4263,6 +4378,77 @@ function addWoodPiece(){
   },50);
 }
 
+// Renames a wood piece type everywhere its name is stored as a lookup key, so nothing gets
+// silently orphaned — production runs, brush/socket processing, ready-for-sale, genealogy,
+// wastage, rework/scrap logs, and ledger material labels (including suffixed variants like
+// "X (Brush)" / "X (Ready for Sale)" / "X (Kharab Maal)") all follow the rename.
+// NOT touched: scrapInventory's internal batch key embeds the old name as part of a composite
+// string used only for merging future Kharab Maal entries — harmless if left as-is; new scrap
+// after the rename just starts a fresh bucket under the new name instead of merging into it.
+function renameWoodPieceType(oldName, newName){
+  const renameField = (arr, field) => (arr||[]).map(x => x && x[field]===oldName ? {...x, [field]: newName} : x);
+  const renameLedgerMaterial = m => {
+    if(m===oldName) return newName;
+    if(m && m.startsWith(oldName+' (')) return newName + m.slice(oldName.length);
+    return m;
+  };
+  state.production = renameField(state.production, 'woodPieceName');
+  state.finishedInventory = renameField(state.finishedInventory, 'productName');
+  state.finishedBrushes = renameField(state.finishedBrushes, 'productName');
+  state.brushProcessingLog = renameField(state.brushProcessingLog, 'productName');
+  state.socketProcessingLog = renameField(state.socketProcessingLog, 'productName');
+  state.readyForSale = renameField(state.readyForSale, 'productName');
+  state.reworkStock = renameField(state.reworkStock, 'productName');
+  state.brushScrapLog = renameField(state.brushScrapLog, 'productName');
+  state.wastage = (state.wastage||[]).map(w=>{
+    if(!w) return w;
+    const upd = {};
+    if(w.woodPieceName===oldName) upd.woodPieceName = newName;
+    if(w.plankSizeName===oldName) upd.plankSizeName = newName;
+    return Object.keys(upd).length ? {...w, ...upd} : w;
+  });
+  state.batchGenealogy = Object.fromEntries(Object.entries(state.batchGenealogy||{}).map(([k,g])=>
+    [k, g && g.productName===oldName ? {...g, productName:newName} : g]
+  ));
+  state.ledger = (state.ledger||[]).map(e => e && e.material && renameLedgerMaterial(e.material)!==e.material
+    ? {...e, material: renameLedgerMaterial(e.material)} : e);
+}
+
+function startEditWoodPiece(id){
+  const w = (state.woodPieces||[]).find(x=>x.id===id);
+  if(!w) return;
+  state.editingWoodPieceId = id;
+  state.editWoodName = w.name;
+  state.editWoodSize = w.size;
+  re();
+}
+function cancelEditWoodPiece(){
+  state.editingWoodPieceId = null;
+  re();
+}
+function saveEditWoodPiece(id){
+  const w = (state.woodPieces||[]).find(x=>x.id===id);
+  if(!w) return;
+  const newName = (state.editWoodName||'').trim();
+  const newSize = +state.editWoodSize;
+  const msg = document.getElementById('wpEditMsg_'+id);
+  if(!newName || !newSize || newSize<=0){
+    if(msg){msg.textContent="⚠️ Fill all fields";msg.className="msg err";}
+    return;
+  }
+  const dupIdx = (state.woodPieces||[]).findIndex(x=>x.id!==id && x.name===newName);
+  if(dupIdx>=0){
+    if(msg){msg.textContent="⚠️ Another wood piece type already has that name";msg.className="msg err";}
+    return;
+  }
+  const oldName = w.name;
+  if(newName !== oldName) renameWoodPieceType(oldName, newName);
+  state.woodPieces = (state.woodPieces||[]).map(x=>x.id===id?{...x, name:newName, size:newSize}:x);
+  state.editingWoodPieceId = null;
+  saveAll();
+  re();
+}
+
 // Update a wood piece's Bill of Materials (socket type + screws required) as the user types
 function updateBOM(woodPieceId){
   const socketEl = document.getElementById('bomSocket_'+woodPieceId);
@@ -4371,7 +4557,20 @@ function doLogin(){
   const pass = document.getElementById('loginPass')?.value;
   const err = document.getElementById('loginErr');
   const users = state.users || DEFAULT_USERS;
-  const user = users.find(u => u.password === pass);
+  const hash = pass ? sha256Sync(pass) : '';
+  // Match by hash. Legacy fallback: a user record synced from a not-yet-updated device may
+  // still carry a plain password — match it directly, then upgrade it to a hash immediately.
+  let user = users.find(u => u.passwordHash === hash && u.passwordHash);
+  if(!user){
+    const legacyIdx = users.findIndex(u => u.password && u.password === pass);
+    if(legacyIdx >= 0){
+      const upgraded = {...users[legacyIdx], passwordHash: hash};
+      delete upgraded.password;
+      state.users = users.map((u,i)=>i===legacyIdx?upgraded:u);
+      saveAll();
+      user = upgraded;
+    }
+  }
   if(!user){ 
     if(err){err.textContent="⚠️ Incorrect password. Try again.";err.style.display='block';}
     return;
@@ -4492,7 +4691,7 @@ function renderAdminPanel(){
         <div style="font-weight:700;font-size:14px;">${u.name}</div>
         <div style="font-size:11px;color:${u.role==='owner'?'#8e44ad':'#7a5230'};font-weight:700;text-transform:uppercase;">${u.role}</div>
       </div>
-      ${canManage?`<div style="font-size:11px;color:#888;margin-bottom:8px;">Password: <b>${u.password}</b></div>`:''}
+      ${canManage?`<div style="font-size:11px;color:#888;margin-bottom:8px;">Password: 🔒 securely stored (set a new one via Edit)</div>`:''}
       <div style="font-size:11px;color:#888;margin-bottom:10px;">Access: ${(u.tabs||[]).join(', ')}</div>
       ${canManage
         ?`<button class="btn btn-brown" style="font-size:12px;padding:6px 12px;width:100%;" onclick="editUser(${i})">✏️ Edit User ${i+1}</button>`
@@ -4662,8 +4861,8 @@ function editUser(idx){
   document.getElementById('adminModalBody').innerHTML = `
     <div class="label">Display Name</div>
     <input id="editName" type="text" value="${u.name}" style="width:100%;padding:8px;border:1px solid #d4b896;border-radius:6px;font-size:14px;margin-bottom:10px;box-sizing:border-box;"/>
-    <div class="label">Password</div>
-    <input id="editPass" type="text" value="${u.password}" style="width:100%;padding:8px;border:1px solid #d4b896;border-radius:6px;font-size:14px;margin-bottom:10px;box-sizing:border-box;"/>
+    <div class="label">New Password</div>
+    <input id="editPass" type="text" value="" placeholder="Leave blank to keep current password" style="width:100%;padding:8px;border:1px solid #d4b896;border-radius:6px;font-size:14px;margin-bottom:10px;box-sizing:border-box;"/>
     <div class="label">Tab Access</div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:12px;">
       ${allTabs.map(t=>`
@@ -4706,9 +4905,9 @@ function saveUser(idx){
   const tabs = [...document.querySelectorAll('#adminModalBody input[type=checkbox]:checked')].map(c=>c.value);
   const err = document.getElementById('editErr');
   if(!name){err.textContent="⚠️ Enter a name";err.style.display='block';return;}
-  if(!pass){err.textContent="⚠️ Enter a password";err.style.display='block';return;}
+  // New users must get a password; when editing, blank means "keep the current one"
+  if(idx===-1 && !pass){err.textContent="⚠️ Enter a password";err.style.display='block';return;}
   if(tabs.length===0){err.textContent="⚠️ Select at least one tab";err.style.display='block';return;}
-  // Check duplicate password (excluding current user)
   const users = [...(state.users||DEFAULT_USERS)];
   // Hierarchy rule (also enforced here, not just in the UI, so it can't be bypassed):
   // a non-Owner can never modify an Owner account.
@@ -4716,13 +4915,24 @@ function saveUser(idx){
     alert('🔒 Only the Owner can modify the Owner account.');
     return;
   }
-  const dupIdx = users.findIndex((u,i)=>u.password===pass && i!==idx);
+  const newHash = pass ? sha256Sync(pass) : (idx>=0 ? users[idx].passwordHash : null);
+  // Duplicate check by hash — two users can't share a login password (login matches by password alone)
+  const dupIdx = users.findIndex((u,i)=>u.passwordHash===newHash && i!==idx);
   if(dupIdx>=0){err.textContent="⚠️ Password already used by "+users[dupIdx].name;err.style.display='block';return;}
 
   if(idx===-1){
-    users.push({id:Date.now(), name, password:pass, role:'custom', tabs, voidPermissions:{}});
+    users.push({id:Date.now(), name, passwordHash:newHash, role:'custom', tabs, voidPermissions:{}});
   } else {
-    users[idx]={...users[idx], name, password:pass, tabs, voidPermissions: users[idx].voidPermissions||{}};
+    const nu = {...users[idx], name, passwordHash:newHash, tabs, voidPermissions: users[idx].voidPermissions||{}};
+    delete nu.password; // clear any lingering plain-text field from legacy data
+    users[idx] = nu;
+    // If the edited user is the one currently logged in, refresh their saved session so the
+    // hash comparison on next reload still matches.
+    if(currentUser && currentUser.id===nu.id){
+      currentUser = {...currentUser, name:nu.name, passwordHash:nu.passwordHash, tabs:nu.tabs};
+      delete currentUser.password;
+      localStorage.setItem('wbt_currentUser', JSON.stringify(currentUser));
+    }
   }
   state.users=users;
   saveAll();
@@ -4986,17 +5196,26 @@ document.getElementById('manifestLink').setAttribute('href', manifestURL);
 // Register service worker inline
 if ('serviceWorker' in navigator) {
   const swCode = `
-    const CACHE = 'brush-tracker-v1';
-    self.addEventListener('install', e => {
-      e.waitUntil(caches.open(CACHE).then(c => c.addAll(['/'])));
-      self.skipWaiting();
-    });
+    // v2: switched from cache-first to network-first. Cache-first meant a device that loaded
+    // the app once could get permanently stuck on old code forever, even after the server had
+    // a newer version — silently, with no error shown. That's exactly what caused logins to
+    // break after the password-hashing update: some devices kept running old login code
+    // against the new data format. Network-first always tries to get the latest version first
+    // and only falls back to the cached copy if there's genuinely no connection.
+    const CACHE = 'brush-tracker-v2';
+    self.addEventListener('install', e => { self.skipWaiting(); });
     self.addEventListener('activate', e => {
       e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))));
       self.clients.claim();
     });
     self.addEventListener('fetch', e => {
-      e.respondWith(caches.match(e.request).then(r => r || fetch(e.request).catch(() => caches.match('/'))));
+      e.respondWith(
+        fetch(e.request).then(res => {
+          const copy = res.clone();
+          caches.open(CACHE).then(c => c.put(e.request, copy));
+          return res;
+        }).catch(() => caches.match(e.request).then(r => r || caches.match('/')))
+      );
     });
   `;
   const swBlob = new Blob([swCode], {type: 'application/javascript'});
