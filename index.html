@@ -22,6 +22,24 @@ button,input,select{font-family:inherit;}
 .tab{padding:10px 14px;border:none;cursor:pointer;white-space:nowrap;font-size:13px;font-weight:600;background:transparent;color:#f5e6d8;border-bottom:3px solid transparent;}
 .tab.active{background:#f5f0eb;color:#5c3d1e;border-bottom:3px solid #5c3d1e;}
 .content{padding:16px;max-width:600px;margin:0 auto;}
+.filter-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:4px 14px;align-items:end;}
+.filter-grid>div{margin-bottom:8px;}
+.filter-grid select,.filter-grid input{margin-bottom:0;}
+/* Desktop: the app was designed mobile-first (one narrow column), which left a lot of empty
+   space on wider screens. From ~900px we widen the content area and flow cards into two
+   newspaper-style columns instead of one long single-file stack — same card widths as before,
+   just side-by-side instead of one under the other, so nothing inside a card needs to change. */
+@media (min-width:900px){
+  .content{max-width:1180px;column-count:2;column-gap:20px;}
+  .card{break-inside:avoid;-webkit-column-break-inside:avoid;}
+}
+@media (min-width:1500px){
+  .content{max-width:1720px;column-count:3;}
+}
+/* Escape hatch for cards that should always be one full-width strip rather than getting
+   squeezed into a narrow masonry column — e.g. a wide filter bar with many side-by-side
+   dropdowns. Only has an effect while a column layout is actually active (≥900px). */
+.card-wide{column-span:all;}
 .card{background:#fff;border-radius:10px;padding:16px;margin-bottom:14px;box-shadow:0 1px 4px rgba(0,0,0,0.08);}
 .label{font-size:11px;font-weight:700;color:#7a5230;text-transform:uppercase;margin-bottom:4px;}
 input,select{width:100%;padding:8px 10px;border:1px solid #d4b896;border-radius:6px;font-size:14px;background:#fff;margin-bottom:8px;}
@@ -3012,54 +3030,54 @@ function renderLedger(){
   const sectionColors = {plank:'#5c3d1e', scrap:'#e67e22', finished:'#27ae60', socket:'#9b59b6', screw:'#7f8c8d'};
   const sectionLabels = {plank:'🪵 Wooden Planks', scrap:'♻️ Scrap', finished:'✅ Finished Pieces', socket:'🔌 Sockets', screw:'🔩 Screws'};
 
-  let html=`<div class="card" style="border:2px solid #5c3d1e;">
+  let html=`<div class="card card-wide" style="border:2px solid #5c3d1e;">
     <div class="label">📒 Stock Ledger — Filters</div>
-    <div class="label">Department</div>
-    <select onchange="state.ledgerFilterDept=this.value;re()" style="margin-bottom:8px;">
-      <option value="all" ${filterDept==='all'?'selected':''}>All Departments</option>
-      <option value="Materials" ${filterDept==='Materials'?'selected':''}>📦 Materials (purchases & stock intake)</option>
-      <option value="Wood Finishing" ${filterDept==='Wood Finishing'?'selected':''}>🪚 Wood Finishing</option>
-      <option value="Brush Dept" ${filterDept==='Brush Dept'?'selected':''}>🪥 Brush Dept</option>
-      <option value="Socket Dept" ${filterDept==='Socket Dept'?'selected':''}>🔌 Socket Dept</option>
-    </select>
-    <div class="label">Wood Piece Type</div>
-    <select onchange="state.ledgerFilterWoodPiece=this.value;re()" style="margin-bottom:8px;">
-      <option value="all" ${filterWoodPiece==='all'?'selected':''}>All Products</option>
-      ${(state.woodPieces||[]).map(w=>`<option value="${w.name}" ${filterWoodPiece===w.name?'selected':''}>${w.name}</option>`).join('')}
-    </select>
-    <div class="label">Material Type</div>
-    <select onchange="state.ledgerFilterSection=this.value;state.ledgerFilterSize='all';state.ledgerFilterBatch='all';re()" style="margin-bottom:8px;">
-      <option value="all" ${section==='all'?'selected':''}>All Materials</option>
-      <option value="plank" ${section==='plank'?'selected':''}>🪵 Wooden Planks</option>
-      <option value="scrap" ${section==='scrap'?'selected':''}>♻️ Scrap</option>
-      <option value="finished" ${section==='finished'?'selected':''}>✅ Finished Pieces</option>
-      <option value="socket" ${section==='socket'?'selected':''}>🔌 Sockets</option>
-      <option value="screw" ${section==='screw'?'selected':''}>🔩 Screws</option>
-    </select>
-    ${section==='plank'&&allSizes.length>0?`
-    <div class="label">Plank Size</div>
-    <select onchange="state.ledgerFilterSize=this.value;state.ledgerFilterBatch='all';re()" style="margin-bottom:8px;">
-      <option value="all" ${filterSize==='all'?'selected':''}>All Sizes</option>
-      ${allSizes.map(s=>`<option value="${s}" ${filterSize===s?'selected':''}>${s}" Planks</option>`).join('')}
-    </select>`:''}
-    <div class="label">Batch Number</div>
-    <select onchange="state.ledgerFilterBatch=this.value;re()" style="margin-bottom:8px;">
-      <option value="all" ${filterBatch==='all'?'selected':''}>All Batches</option>
-      ${allBatches.map(b=>`<option value="${b}" ${filterBatch===b?'selected':''}>${b}</option>`).join('')}
-    </select>
-    ${section==='plank'&&allVendors.length>0?`
-    <div class="label">Vendor</div>
-    <select onchange="state.ledgerFilterVendor=this.value;re()" style="margin-bottom:8px;">
-      <option value="all" ${filterVendor==='all'?'selected':''}>All Vendors</option>
-      ${allVendors.map(v=>`<option value="${v}" ${filterVendor===v?'selected':''}>${v}</option>`).join('')}
-    </select>`:''}
-    <div class="label">Direction</div>
-    <select onchange="state.ledgerFilterDirection=this.value;re()" style="margin-bottom:8px;">
-      <option value="all" ${filterDir==='all'?'selected':''}>IN & OUT</option>
-      <option value="IN" ${filterDir==='IN'?'selected':''}>↑ IN only</option>
-      <option value="OUT" ${filterDir==='OUT'?'selected':''}>↓ OUT only</option>
-    </select>
-    <div class="grid2" style="margin-bottom:8px;">
+    <div class="filter-grid">
+      <div><div class="label">Department</div>
+        <select onchange="state.ledgerFilterDept=this.value;re()">
+          <option value="all" ${filterDept==='all'?'selected':''}>All Departments</option>
+          <option value="Materials" ${filterDept==='Materials'?'selected':''}>📦 Materials (purchases & stock intake)</option>
+          <option value="Wood Finishing" ${filterDept==='Wood Finishing'?'selected':''}>🪚 Wood Finishing</option>
+          <option value="Brush Dept" ${filterDept==='Brush Dept'?'selected':''}>🪥 Brush Dept</option>
+          <option value="Socket Dept" ${filterDept==='Socket Dept'?'selected':''}>🔌 Socket Dept</option>
+        </select></div>
+      <div><div class="label">Wood Piece Type</div>
+        <select onchange="state.ledgerFilterWoodPiece=this.value;re()">
+          <option value="all" ${filterWoodPiece==='all'?'selected':''}>All Products</option>
+          ${(state.woodPieces||[]).map(w=>`<option value="${w.name}" ${filterWoodPiece===w.name?'selected':''}>${w.name}</option>`).join('')}
+        </select></div>
+      <div><div class="label">Material Type</div>
+        <select onchange="state.ledgerFilterSection=this.value;state.ledgerFilterSize='all';state.ledgerFilterBatch='all';re()">
+          <option value="all" ${section==='all'?'selected':''}>All Materials</option>
+          <option value="plank" ${section==='plank'?'selected':''}>🪵 Wooden Planks</option>
+          <option value="scrap" ${section==='scrap'?'selected':''}>♻️ Scrap</option>
+          <option value="finished" ${section==='finished'?'selected':''}>✅ Finished Pieces</option>
+          <option value="socket" ${section==='socket'?'selected':''}>🔌 Sockets</option>
+          <option value="screw" ${section==='screw'?'selected':''}>🔩 Screws</option>
+        </select></div>
+      ${section==='plank'&&allSizes.length>0?`
+      <div><div class="label">Plank Size</div>
+        <select onchange="state.ledgerFilterSize=this.value;state.ledgerFilterBatch='all';re()">
+          <option value="all" ${filterSize==='all'?'selected':''}>All Sizes</option>
+          ${allSizes.map(s=>`<option value="${s}" ${filterSize===s?'selected':''}>${s}" Planks</option>`).join('')}
+        </select></div>`:''}
+      <div><div class="label">Batch Number</div>
+        <select onchange="state.ledgerFilterBatch=this.value;re()">
+          <option value="all" ${filterBatch==='all'?'selected':''}>All Batches</option>
+          ${allBatches.map(b=>`<option value="${b}" ${filterBatch===b?'selected':''}>${b}</option>`).join('')}
+        </select></div>
+      ${section==='plank'&&allVendors.length>0?`
+      <div><div class="label">Vendor</div>
+        <select onchange="state.ledgerFilterVendor=this.value;re()">
+          <option value="all" ${filterVendor==='all'?'selected':''}>All Vendors</option>
+          ${allVendors.map(v=>`<option value="${v}" ${filterVendor===v?'selected':''}>${v}</option>`).join('')}
+        </select></div>`:''}
+      <div><div class="label">Direction</div>
+        <select onchange="state.ledgerFilterDirection=this.value;re()">
+          <option value="all" ${filterDir==='all'?'selected':''}>IN & OUT</option>
+          <option value="IN" ${filterDir==='IN'?'selected':''}>↑ IN only</option>
+          <option value="OUT" ${filterDir==='OUT'?'selected':''}>↓ OUT only</option>
+        </select></div>
       <div><div class="label">From Date</div><input type="date" value="${fromDate}" onchange="state.ledgerFilterFrom=this.value;re()"/></div>
       <div><div class="label">To Date</div><input type="date" value="${toDate}" onchange="state.ledgerFilterTo=this.value;re()"/></div>
     </div>
