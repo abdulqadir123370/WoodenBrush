@@ -2933,6 +2933,29 @@ function renderMaterials(){
     <div id="wpMsg" class="msg"></div>
   </div>`;
 
+  html += `<div class="card" style="border:2px solid #e67e22;">
+    <div class="label" style="color:#e67e22;">🔀 Reassign a Batch to a Different Product</div>
+    <div style="font-size:11px;color:#888;margin-bottom:10px;">For fixing one specific batch that got mislabeled — moves just that batch (and anything it turned into downstream in Brush/Socket Dept) to a different product. Doesn't touch any other batch.</div>
+    <div class="label">Wood Batch Number</div>
+    <input type="text" id="reassignBatchNo" placeholder="e.g. WB001" value="${state.reassignBatchNo||''}" oninput="state.reassignBatchNo=this.value;updateReassignPreview()" style="text-transform:uppercase;"/>
+    <div id="reassignPreview" style="font-size:12px;margin:4px 0 10px;"></div>
+    <div class="label">Move To Product</div>
+    <select id="reassignNewName" onchange="state.reassignNewName=this.value">
+      <option value="">-- Select --</option>
+      ${wp.map(w=>`<option value="${w.name}">${w.name} (${w.size}")</option>`).join('')}
+    </select>
+    <button class="btn" style="background:#e67e22;margin-top:10px;" onclick="confirmReassignBatch()">Reassign Batch</button>
+    <div id="reassignMsg" class="msg"></div>
+  </div>`;
+
+  html += `<div class="card" style="border:2px solid #2980b9;">
+    <div class="label" style="color:#2980b9;">🔍 Batch Name Check & Auto-Fix</div>
+    <div style="font-size:11px;color:#888;margin-bottom:10px;">If a rename accidentally relabeled old batches, this finds the original names (from records written at production time) and puts everything back in order — one click, with a confirmation showing exactly what will change before anything happens.</div>
+    <button class="btn" style="background:#27ae60;width:100%;margin-bottom:6px;" onclick="runAutoFixBatchNames()">🪄 Check & Fix Automatically</button>
+    <button class="btn btn-gray" style="font-size:11px;padding:6px 12px;" onclick="runNameInvestigationAndShow()">View details only (no changes)</button>
+    <div id="nameInvestigationResults" style="margin-top:10px;"></div>
+  </div>`;
+
   // Add Socket Stock — produced in-house, no vendor needed, but track batch + date
   const socketTypesForStock = state.socketTypes||[];
   html+=`<div class="card" style="border:2px solid #9b59b6;">
@@ -4591,6 +4614,271 @@ function renameWoodPieceType(oldName, newName){
     ? {...e, material: renameLedgerMaterial(e.material)} : e);
 }
 
+// Moves ONE specific wood batch's product label — and everything that batch turned into
+// downstream (Brush Dept, Socket Dept) — from oldName to newName, without touching any OTHER
+// batch that happens to share the same current name. This is for fixing "this specific batch
+// got mislabeled," as opposed to renameWoodPieceType, which relabels EVERY record of a name
+// system-wide (for genuinely renaming a product type going forward).
+function reassignBatchLineage(woodBatchNo, oldName, newName){
+  const gen = state.batchGenealogy || {};
+  // Every genealogy entry directly sourced from this wood batch, with the product we're moving.
+  const candidates = Object.keys(gen).filter(k => gen[k] && gen[k].sourceWoodBatch===woodBatchNo && gen[k].productName===oldName);
+  // Distinguish true BB (pre-socket) entries from legacy single-hop FB entries that point
+  // straight at a wood batch: FB-stage entries always carry socketUsage/screwUsage (even if
+  // empty), because that's where Socket Dept records its usage — BB entries never get those
+  // fields added at all. sourceBrushBatch presence isn't a safe test here, since plain BB
+  // entries never have it either (only NEW-style FB entries do).
+  const trueBbBatchNos = candidates.filter(k => !('socketUsage' in gen[k]));
+  const legacyFb = candidates.filter(k => 'socketUsage' in gen[k]);
+  // FB batches properly chained from any of those BB batches (new-style two-hop).
+  const fbFromBb = Object.keys(gen).filter(k => gen[k] && trueBbBatchNos.includes(gen[k].sourceBrushBatch) && gen[k].productName===oldName);
+  const fbBatchNos = [...new Set([...fbFromBb, ...legacyFb])];
+
+  const renameIfBatch = (arr, field, batchField, batchSet) =>
+    (arr||[]).map(x => x && x[field]===oldName && batchSet.includes(x[batchField]) ? {...x, [field]: newName} : x);
+
+  // 1. Wood Finishing level
+  state.production = renameIfBatch(state.production, 'woodPieceName', 'batchNo', [woodBatchNo]);
+  state.finishedInventory = renameIfBatch(state.finishedInventory, 'productName', 'batchNo', [woodBatchNo]);
+
+  // 2. Brush Dept level (BB batches derived from this wood batch)
+  if(trueBbBatchNos.length){
+    state.finishedBrushes = renameIfBatch(state.finishedBrushes, 'productName', 'batchNo', trueBbBatchNos);
+  }
+  // brushProcessingLog.fbBatchNo holds the source batch for BOTH new-style (a BB number) and
+  // legacy (the FB number itself) — matching against the combined set covers both uniformly.
+  state.brushProcessingLog = renameIfBatch(state.brushProcessingLog, 'productName', 'fbBatchNo', [...trueBbBatchNos, ...legacyFb]);
+
+  // 3. Socket Dept / Ready-for-Sale level. socketProcessingLog.fbBatchNo is the SOURCE it
+  // processed (a BB batch new-style, or the FB itself directly for legacy data) — same
+  // uniform match as brushProcessingLog above.
+  state.socketProcessingLog = (state.socketProcessingLog||[]).map(x =>
+    x && x.productName===oldName && [...trueBbBatchNos, ...legacyFb].includes(x.fbBatchNo)
+      ? {...x, productName:newName} : x);
+  if(fbBatchNos.length){
+    state.readyForSale = renameIfBatch(state.readyForSale, 'productName', 'batchNo', fbBatchNos);
+  }
+
+  // 4. Genealogy records themselves
+  const allGenKeys = [...trueBbBatchNos, ...fbBatchNos];
+  state.batchGenealogy = Object.fromEntries(Object.entries(gen).map(([k,g])=>
+    [k, g && g.productName===oldName && allGenKeys.includes(k) ? {...g, productName:newName} : g]
+  ));
+
+  // 5. Ledger — only entries tagged with one of these specific batch numbers
+  const allBatchNos = [woodBatchNo, ...trueBbBatchNos, ...fbBatchNos];
+  const renameLedgerMaterial = m => {
+    if(m===oldName) return newName;
+    if(m && m.startsWith(oldName+' (')) return newName + m.slice(oldName.length);
+    return m;
+  };
+  state.ledger = (state.ledger||[]).map(e => {
+    if(!e || !e.material || !allBatchNos.includes(e.batchNo)) return e;
+    const renamed = renameLedgerMaterial(e.material);
+    return renamed!==e.material ? {...e, material: renamed} : e;
+  });
+
+  // 6. Wastage tied to this specific wood batch
+  state.wastage = (state.wastage||[]).map(w=>{
+    if(!w || w.batchNo!==woodBatchNo) return w;
+    const upd = {};
+    if(w.woodPieceName===oldName) upd.woodPieceName = newName;
+    if(w.plankSizeName===oldName) upd.plankSizeName = newName;
+    return Object.keys(upd).length ? {...w, ...upd} : w;
+  });
+
+  return { woodBatchNo, bbBatchNos: trueBbBatchNos, fbBatchNos };
+}
+
+// ==================== BATCH NAME INVESTIGATION (read-only forensics) ====================
+// The rename tools update the ledger's `material` field, but deliberately never touch the
+// note TEXTS — those are frozen exactly as written at the moment each entry was created
+// (e.g. "Production → Commando Broom"). That makes them reliable evidence of what a batch's
+// product was originally called, even after any number of renames. This scans those notes
+// and compares against each batch's CURRENT name. Purely read-only — changes nothing.
+function investigateBatchNames(){
+  const notePatterns = [
+    /^Production → (.+)$/,
+    /^Used in production → (.+)$/,
+    /^Remainder from (.+) production$/,
+    /^Rejected (.+?) \(/,
+    /^Restored — voided run (.+?) \(/
+  ];
+  const woodBatches = [...new Set((state.production||[]).map(p=>p.batchNo))];
+  return woodBatches.map(batchNo=>{
+    const runs = (state.production||[]).filter(p=>p.batchNo===batchNo);
+    const currentNames = [...new Set(runs.map(p=>p.woodPieceName))];
+    // Evidence: ledger entries tied to this batch (exact match, or derived batches like
+    // "WB001-Scrap-X") whose note embeds a product name.
+    const evidence = {};
+    (state.ledger||[]).forEach(e=>{
+      if(!e || !e.note) return;
+      const bn = String(e.batchNo||'');
+      if(bn!==batchNo && !bn.startsWith(batchNo+'-')) return;
+      for(const pat of notePatterns){
+        const m = e.note.match(pat);
+        if(m){ evidence[m[1]] = (evidence[m[1]]||0)+1; break; }
+      }
+    });
+    const evidenceNames = Object.keys(evidence);
+    let verdict, detail;
+    if(evidenceNames.length===0){
+      verdict='no-evidence';
+      detail='No ledger notes with a recorded product name found for this batch — cannot verify either way.';
+    } else if(evidenceNames.length===1 && currentNames.length===1 && evidenceNames[0]===currentNames[0]){
+      verdict='match';
+      detail=`Ledger notes written at production time agree: "${evidenceNames[0]}" (${evidence[evidenceNames[0]]} note${evidence[evidenceNames[0]]>1?'s':''}).`;
+    } else if(evidenceNames.length===1){
+      verdict='mismatch';
+      detail=`Ledger notes written at production time say "${evidenceNames[0]}" (${evidence[evidenceNames[0]]} note${evidence[evidenceNames[0]]>1?'s':''}) — but the batch is currently labeled "${currentNames.join('", "')}". The original name was almost certainly "${evidenceNames[0]}".`;
+    } else {
+      verdict='mixed';
+      detail=`Ledger notes show more than one name over time: ${evidenceNames.map(n=>`"${n}" (${evidence[n]})`).join(', ')}. This batch may genuinely have had multiple products, or was renamed mid-life — review manually.`;
+    }
+    return { batchNo, currentNames, evidence, verdict, detail };
+  });
+}
+
+// ==================== AUTO-FIX BATCH NAMES ====================
+// Turns the investigation into an automatic correction. Logic per batch: names that appear
+// in BOTH the current labels and the original ledger-note evidence are assumed correct and
+// left alone. If exactly ONE current name and ONE evidence name remain after that, they must
+// correspond — so the fix is unambiguous and safe to apply automatically. Anything less
+// clear-cut is listed for manual review instead of guessed at.
+function planBatchNameFixes(){
+  const results = investigateBatchNames();
+  const fixes = [];   // {batchNo, from, to}
+  const manual = [];  // {batchNo, reason}
+  results.forEach(r=>{
+    const current = [...r.currentNames];
+    const evidence = Object.keys(r.evidence);
+    if(evidence.length===0) return; // nothing to verify against — leave alone silently
+    const matchedBoth = current.filter(n=>evidence.includes(n));
+    const currentLeft = current.filter(n=>!matchedBoth.includes(n));
+    const evidenceLeft = evidence.filter(n=>!matchedBoth.includes(n));
+    if(currentLeft.length===0 && evidenceLeft.length===0) return; // everything already matches
+    if(currentLeft.length===1 && evidenceLeft.length===1){
+      fixes.push({batchNo:r.batchNo, from:currentLeft[0], to:evidenceLeft[0], noteCount:r.evidence[evidenceLeft[0]]||0});
+    } else {
+      manual.push({batchNo:r.batchNo, reason:`Current: ${current.join(', ')} vs recorded: ${evidence.join(', ')} — more than one possible pairing, won't guess.`});
+    }
+  });
+  return {fixes, manual};
+}
+
+function runAutoFixBatchNames(){
+  const el = document.getElementById('nameInvestigationResults');
+  const {fixes, manual} = planBatchNameFixes();
+  if(fixes.length===0 && manual.length===0){
+    if(el) el.innerHTML = `<div style="background:#e8f5e9;border-radius:8px;padding:12px;text-align:center;font-size:13px;font-weight:700;color:#27ae60;">✅ All batch names already match their original records — nothing to fix.</div>`;
+    return;
+  }
+  if(fixes.length===0){
+    runNameInvestigationAndShow();
+    return;
+  }
+  const planText = fixes.map(f=>`• ${f.batchNo}: "${f.from}" → "${f.to}"`).join('\n');
+  if(!confirm(`This will correct ${fixes.length} batch${fixes.length>1?'es':''} back to the product name recorded when they were produced:\n\n${planText}\n\nBatches already labeled correctly are not touched. Downstream Brush/Socket records for these batches move together automatically. Proceed?`)) return;
+  const done = [];
+  fixes.forEach(f=>{
+    reassignBatchLineage(f.batchNo, f.from, f.to);
+    done.push(f);
+  });
+  saveAll();
+  re();
+  setTimeout(()=>{
+    const el2 = document.getElementById('nameInvestigationResults');
+    if(!el2) return;
+    let html = `<div style="background:#e8f5e9;border-radius:8px;padding:10px;margin-bottom:6px;">
+      <div style="font-size:13px;font-weight:700;color:#27ae60;">✅ Fixed ${done.length} batch${done.length>1?'es':''}:</div>
+      ${done.map(f=>`<div style="font-size:11px;margin-top:3px;">• ${f.batchNo}: "${f.from}" → "${f.to}" (${f.noteCount} record${f.noteCount>1?'s':''} confirmed the original)</div>`).join('')}
+    </div>`;
+    if(manual.length>0){
+      html += manual.map(m=>`<div style="background:#fff8ec;border-left:3px solid #e67e22;border-radius:4px;padding:8px 10px;margin-bottom:6px;font-size:11px;">
+        <span style="font-weight:700;color:#e67e22;">⚠️ ${m.batchNo} needs your judgment</span><br/>${m.reason}</div>`).join('');
+    }
+    html += `<div style="font-size:11px;color:#888;margin-top:6px;">Tip: run the 🩺 Data Health Check in the Admin tab now to confirm everything is consistent.</div>`;
+    el2.innerHTML = html;
+  }, 100);
+}
+
+function runNameInvestigationAndShow(){
+  const el = document.getElementById('nameInvestigationResults');
+  if(!el) return;
+  el.innerHTML = `<div style="font-size:12px;color:#888;">Scanning ledger history...</div>`;
+  setTimeout(()=>{
+    const results = investigateBatchNames();
+    if(results.length===0){ el.innerHTML = `<div style="color:#aaa;font-size:12px;">No production batches found.</div>`; return; }
+    const styles = {
+      match:    {icon:'✅', color:'#27ae60', bg:'#e8f5e9', label:'Name matches original records'},
+      mismatch: {icon:'❌', color:'#e74c3c', bg:'#fdecea', label:'Current name does NOT match original records'},
+      mixed:    {icon:'⚠️', color:'#e67e22', bg:'#fff8ec', label:'Multiple names in history — review manually'},
+      'no-evidence': {icon:'❔', color:'#7f8c8d', bg:'#f5f5f5', label:'No evidence available'}
+    };
+    let html = '';
+    results.forEach(r=>{
+      const s = styles[r.verdict];
+      html += `<div style="background:${s.bg};border-left:3px solid ${s.color};border-radius:4px;padding:8px 10px;margin-bottom:6px;font-size:11px;">
+        <div style="font-weight:700;color:${s.color};">${s.icon} ${r.batchNo} — currently "${r.currentNames.join('", "')}"</div>
+        <div style="margin-top:2px;">${r.detail}</div>
+      </div>`;
+    });
+    const mismatches = results.filter(r=>r.verdict==='mismatch').length;
+    if(mismatches>0){
+      html += `<div style="font-size:11px;color:#888;margin-top:6px;">To fix a mismatched batch, use the "🔀 Reassign a Batch" tool above with the original name shown in the evidence.</div>`;
+    }
+    el.innerHTML = html;
+  }, 50);
+}
+
+function updateReassignPreview(){
+  const batchNo = (state.reassignBatchNo||'').trim().toUpperCase();
+  const el = document.getElementById('reassignPreview');
+  if(!el) return;
+  if(!batchNo){ el.innerHTML=''; return; }
+  const runs = (state.production||[]).filter(p=>p.batchNo===batchNo && !p.voided);
+  if(runs.length===0){
+    el.innerHTML = `<span style="color:#e74c3c;">No production found for batch "${batchNo}".</span>`;
+    return;
+  }
+  const products = [...new Set(runs.map(p=>p.woodPieceName))];
+  const totalPieces = runs.reduce((s,p)=>s+(p.piecesProduced||0),0);
+  el.innerHTML = `<span style="color:#27ae60;">Found: <b>${products.join(', ')}</b> — ${totalPieces} pcs total across ${runs.length} run${runs.length>1?'s':''}.</span>`;
+}
+
+function confirmReassignBatch(){
+  const batchNo = (state.reassignBatchNo||'').trim().toUpperCase();
+  const newName = document.getElementById('reassignNewName')?.value;
+  const msg = document.getElementById('reassignMsg');
+  if(!batchNo){ msg.textContent="⚠️ Enter a batch number"; msg.className="msg err"; return; }
+  if(!newName){ msg.textContent="⚠️ Select a product to move it to"; msg.className="msg err"; return; }
+  const runs = (state.production||[]).filter(p=>p.batchNo===batchNo && !p.voided);
+  if(runs.length===0){ msg.textContent=`⚠️ No production found for batch "${batchNo}"`; msg.className="msg err"; return; }
+  const oldNames = [...new Set(runs.map(p=>p.woodPieceName))];
+  if(oldNames.length>1){
+    msg.textContent = `⚠️ This batch has more than one product on it (${oldNames.join(', ')}) — reassign isn't set up to handle that automatically. Let me know and I can extend it.`;
+    msg.className="msg err";
+    return;
+  }
+  const oldName = oldNames[0];
+  if(oldName===newName){ msg.textContent="⚠️ That's already the current product"; msg.className="msg err"; return; }
+  if(!confirm(`Move batch ${batchNo} — currently "${oldName}" — to "${newName}"? This follows it through Brush Dept and Socket Dept too if it's already been processed further. This does not affect any other batch.`)) return;
+  const result = reassignBatchLineage(batchNo, oldName, newName);
+  saveAll();
+  state.reassignBatchNo = ''; state.reassignNewName = '';
+  re();
+  setTimeout(()=>{
+    const m = document.getElementById('reassignMsg');
+    if(m){
+      const extra = [];
+      if(result.bbBatchNos.length) extra.push(`${result.bbBatchNos.length} Brush Dept batch(es)`);
+      if(result.fbBatchNos.length) extra.push(`${result.fbBatchNos.length} Socket Dept/Ready-for-Sale batch(es)`);
+      m.textContent = `✅ ${batchNo} moved to "${newName}"${extra.length?' — also updated '+extra.join(' and '):''}.`;
+      m.className="msg ok";
+    }
+  },50);
+}
+
 function startEditWoodPiece(id){
   const w = (state.woodPieces||[]).find(x=>x.id===id);
   if(!w) return;
@@ -4861,6 +5149,13 @@ function renderAdminPanel(){
       <button class="btn" style="background:#3498db;width:100%;" onclick="exportDataJSON()">💾 Export Raw Data (JSON backup)</button>
     </div>
 
+    <div class="card" style="border:2px solid #16a085;background:#f0fdfa;">
+      <div class="label" style="color:#16a085;">🩺 Data Health Check</div>
+      <div style="font-size:11px;color:#888;margin-bottom:12px;">Scans your actual data for problems — negative stock, broken batch traces, duplicate product names, missing accounts. Plain-English results, nothing to read as raw JSON.</div>
+      <button class="btn" style="background:#16a085;width:100%;" onclick="runHealthCheckAndShow()">🩺 Run Health Check</button>
+      <div id="healthCheckResults" style="margin-top:12px;"></div>
+    </div>
+
   `;
   } else {
     html += `<div class="card" style="border:2px solid #27ae60;background:#f0fff4;">
@@ -5001,6 +5296,115 @@ function exportDataPDF(){
 
   document.getElementById('printReport').innerHTML = html;
   setTimeout(()=>{ window.print(); }, 100);
+}
+
+// ==================== DATA HEALTH CHECK ====================
+// Scans the actual live data for signs of real problems — never modifies anything, purely
+// read-only. Each check is deliberately conservative (flags only things that are genuinely
+// abnormal) to avoid crying wolf on legitimate historical data.
+function runDataHealthCheck(){
+  const issues = []; // {severity:'error'|'warning', category, message}
+  const add = (severity, category, message) => issues.push({severity, category, message});
+
+  // 1. Negative stock anywhere — always a real bug, never legitimate.
+  (state.finishedInventory||[]).forEach(f=>{
+    if((f.qty||0) < -0.001) add('error','Stock',`Negative Wood Finishing stock: ${f.productName} — Batch ${f.batchNo} shows ${f.qty} pcs`);
+  });
+  (state.finishedBrushes||[]).forEach(f=>{
+    if((f.qty||0) < -0.001) add('error','Stock',`Negative Brush Dept stock: ${f.productName} — Batch ${f.batchNo} shows ${f.qty} pcs`);
+  });
+  (state.readyForSale||[]).forEach(f=>{
+    if((f.qty||0) < -0.001) add('error','Stock',`Negative Ready-for-Sale stock: ${f.productName} — Batch ${f.batchNo} shows ${f.qty} pcs`);
+  });
+  (state.socketInventory||[]).forEach(s=>{
+    if((s.qty||0) < -0.001) add('error','Stock',`Negative socket stock: ${s.socketType||''} — Batch ${s.batchNo} shows ${s.qty} pcs`);
+  });
+  (state.screwInventory||[]).forEach(s=>{
+    if((s.qty||0) < -0.001) add('error','Stock',`Negative screw stock: Batch ${s.batchNo} shows ${s.qty} pcs`);
+  });
+  (state.scrapInventory||[]).forEach(s=>{
+    if((s.qty||0) < -0.001) add('error','Stock',`Negative scrap stock: Batch ${s.batch||s.batchNo} shows ${s.qty} pcs`);
+  });
+  Object.entries(state.materials||{}).forEach(([size,m])=>{
+    (m.batches||[]).forEach(b=>{
+      if((b.qty||0) < -0.001) add('error','Stock',`Negative plank stock: ${size}" — Batch ${b.batchNo} shows ${b.qty} pcs`);
+    });
+  });
+
+  // 2. Duplicate wood piece type names — same signal as the Materials tab warning, surfaced here too.
+  const nameCounts = {};
+  (state.woodPieces||[]).forEach(w=>{ nameCounts[w.name] = (nameCounts[w.name]||0)+1; });
+  Object.entries(nameCounts).forEach(([name,count])=>{
+    if(count>1) add('warning','Catalog',`"${name}" appears ${count} times in Wood Piece Types — almost always an accidental duplicate, not two real products.`);
+  });
+
+  // 3. Genealogy pointing at a wood batch with no matching production record. Flagged as a
+  // warning, not an error, since data from before batch tracing was added won't have this.
+  const knownWoodBatches = new Set((state.production||[]).map(p=>p.batchNo));
+  Object.entries(state.batchGenealogy||{}).forEach(([k,g])=>{
+    if(g && g.sourceWoodBatch && !knownWoodBatches.has(g.sourceWoodBatch)){
+      add('warning','Traceability',`Batch ${k} traces back to wood batch "${g.sourceWoodBatch}", but no matching production run exists — may just be older data from before detailed tracing was added.`);
+    }
+    if(g && g.sourceBrushBatch && !(state.batchGenealogy||{})[g.sourceBrushBatch]){
+      add('warning','Traceability',`Batch ${k} traces back to Brush batch "${g.sourceBrushBatch}", which has no genealogy record of its own.`);
+    }
+  });
+
+  // 4. No Owner account — a real operational risk (locks out migration, backups, etc).
+  const ownerCount = (state.users||[]).filter(u=>u.role==='owner').length;
+  if(ownerCount===0) add('error','Users','No Owner account exists at all. This would lock out owner-only functions (data migration, JSON backup, void permission management).');
+
+  // 5. Ledger balance going negative for any specific batch — means more was recorded OUT
+  // than was ever recorded IN for that exact item, which is only possible if something's wrong.
+  const groups = {};
+  (state.ledger||[]).forEach(e=>{
+    if(!e || !e.batchNo) return;
+    const groupKey = e.type+'|'+((e.type==='plank'||e.type==='scrap')?(e.size||e.material):e.material)+'|'+e.batchNo;
+    (groups[groupKey] = groups[groupKey]||[]).push(e);
+  });
+  Object.entries(groups).forEach(([key, entries])=>{
+    const chron = [...entries].sort((a,b)=>(a.datetime||'').localeCompare(b.datetime||''));
+    let bal = 0, wentNegative = false, lowestBal = 0;
+    chron.forEach(e=>{ bal += e.direction==='IN'?(e.qty||0):-(e.qty||0); if(bal<lowestBal) lowestBal=bal; if(bal<-0.01) wentNegative=true; });
+    if(wentNegative){
+      const [type, mat, batchNo] = key.split('|');
+      add('error','Ledger',`${mat} (Batch ${batchNo}) went negative in the ledger at one point (as low as ${lowestBal.toFixed(1)}) — more was recorded going OUT than was ever recorded coming IN.`);
+    }
+  });
+
+  return issues;
+}
+
+function runHealthCheckAndShow(){
+  const results = document.getElementById('healthCheckResults');
+  if(!results) return;
+  results.innerHTML = `<div style="font-size:12px;color:#888;">Scanning...</div>`;
+  setTimeout(()=>{
+    const issues = runDataHealthCheck();
+    const errors = issues.filter(i=>i.severity==='error');
+    const warnings = issues.filter(i=>i.severity==='warning');
+    if(issues.length===0){
+      results.innerHTML = `<div style="background:#e8f5e9;border-radius:8px;padding:12px;text-align:center;">
+        <div style="font-size:24px;">✅</div>
+        <div style="font-size:13px;font-weight:700;color:#27ae60;">No problems found</div>
+      </div>`;
+      return;
+    }
+    let html = `<div style="font-size:12px;font-weight:700;margin-bottom:8px;">
+      ${errors.length>0?`<span style="color:#e74c3c;">${errors.length} problem${errors.length>1?'s':''}</span>`:''}
+      ${errors.length>0&&warnings.length>0?' · ':''}
+      ${warnings.length>0?`<span style="color:#e67e22;">${warnings.length} to review</span>`:''}
+    </div>`;
+    [...errors, ...warnings].forEach(i=>{
+      const color = i.severity==='error' ? '#e74c3c' : '#e67e22';
+      const bg = i.severity==='error' ? '#fdecea' : '#fff8ec';
+      const icon = i.severity==='error' ? '❌' : '⚠️';
+      html += `<div style="background:${bg};border-left:3px solid ${color};border-radius:4px;padding:8px 10px;margin-bottom:6px;font-size:11px;">
+        <span style="font-weight:700;color:${color};">${icon} ${i.category}</span><br/>${i.message}
+      </div>`;
+    });
+    results.innerHTML = html;
+  }, 50);
 }
 
 function exportDataJSON(){
