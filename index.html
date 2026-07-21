@@ -3450,7 +3450,9 @@ async function readSlipAndAutofill(file){
     });
     const data = await resp.json().catch(()=>null);
     if(!resp.ok || !data || !data.success){
-      if(statusEl) statusEl.innerHTML = `<span style="color:#e67e22;">⚠️ Couldn't auto-read this slip — please enter KG manually.</span>`;
+      const detail = data && data.error ? data.error : `HTTP ${resp.status}`;
+      console.error('Slip reader error:', resp.status, data);
+      if(statusEl) statusEl.innerHTML = `<span style="color:#e67e22;">⚠️ Couldn't auto-read this slip (${detail}) — please enter KG manually.</span>`;
       return;
     }
     if(data.netWeightKg==null){
