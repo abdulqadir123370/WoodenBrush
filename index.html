@@ -73,7 +73,7 @@ input,select{width:100%;padding:8px 10px;border:1px solid #d4b896;border-radius:
 .rem-box{border-radius:6px;padding:8px;border-left:4px solid #27ae60;background:#e8f4e8;font-size:11px;margin-top:10px;}
 .rem-box.waste{border-color:#e67e22;background:#fff3cd;}
 .modal-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:100;display:flex;align-items:center;justify-content:center;padding:20px;}
-.modal{background:#fff;border-radius:12px;padding:24px;max-width:400px;width:100%;}
+.modal{background:#fff;border-radius:12px;padding:24px;max-width:400px;width:100%;max-height:90vh;overflow-y:auto;}
 .reset-bar{padding:12px 16px;display:flex;justify-content:space-between;align-items:center;color:#fff;}
 .wastage-card-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;font-size:11px;background:#f9f5f0;border-radius:6px;padding:10px;}
 .hidden{display:none;}
@@ -2887,10 +2887,17 @@ function renderMaterials(){
   </div>`;
 
   html+=`<div class="card" style="border:2px solid #3498db;">
-    <div class="label">🪜 Wood Piece Types</div>
-    <div style="margin-bottom:12px;">`;
+    <div class="label">🪜 Wood Piece Types</div>`;
+  const nameCounts = {};
+  wp.forEach(w=>{ nameCounts[w.name] = (nameCounts[w.name]||0)+1; });
+  const hasDupes = Object.values(nameCounts).some(c=>c>1);
+  if(hasDupes){
+    html+=`<div style="background:#fdecea;border-radius:6px;padding:8px 10px;margin-bottom:10px;font-size:11px;color:#e74c3c;font-weight:700;">⚠️ Some names below are listed more than once — that's usually accidental duplicate entries, not two different products. Delete the extras below to clean it up (your existing production history isn't affected either way).</div>`;
+  }
+  html+=`<div style="margin-bottom:12px;">`;
   if(wp.length>0){
     wp.forEach(w=>{
+      const isDupe = nameCounts[w.name]>1;
       if(state.editingWoodPieceId===w.id){
         html+=`<div style="background:#f0f8ff;border-radius:8px;padding:10px;margin-bottom:6px;">
           <div class="grid2" style="margin-bottom:6px;">
@@ -2905,9 +2912,12 @@ function renderMaterials(){
           <div id="wpEditMsg_${w.id}" class="msg"></div>
         </div>`;
       } else {
-        html+=`<div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;padding:4px 0;">
-          <span>• ${w.name} (${w.size}")</span>
-          <button class="btn btn-gray" style="font-size:10px;padding:3px 8px;" onclick="startEditWoodPiece(${w.id})">✏️ Edit</button>
+        html+=`<div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;padding:4px 0;${isDupe?'background:#fdecea;border-radius:6px;padding:6px 8px;':''}">
+          <span>• ${w.name} (${w.size}")${isDupe?' <span style="color:#e74c3c;font-weight:700;font-size:10px;">(duplicate name)</span>':''}</span>
+          <span style="display:flex;gap:4px;">
+            <button class="btn btn-gray" style="font-size:10px;padding:3px 8px;" onclick="startEditWoodPiece(${w.id})">✏️ Edit</button>
+            <button class="btn btn-red" style="font-size:10px;padding:3px 8px;" onclick="deleteWoodPiece(${w.id})">🗑️</button>
+          </span>
         </div>`;
       }
     });
@@ -3653,15 +3663,51 @@ function openBatchTraceModal(fbBatchNo){
   </div>`;
 
   if(brushBatchNo){
+    // Pieces actually counted going INTO this BB batch — pulled from Brush Dept's own log,
+    // not just the batch number label.
+    const brushRuns = (state.brushProcessingLog||[]).filter(r=>r.fbBatchNo===brushBatchNo);
+    const brushTotalQty = brushRuns.reduce((s,r)=>s+(r.voided?0:r.qty||0),0);
     html += `<div class="card" style="border:2px solid #d35400;margin-bottom:12px;">
       <div class="label" style="color:#d35400;">🪥 Source Brush Batch (pre-socket)</div>
       ${fieldBox(brushBatchNo)}
+      <div style="margin-top:8px;font-size:12px;font-weight:700;color:#d35400;">Pieces Brushed: ${brushTotalQty}${brushRuns.some(r=>r.voided)?' (excludes voided runs)':''}</div>
+      ${brushRuns.length>0?brushRuns.map(r=>`<div style="display:flex;justify-content:space-between;font-size:11px;padding:3px 0;border-bottom:1px solid #f0e8de;${r.voided?'opacity:0.5;text-decoration:line-through;':''}">
+        <span>${r.date} — from ${r.sourceBatch||'—'}</span><span style="font-weight:700;">${r.qty} pcs${r.voided?' (voided)':''}</span>
+      </div>`).join(''):`<div style="color:#aaa;font-size:11px;margin-top:4px;">No Brush Dept log entries found for this batch (may predate detailed logging).</div>`}
     </div>`;
+  } else {
+    // Old-style genealogy (from before the BB/FB split) — Brush Dept logged directly against
+    // the FB number itself rather than a separate BB batch. Look there instead.
+    const legacyBrushRuns = (state.brushProcessingLog||[]).filter(r=>r.fbBatchNo===fbBatchNo);
+    if(legacyBrushRuns.length>0){
+      const legacyBrushTotalQty = legacyBrushRuns.reduce((s,r)=>s+(r.voided?0:r.qty||0),0);
+      html += `<div class="card" style="border:2px solid #d35400;margin-bottom:12px;">
+        <div class="label" style="color:#d35400;">🪥 Brush Dept (legacy pre-split data)</div>
+        <div style="font-size:12px;font-weight:700;color:#d35400;">Pieces Brushed: ${legacyBrushTotalQty}${legacyBrushRuns.some(r=>r.voided)?' (excludes voided runs)':''}</div>
+        ${legacyBrushRuns.map(r=>`<div style="display:flex;justify-content:space-between;font-size:11px;padding:3px 0;border-bottom:1px solid #f0e8de;${r.voided?'opacity:0.5;text-decoration:line-through;':''}">
+          <span>${r.date} — from ${r.sourceBatch||'—'}</span><span style="font-weight:700;">${r.qty} pcs${r.voided?' (voided)':''}</span>
+        </div>`).join('')}
+      </div>`;
+    }
   }
 
+  // Pieces + planks actually counted at Wood Finishing — matched to this specific batch AND
+  // product, since one wood batch (a delivered lot of planks) can yield several different
+  // products across multiple production runs.
+  const woodRuns = (state.production||[]).filter(p=>p.batchNo===woodBatchNo && p.woodPieceName===gen.productName);
+  const woodTotalPlanks = woodRuns.reduce((s,p)=>s+(p.voided?0:p.planksUsed||0),0);
+  const woodTotalPieces = woodRuns.reduce((s,p)=>s+(p.voided?0:p.piecesProduced||0),0);
   html += `<div class="card" style="border:2px solid #5c3d1e;margin-bottom:12px;">
     <div class="label" style="color:#5c3d1e;">🪵 Source Wood Batch</div>
     ${fieldBox(woodBatchNo)}
+    <div class="grid2" style="margin-top:8px;">
+      <div><div class="label" style="font-size:10px;">Planks Used</div><div style="font-size:16px;font-weight:700;color:#5c3d1e;">${woodTotalPlanks}</div></div>
+      <div><div class="label" style="font-size:10px;">Pieces Produced</div><div style="font-size:16px;font-weight:700;color:#27ae60;">${woodTotalPieces}</div></div>
+    </div>
+    ${woodRuns.some(p=>p.voided)?`<div style="font-size:10px;color:#e74c3c;margin-top:4px;">Excludes voided production runs.</div>`:''}
+    ${woodRuns.length>0?woodRuns.map(p=>`<div style="display:flex;justify-content:space-between;font-size:11px;padding:3px 0;border-bottom:1px solid #f0e8de;${p.voided?'opacity:0.5;text-decoration:line-through;':''}">
+      <span>${p.date}</span><span style="font-weight:700;">${p.planksUsed} planks → ${p.piecesProduced} pcs${p.voided?' (voided)':''}</span>
+    </div>`).join(''):`<div style="color:#aaa;font-size:11px;margin-top:4px;">No matching Wood Finishing run found for this batch/product — may predate detailed tracking, or the product name was changed since.</div>`}
   </div>`;
 
   html += `<div class="card" style="border:2px solid #9b59b6;margin-bottom:12px;">
@@ -4489,9 +4535,14 @@ function addWoodPiece(){
   const sizeEl=document.getElementById('wpSize');
   const name=nameEl?nameEl.value.trim():state.newWoodName;
   const size=sizeEl?+sizeEl.value:+state.newWoodSize;
+  const msg=document.getElementById('wpMsg');
   if(!name||!size||size<=0){
-    const msg=document.getElementById('wpMsg');
     if(msg){msg.textContent="⚠️ Fill all fields";msg.className="msg err";}
+    return;
+  }
+  const dupIdx = (state.woodPieces||[]).findIndex(x=>x.name===name);
+  if(dupIdx>=0){
+    if(msg){msg.textContent=`⚠️ "${name}" already exists — edit that one instead of adding a duplicate.`;msg.className="msg err";}
     return;
   }
   state.woodPieces=[...(state.woodPieces||[]),{id:Date.now(),name,size}];
@@ -4571,6 +4622,23 @@ function saveEditWoodPiece(id){
   if(newName !== oldName) renameWoodPieceType(oldName, newName);
   state.woodPieces = (state.woodPieces||[]).map(x=>x.id===id?{...x, name:newName, size:newSize}:x);
   state.editingWoodPieceId = null;
+  saveAll();
+  re();
+}
+
+// Removes a wood piece TYPE from the catalog list only — it never touches production runs,
+// finished stock, brush/socket history, ledger entries, etc., since none of those are linked
+// to a catalog row's id, only to the product's name string. Safe to use for cleaning up
+// duplicate/accidental catalog entries (e.g. the same product added twice by mistake).
+function deleteWoodPiece(id){
+  const w = (state.woodPieces||[]).find(x=>x.id===id);
+  if(!w) return;
+  const dupCount = (state.woodPieces||[]).filter(x=>x.name===w.name).length;
+  const warning = dupCount>1
+    ? `Remove the duplicate catalog entry "${w.name}" (${w.size}")? The other entry with this exact name will remain, and all your existing production history stays exactly as it is either way.`
+    : `Remove "${w.name}" (${w.size}") from the wood piece types list? This only removes it from this list — it will NOT touch any existing production runs, stock, or history that already reference "${w.name}".`;
+  if(!confirm(warning)) return;
+  state.woodPieces = (state.woodPieces||[]).filter(x=>x.id!==id);
   saveAll();
   re();
 }
