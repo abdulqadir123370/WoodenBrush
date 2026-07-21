@@ -219,6 +219,7 @@ input,select{width:100%;padding:8px 10px;border:1px solid #d4b896;border-radius:
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-check-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-storage-compat.js"></script>
 
 <script>
 const SK = {
@@ -294,13 +295,22 @@ const MAP_COLLECTIONS = { materials:1, openBatches:1, batchGenealogy:1 };
 // Until a key is pasted here, this block does nothing and the app works exactly as before.
 const APP_CHECK_SITE_KEY = ''; // <-- paste your reCAPTCHA v3 site key here
 
-let fbApp = null, fbDb = null;
+// ==================== WEIGHT SLIP READER (Sales tab — auto-fill KG from a photo) ====================
+// Points at the small "weight-slip-reader" service (deployed separately, e.g. on Railway,
+// same pattern as your WhatsApp bot) that reads a photo of a printed scale receipt and
+// returns the weight. See its README for setup. Until both are filled in, the "attach slip"
+// UI still lets you save the photo for your records — it just won't auto-fill the KG field.
+const WEIGHT_SLIP_READER_URL = 'https://weight-slip-reader-production.up.railway.app/read-slip'; // <-- e.g. https://weight-slip-reader-production.up.railway.app/read-slip
+const WEIGHT_SLIP_READER_SECRET = '3b9e8282984a6db91754ca51497845a854b0c736ebbccd64'; // <-- must match SHARED_SECRET on the Railway service
+
+let fbApp = null, fbDb = null, fbStorage = null;
 try{
   fbApp = firebase.initializeApp(FIREBASE_CONFIG);
   if(APP_CHECK_SITE_KEY && firebase.appCheck){
     firebase.appCheck().activate(APP_CHECK_SITE_KEY, true); // true = auto-refresh tokens
   }
   fbDb = firebase.firestore();
+  if(firebase.storage) fbStorage = firebase.storage();
   // Offline persistence: writes made without connection are durably queued (survives reload)
   // and auto-sent on reconnect. Reads come instantly from local cache while offline.
   fbDb.enablePersistence({synchronizeTabs:true}).catch(err=>{
@@ -3303,6 +3313,7 @@ function renderSales(){
         </div>
       </div>
         <div style="font-size:11px;color:#888;${isVoidedSale?'text-decoration:line-through;':''}">${s.kgSold} KG @ Rs.${s.pricePerKg}/KG</div>
+      ${s.weighSlipUrl?`<a href="${s.weighSlipUrl}" target="_blank" rel="noopener" style="font-size:11px;color:#3498db;font-weight:700;text-decoration:none;">📷 View Weight Slip</a>${s.weighSlipReadKg!=null && Math.abs(s.weighSlipReadKg-s.kgSold)>0.05?` <span style="color:#e67e22;">(slip read ${s.weighSlipReadKg} KG — edited before saving)</span>`:''}`:''}
       ${s.flagged&&!isVoidedSale?`<div style="font-size:11px;color:#3498db;margin-top:6px;background:#e8f4fd;border-radius:6px;padding:6px 8px;">🚩 Flagged by ${s.flaggedBy} on ${s.flaggedDate} ${s.flaggedTime||''}<br/><span style="font-style:italic;">"${s.flagNote}"</span></div>`:''}
       ${isVoidedSale?`<div style="font-size:11px;color:#e74c3c;margin-top:6px;">Voided by ${s.voidedBy} on ${s.voidedDate}<br/><span style="font-style:italic;">"${s.voidedReason}"</span></div>`:''}
       ${isOwner && collectedByAccountant>0 && !isVoidedSale?`
@@ -3365,7 +3376,7 @@ function getWasteTypeStock(){
 
 function openSaleModal(){
   const stock = getWasteTypeStock();
-  state.saleModal = {stock};
+  state.saleModal = {stock, slipFile:null, slipUrl:null, slipReadKg:null, slipUploadPromise:null};
   document.getElementById('saleModalTitle').textContent = `💰 Sell Wastage`;
   document.getElementById('saleModalSub').textContent = `Choose a wastage type and enter sale details`;
   document.getElementById('saleErr').classList.add('hidden');
@@ -3377,6 +3388,10 @@ function openSaleModal(){
     <div id="saleTypeAvailableNote" style="font-size:11px;color:#666;margin:4px 0 10px;"></div>
     <div class="label">Buyer Name</div>
     <input type="text" id="saleBuyer" placeholder="e.g. Ahmed Traders"/>
+    <div class="label">📷 Weight Slip Photo</div>
+    <input type="file" id="saleSlipFile" accept="image/*" capture="environment" onchange="handleSlipFileSelected(this)"/>
+    <div id="saleSlipStatus" style="font-size:11px;margin:2px 0 6px;"></div>
+    <div id="saleSlipPreview"></div>
     <div class="label">KG to Sell</div>
     <input type="number" id="saleKg" step="0.1" min="0.1"/>
     <div class="label">Price per KG (Rs.)</div>
@@ -3386,6 +3401,87 @@ function openSaleModal(){
     <div style="background:#e8f5e9;border-radius:6px;padding:8px;font-size:11px;color:#27ae60;font-weight:700;">✅ Payment collected in full at time of sale</div>`;
   document.getElementById('saleModal').classList.remove('hidden');
   updateSaleTypeAvailable();
+}
+
+// ==================== WEIGHT SLIP: photo -> auto-fill KG + permanent storage ====================
+function fileToBase64(file){
+  return new Promise((resolve, reject)=>{
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function handleSlipFileSelected(input){
+  const file = input.files && input.files[0];
+  if(!file || !state.saleModal) return;
+  state.saleModal.slipFile = file;
+  state.saleModal.slipUrl = null;
+  state.saleModal.slipReadKg = null;
+
+  const previewEl = document.getElementById('saleSlipPreview');
+  if(previewEl){
+    const objUrl = URL.createObjectURL(file);
+    previewEl.innerHTML = `<img src="${objUrl}" style="max-width:150px;max-height:150px;border-radius:8px;border:1px solid #d4b896;margin-bottom:6px;"/>`;
+  }
+
+  // Reading (for auto-fill) and uploading (for the permanent record) happen independently —
+  // one failing shouldn't block the other. Both degrade gracefully: if reading fails, the
+  // person just types the KG themselves; if the upload fails, the sale still saves, just
+  // without a linked photo.
+  readSlipAndAutofill(file);
+  state.saleModal.slipUploadPromise = uploadSlipToStorage(file);
+}
+
+async function readSlipAndAutofill(file){
+  const statusEl = document.getElementById('saleSlipStatus');
+  if(!WEIGHT_SLIP_READER_URL || !WEIGHT_SLIP_READER_SECRET){
+    if(statusEl) statusEl.innerHTML = `<span style="color:#888;">📎 Slip attached (auto-read isn't set up yet — enter KG manually)</span>`;
+    return;
+  }
+  if(statusEl) statusEl.innerHTML = `<span style="color:#3498db;">🔍 Reading slip...</span>`;
+  try{
+    const base64 = await fileToBase64(file);
+    const resp = await fetch(WEIGHT_SLIP_READER_URL, {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+WEIGHT_SLIP_READER_SECRET },
+      body: JSON.stringify({ image: base64, mediaType: file.type || 'image/jpeg' })
+    });
+    const data = await resp.json().catch(()=>null);
+    if(!resp.ok || !data || !data.success){
+      if(statusEl) statusEl.innerHTML = `<span style="color:#e67e22;">⚠️ Couldn't auto-read this slip — please enter KG manually.</span>`;
+      return;
+    }
+    if(data.netWeightKg==null){
+      if(statusEl) statusEl.innerHTML = `<span style="color:#e67e22;">⚠️ Couldn't find a clear weight on this slip — please enter KG manually.${data.notes?' ('+data.notes+')':''}</span>`;
+      return;
+    }
+    if(!state.saleModal) return; // modal was closed while the request was in flight
+    state.saleModal.slipReadKg = data.netWeightKg;
+    const kgInput = document.getElementById('saleKg');
+    if(kgInput) kgInput.value = data.netWeightKg;
+    const confColor = data.confidence==='high' ? '#27ae60' : data.confidence==='medium' ? '#e67e22' : '#e74c3c';
+    if(statusEl) statusEl.innerHTML = `<span style="color:${confColor};font-weight:700;">✅ Read ${data.netWeightKg} KG from slip (${data.confidence} confidence) — please double-check before saving.</span>`;
+  }catch(e){
+    console.error('Slip read failed:', e);
+    if(statusEl) statusEl.innerHTML = `<span style="color:#e67e22;">⚠️ Couldn't reach the reading service — please enter KG manually.</span>`;
+  }
+}
+
+async function uploadSlipToStorage(file){
+  if(!fbStorage) return null;
+  try{
+    const path = `weight-slips/${Date.now()}_${Math.random().toString(36).slice(2,8)}.jpg`;
+    const ref = fbStorage.ref(path);
+    await ref.put(file);
+    const url = await ref.getDownloadURL();
+    if(state.saleModal) state.saleModal.slipUrl = url;
+    return url;
+  }catch(e){
+    console.error('Slip upload failed (sale can still be recorded without it):', e);
+    return null;
+  }
 }
 
 function updateSaleTypeAvailable(){
@@ -3399,7 +3495,7 @@ function updateSaleTypeAvailable(){
 }
 
 let isSubmittingSale = false;
-function confirmSale(){
+async function confirmSale(){
   if(isSubmittingSale) return;
   isSubmittingSale = true;
   setTimeout(()=>{isSubmittingSale=false;}, 1000);
@@ -3419,6 +3515,15 @@ function confirmSale(){
   if(kg>available+0.001){err.textContent=`⚠️ Max available for ${wasteType} is ${available.toFixed(1)} KG`;err.classList.remove('hidden');return;}
   if(!price||price<=0){err.textContent="⚠️ Enter price per KG";err.classList.remove('hidden');return;}
   if(!date){err.textContent="⚠️ Enter sale date";err.classList.remove('hidden');return;}
+
+  // If a slip photo is still uploading, wait for it (briefly) so the URL makes it onto this
+  // sale record — but don't let a slow/failed upload block recording the sale itself.
+  if(modal.slipUploadPromise){
+    const statusEl = document.getElementById('saleSlipStatus');
+    if(statusEl) statusEl.innerHTML = `<span style="color:#3498db;">⏳ Finishing photo upload...</span>`;
+    await Promise.race([modal.slipUploadPromise, new Promise(r=>setTimeout(r, 8000))]);
+  }
+
   const totalAmount=kg*price;
   const preSnapshot = takeSnapshot(['sales']);
   // Every wastage sale is paid in full at the time of recording — no credit sales.
@@ -3427,7 +3532,8 @@ function confirmSale(){
     buyer, kgSold:kg, pricePerKg:price, totalAmount,
     amountReceived:totalAmount, pendingAmount:0,
     payment:'Paid', date, time: new Date().toTimeString().slice(0,5), datetime:new Date().toISOString(),
-    voided:false
+    voided:false,
+    weighSlipUrl: modal.slipUrl || null, weighSlipReadKg: modal.slipReadKg ?? null
   }];
   document.getElementById('saleModal').classList.add('hidden');
   state.saleModal=null;
