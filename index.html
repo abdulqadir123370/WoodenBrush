@@ -2933,28 +2933,15 @@ function renderMaterials(){
     <div id="wpMsg" class="msg"></div>
   </div>`;
 
-  html += `<div class="card" style="border:2px solid #e67e22;">
-    <div class="label" style="color:#e67e22;">🔀 Reassign a Batch to a Different Product</div>
-    <div style="font-size:11px;color:#888;margin-bottom:10px;">For fixing one specific batch that got mislabeled — moves just that batch (and anything it turned into downstream in Brush/Socket Dept) to a different product. Doesn't touch any other batch.</div>
-    <div class="label">Wood Batch Number</div>
-    <input type="text" id="reassignBatchNo" placeholder="e.g. WB001" value="${state.reassignBatchNo||''}" oninput="state.reassignBatchNo=this.value;updateReassignPreview()" style="text-transform:uppercase;"/>
-    <div id="reassignPreview" style="font-size:12px;margin:4px 0 10px;"></div>
-    <div class="label">Move To Product</div>
-    <select id="reassignNewName" onchange="state.reassignNewName=this.value">
-      <option value="">-- Select --</option>
-      ${wp.map(w=>`<option value="${w.name}">${w.name} (${w.size}")</option>`).join('')}
-    </select>
-    <button class="btn" style="background:#e67e22;margin-top:10px;" onclick="confirmReassignBatch()">Reassign Batch</button>
-    <div id="reassignMsg" class="msg"></div>
-  </div>`;
-
-  html += `<div class="card" style="border:2px solid #2980b9;">
-    <div class="label" style="color:#2980b9;">🔍 Batch Name Check & Auto-Fix</div>
-    <div style="font-size:11px;color:#888;margin-bottom:10px;">If a rename accidentally relabeled old batches, this finds the original names (from records written at production time) and puts everything back in order — one click, with a confirmation showing exactly what will change before anything happens.</div>
-    <button class="btn" style="background:#27ae60;width:100%;margin-bottom:6px;" onclick="runAutoFixBatchNames()">🪄 Check & Fix Automatically</button>
-    <button class="btn btn-gray" style="font-size:11px;padding:6px 12px;" onclick="runNameInvestigationAndShow()">View details only (no changes)</button>
-    <div id="nameInvestigationResults" style="margin-top:10px;"></div>
-  </div>`;
+  if(currentUser?.role==='owner'){
+    html += `<div class="card" style="border:2px solid #2980b9;">
+      <div class="label" style="color:#2980b9;">🔍 Batch Name Check & Auto-Fix <span style="font-size:9px;background:#8e44ad;color:#fff;border-radius:4px;padding:1px 6px;vertical-align:middle;">OWNER</span></div>
+      <div style="font-size:11px;color:#888;margin-bottom:10px;">If a rename accidentally relabeled old batches, this finds the original names (from records written at production time) and puts everything back in order — one click, with a confirmation showing exactly what will change before anything happens.</div>
+      <button class="btn" style="background:#27ae60;width:100%;margin-bottom:6px;" onclick="runAutoFixBatchNames()">🪄 Check & Fix Automatically</button>
+      <button class="btn btn-gray" style="font-size:11px;padding:6px 12px;" onclick="runNameInvestigationAndShow()">View details only (no changes)</button>
+      <div id="nameInvestigationResults" style="margin-top:10px;"></div>
+    </div>`;
+  }
 
   // Add Socket Stock — produced in-house, no vendor needed, but track batch + date
   const socketTypesForStock = state.socketTypes||[];
@@ -4767,6 +4754,7 @@ function planBatchNameFixes(){
 }
 
 function runAutoFixBatchNames(){
+  if(currentUser?.role!=='owner'){ alert('🔒 Only the Owner can apply data fixes.'); return; }
   const el = document.getElementById('nameInvestigationResults');
   const {fixes, manual} = planBatchNameFixes();
   if(fixes.length===0 && manual.length===0){
@@ -4825,58 +4813,10 @@ function runNameInvestigationAndShow(){
     });
     const mismatches = results.filter(r=>r.verdict==='mismatch').length;
     if(mismatches>0){
-      html += `<div style="font-size:11px;color:#888;margin-top:6px;">To fix a mismatched batch, use the "🔀 Reassign a Batch" tool above with the original name shown in the evidence.</div>`;
+      html += `<div style="font-size:11px;color:#888;margin-top:6px;">To fix mismatched batches, use the "🪄 Check & Fix Automatically" button above.</div>`;
     }
     el.innerHTML = html;
   }, 50);
-}
-
-function updateReassignPreview(){
-  const batchNo = (state.reassignBatchNo||'').trim().toUpperCase();
-  const el = document.getElementById('reassignPreview');
-  if(!el) return;
-  if(!batchNo){ el.innerHTML=''; return; }
-  const runs = (state.production||[]).filter(p=>p.batchNo===batchNo && !p.voided);
-  if(runs.length===0){
-    el.innerHTML = `<span style="color:#e74c3c;">No production found for batch "${batchNo}".</span>`;
-    return;
-  }
-  const products = [...new Set(runs.map(p=>p.woodPieceName))];
-  const totalPieces = runs.reduce((s,p)=>s+(p.piecesProduced||0),0);
-  el.innerHTML = `<span style="color:#27ae60;">Found: <b>${products.join(', ')}</b> — ${totalPieces} pcs total across ${runs.length} run${runs.length>1?'s':''}.</span>`;
-}
-
-function confirmReassignBatch(){
-  const batchNo = (state.reassignBatchNo||'').trim().toUpperCase();
-  const newName = document.getElementById('reassignNewName')?.value;
-  const msg = document.getElementById('reassignMsg');
-  if(!batchNo){ msg.textContent="⚠️ Enter a batch number"; msg.className="msg err"; return; }
-  if(!newName){ msg.textContent="⚠️ Select a product to move it to"; msg.className="msg err"; return; }
-  const runs = (state.production||[]).filter(p=>p.batchNo===batchNo && !p.voided);
-  if(runs.length===0){ msg.textContent=`⚠️ No production found for batch "${batchNo}"`; msg.className="msg err"; return; }
-  const oldNames = [...new Set(runs.map(p=>p.woodPieceName))];
-  if(oldNames.length>1){
-    msg.textContent = `⚠️ This batch has more than one product on it (${oldNames.join(', ')}) — reassign isn't set up to handle that automatically. Let me know and I can extend it.`;
-    msg.className="msg err";
-    return;
-  }
-  const oldName = oldNames[0];
-  if(oldName===newName){ msg.textContent="⚠️ That's already the current product"; msg.className="msg err"; return; }
-  if(!confirm(`Move batch ${batchNo} — currently "${oldName}" — to "${newName}"? This follows it through Brush Dept and Socket Dept too if it's already been processed further. This does not affect any other batch.`)) return;
-  const result = reassignBatchLineage(batchNo, oldName, newName);
-  saveAll();
-  state.reassignBatchNo = ''; state.reassignNewName = '';
-  re();
-  setTimeout(()=>{
-    const m = document.getElementById('reassignMsg');
-    if(m){
-      const extra = [];
-      if(result.bbBatchNos.length) extra.push(`${result.bbBatchNos.length} Brush Dept batch(es)`);
-      if(result.fbBatchNos.length) extra.push(`${result.fbBatchNos.length} Socket Dept/Ready-for-Sale batch(es)`);
-      m.textContent = `✅ ${batchNo} moved to "${newName}"${extra.length?' — also updated '+extra.join(' and '):''}.`;
-      m.className="msg ok";
-    }
-  },50);
 }
 
 function startEditWoodPiece(id){
@@ -5150,9 +5090,9 @@ function renderAdminPanel(){
     </div>
 
     <div class="card" style="border:2px solid #16a085;background:#f0fdfa;">
-      <div class="label" style="color:#16a085;">🩺 Data Health Check</div>
-      <div style="font-size:11px;color:#888;margin-bottom:12px;">Scans your actual data for problems — negative stock, broken batch traces, duplicate product names, missing accounts. Plain-English results, nothing to read as raw JSON.</div>
-      <button class="btn" style="background:#16a085;width:100%;" onclick="runHealthCheckAndShow()">🩺 Run Health Check</button>
+      <div class="label" style="color:#16a085;">🩺 Full Module Check & Fix</div>
+      <div style="font-size:11px;color:#888;margin-bottom:12px;">One scan of everything — stock levels, batch names vs original records, traces, ledger balances, accounts. Fixes what's safe to fix automatically (with your confirmation), and clearly separates anything that needs your judgment. Run this after any app update to confirm all previous data is still in order.</div>
+      <button class="btn" style="background:#16a085;width:100%;" onclick="runFullCheckAndShow()">🩺 Check Everything</button>
       <div id="healthCheckResults" style="margin-top:12px;"></div>
     </div>
 
@@ -5354,12 +5294,24 @@ function runDataHealthCheck(){
   const ownerCount = (state.users||[]).filter(u=>u.role==='owner').length;
   if(ownerCount===0) add('error','Users','No Owner account exists at all. This would lock out owner-only functions (data migration, JSON backup, void permission management).');
 
-  // 5. Ledger balance going negative for any specific batch — means more was recorded OUT
-  // than was ever recorded IN for that exact item, which is only possible if something's wrong.
+  // 5. Ledger balance going negative for a specific batch. IMPORTANT scoping, learned the
+  // hard way (v1 of this check false-alarmed on perfectly good data):
+  //   - 'finished': the SAME physical pieces get different material labels per stage —
+  //     "X" at Wood Finishing, "X (Brush)" after the brush machine, "X (Ready for Sale)"
+  //     after Socket Dept — sometimes on the same batch number (old-style FB batches).
+  //     So we strip those stage suffixes before grouping, or the OUT ("Sent to Socket
+  //     Dept", plain "X") has no matching IN ("X (Brush)") and looks falsely negative.
+  //   - 'plank' and 'scrap' are EXCLUDED entirely: their INs are recorded under purchase/
+  //     origin batch numbers but their OUTs under production wood-batch numbers, so a
+  //     per-batch balance is structurally impossible to compute from the ledger alone.
+  //   - 'socket' and 'screw' use the same batch number both directions — checked as-is.
+  const stripStage = m => String(m||'').replace(/ \((Brush|Ready for Sale)\)$/,'');
   const groups = {};
   (state.ledger||[]).forEach(e=>{
     if(!e || !e.batchNo) return;
-    const groupKey = e.type+'|'+((e.type==='plank'||e.type==='scrap')?(e.size||e.material):e.material)+'|'+e.batchNo;
+    if(e.type!=='finished' && e.type!=='socket' && e.type!=='screw') return;
+    const mat = e.type==='finished' ? stripStage(e.material) : e.material;
+    const groupKey = e.type+'|'+mat+'|'+e.batchNo;
     (groups[groupKey] = groups[groupKey]||[]).push(e);
   });
   Object.entries(groups).forEach(([key, entries])=>{
@@ -5373,6 +5325,154 @@ function runDataHealthCheck(){
   });
 
   return issues;
+}
+
+// ==================== SAFE STRUCTURAL FIXES ====================
+// Collects repairs that are DETERMINISTIC — where there is exactly one correct outcome and
+// no judgment involved. Anything requiring a decision (negative stock, ambiguous names,
+// broken traces) is deliberately NOT here; those stay detect-only for a human to resolve.
+function collectStructuralFixes(){
+  const fixes = []; // {desc, apply}
+
+  // a) Wastage/Sales entries missing a stable id — created before flag/void support existed.
+  //    Without an id they can't be flagged or voided. Assigning one changes no business data.
+  const wastageNoId = (state.wastage||[]).filter(w=>w && (w.id===undefined||w.id===null));
+  if(wastageNoId.length>0){
+    fixes.push({
+      desc:`Give ${wastageNoId.length} older wastage entr${wastageNoId.length===1?'y':'ies'} an internal ID so they can be flagged/voided (no numbers change).`,
+      apply(){ state.wastage = (state.wastage||[]).map(w=> w && (w.id===undefined||w.id===null) ? {...w, id: Date.now()+Math.random()} : w); }
+    });
+  }
+  const salesNoId = (state.sales||[]).filter(s=>s && (s.id===undefined||s.id===null));
+  if(salesNoId.length>0){
+    fixes.push({
+      desc:`Give ${salesNoId.length} older sale record${salesNoId.length===1?'':'s'} an internal ID so they can be flagged/voided (no amounts change).`,
+      apply(){ state.sales = (state.sales||[]).map(s=> s && (s.id===undefined||s.id===null) ? {...s, id: Date.now()+Math.random()} : s); }
+    });
+  }
+
+  // b) EXACT duplicate catalog rows — same name AND same size. Keeping one and dropping the
+  //    rest loses nothing (they're literally identical) and history is tracked by name anyway.
+  //    Same-name-different-size stays detect-only: a human must say which size is right.
+  const seen = {};
+  const exactDupes = [];
+  (state.woodPieces||[]).forEach(w=>{
+    const key = w.name+'|'+w.size;
+    if(seen[key]) exactDupes.push(w); else seen[key]=true;
+  });
+  if(exactDupes.length>0){
+    fixes.push({
+      desc:`Remove ${exactDupes.length} exact duplicate catalog entr${exactDupes.length===1?'y':'ies'} (identical name AND size — e.g. ${exactDupes.slice(0,2).map(w=>'"'+w.name+'"').join(', ')}). One copy of each stays; production history is untouched either way.`,
+      apply(){
+        const kept = {};
+        state.woodPieces = (state.woodPieces||[]).filter(w=>{
+          const key = w.name+'|'+w.size;
+          if(kept[key]) return false;
+          kept[key] = true;
+          return true;
+        });
+      }
+    });
+  }
+
+  // c) Duplicate stock rows — the same product+batch listed as two separate rows in the same
+  //    inventory list. Merging them into one row with the summed quantity is pure arithmetic:
+  //    total stock is identical before and after.
+  const dupRowFix = (arr, keyFn, label) => {
+    const counts = {};
+    (arr||[]).forEach(x=>{ if(!x) return; const k=keyFn(x); counts[k]=(counts[k]||0)+1; });
+    const dupKeys = Object.keys(counts).filter(k=>counts[k]>1);
+    if(dupKeys.length===0) return null;
+    return {
+      desc:`Merge ${dupKeys.length} split ${label} entr${dupKeys.length===1?'y':'ies'} (same product & batch listed more than once) into single rows — total quantities stay exactly the same.`,
+      apply(){
+        const merged = {};
+        const out = [];
+        (arr||[]).forEach(x=>{
+          if(!x){ return; }
+          const k = keyFn(x);
+          if(merged[k]!==undefined){ out[merged[k]] = {...out[merged[k]], qty: (out[merged[k]].qty||0)+(x.qty||0)}; }
+          else { merged[k] = out.length; out.push({...x}); }
+        });
+        return out;
+      }
+    };
+  };
+  const fiFix = dupRowFix(state.finishedInventory, x=>x.productName+'|'+x.batchNo, 'Wood Finishing stock');
+  if(fiFix) fixes.push({desc:fiFix.desc, apply(){ state.finishedInventory = fiFix.apply(); }});
+  const fbFix = dupRowFix(state.finishedBrushes, x=>x.productName+'|'+x.batchNo, 'Brush Dept stock');
+  if(fbFix) fixes.push({desc:fbFix.desc, apply(){ state.finishedBrushes = fbFix.apply(); }});
+  const rfsFix = dupRowFix(state.readyForSale, x=>x.productName+'|'+x.batchNo, 'Ready-for-Sale stock');
+  if(rfsFix) fixes.push({desc:rfsFix.desc, apply(){ state.readyForSale = rfsFix.apply(); }});
+
+  return fixes;
+}
+
+// ==================== FULL MODULE CHECK & FIX ====================
+function runFullCheckAndShow(){
+  const results = document.getElementById('healthCheckResults');
+  if(!results) return;
+  results.innerHTML = `<div style="font-size:12px;color:#888;">Scanning the whole module...</div>`;
+  setTimeout(()=>{
+    const issues = runDataHealthCheck();                 // detect-only findings
+    const namePlan = planBatchNameFixes();               // {fixes, manual}
+    const structural = collectStructuralFixes();         // deterministic repairs
+    const errors = issues.filter(i=>i.severity==='error');
+    const warnings = issues.filter(i=>i.severity==='warning');
+    const fixableCount = namePlan.fixes.length + structural.length;
+
+    if(issues.length===0 && fixableCount===0 && namePlan.manual.length===0){
+      results.innerHTML = `<div style="background:#e8f5e9;border-radius:8px;padding:14px;text-align:center;">
+        <div style="font-size:26px;">✅</div>
+        <div style="font-size:14px;font-weight:700;color:#27ae60;">Everything is in order</div>
+        <div style="font-size:11px;color:#888;margin-top:4px;">Stock levels, batch names, traces, ledger, accounts — all checked, nothing found.</div>
+      </div>`;
+      return;
+    }
+
+    let html = '';
+    if(fixableCount>0){
+      html += `<div style="background:#e8f4fd;border-radius:8px;padding:10px;margin-bottom:8px;">
+        <div style="font-size:12px;font-weight:700;color:#2980b9;margin-bottom:6px;">🔧 ${fixableCount} thing${fixableCount>1?'s':''} I can fix safely — no judgment calls involved:</div>
+        ${namePlan.fixes.map(f=>`<div style="font-size:11px;margin-bottom:3px;">• ${f.batchNo}: rename "${f.from}" back to "${f.to}" (${f.noteCount} original record${f.noteCount>1?'s':''} confirm it)</div>`).join('')}
+        ${structural.map(f=>`<div style="font-size:11px;margin-bottom:3px;">• ${f.desc}</div>`).join('')}
+        <button class="btn" style="background:#2980b9;width:100%;margin-top:6px;" onclick="applyAllSafeFixes()">🔧 Fix these ${fixableCount} now</button>
+      </div>`;
+    }
+    [...errors, ...warnings].forEach(i=>{
+      const color = i.severity==='error' ? '#e74c3c' : '#e67e22';
+      const bg = i.severity==='error' ? '#fdecea' : '#fff8ec';
+      const icon = i.severity==='error' ? '❌' : '⚠️';
+      html += `<div style="background:${bg};border-left:3px solid ${color};border-radius:4px;padding:8px 10px;margin-bottom:6px;font-size:11px;">
+        <span style="font-weight:700;color:${color};">${icon} ${i.category} — needs your attention</span><br/>${i.message}
+      </div>`;
+    });
+    namePlan.manual.forEach(m=>{
+      html += `<div style="background:#fff8ec;border-left:3px solid #e67e22;border-radius:4px;padding:8px 10px;margin-bottom:6px;font-size:11px;">
+        <span style="font-weight:700;color:#e67e22;">⚠️ Batch ${m.batchNo} — needs your judgment</span><br/>${m.reason}
+      </div>`;
+    });
+    results.innerHTML = html;
+  }, 50);
+}
+
+function applyAllSafeFixes(){
+  // Owner-only, enforced here too (not just by hiding buttons) so it can't be triggered
+  // from the console or by a stale UI on another role's session.
+  if(currentUser?.role!=='owner'){ alert('🔒 Only the Owner can apply data fixes.'); return; }
+  const namePlan = planBatchNameFixes();
+  const structural = collectStructuralFixes();
+  const total = namePlan.fixes.length + structural.length;
+  if(total===0){ runFullCheckAndShow(); return; }
+  if(!confirm(`Apply ${total} safe fix${total>1?'es':''} now? Only the deterministic items listed above are touched — nothing that needs a judgment call. You'll see a fresh scan afterwards.`)) return;
+  namePlan.fixes.forEach(f=>reassignBatchLineage(f.batchNo, f.from, f.to));
+  structural.forEach(f=>f.apply());
+  saveAll();
+  re();
+  setTimeout(()=>{
+    // Re-open the Admin results area with a fresh scan so the person sees the after-state
+    runFullCheckAndShow();
+  }, 150);
 }
 
 function runHealthCheckAndShow(){
