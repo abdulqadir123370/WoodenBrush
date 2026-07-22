@@ -98,6 +98,11 @@ input,select{width:100%;padding:8px 10px;border:1px solid #d4b896;border-radius:
   <div>
     <div class="header-title">🪥 Brush Manufacturing Tracker</div>
     <div class="header-sub">Multi-Department with Smart Production</div>
+    <div id="userInfo" style="font-size:11px;opacity:0.8;margin-top:2px;"></div>
+    <div style="display:flex;gap:10px;align-items:center;margin-top:4px;flex-wrap:wrap;">
+      <span id="syncIndicator" style="font-size:11px;font-weight:700;min-height:14px;"></span>
+      <span id="healthBadge" style="font-size:11px;font-weight:700;min-height:14px;" title="Checks stock levels, batch name consistency, ledger balances, and account setup against known failure patterns. A green result means no KNOWN issue was found — it is not a guarantee against bugs no check has been written for yet."></span>
+    </div>
   </div>
   <div style="display:flex;gap:6px;">
     <button id="resetProdBtn" class="btn btn-orange" onclick="confirmResetProd()" style="font-size:11px;padding:7px 10px;">🗑️ Prod</button>
@@ -507,6 +512,57 @@ function updateSyncBanner(){
   }
 }
 
+// ==================== HEADER HEALTH BADGE ====================
+// IMPORTANT — what this can and cannot promise: this badge reflects the result of
+// runDataHealthCheck(), which only looks for the SPECIFIC failure patterns it has been
+// written to detect (negative stock, duplicate catalog names, orphaned genealogy, no Owner
+// account, cross-stage batch-name disagreement, ledger balances going negative). A green
+// result means "no KNOWN issue was found" — it is NOT a guarantee that the data is bug-free.
+// FB003 itself is proof of this: it was invisible to every version of this check until the
+// specific gap that hid it was found and closed. New categories of bug can still exist that
+// nothing here has been taught to look for. Treat green as "nothing flagged," not "certified
+// correct" — this wording is deliberately used in the badge and its tooltip, not softened.
+let healthBadgeTimer = null;
+let healthPeriodicStarted = false;
+function scheduleHealthBadgeUpdate(){
+  clearTimeout(healthBadgeTimer);
+  healthBadgeTimer = setTimeout(updateHealthBadge, 3000);
+}
+function updateHealthBadge(){
+  const el = document.getElementById('healthBadge');
+  if(!el || !currentUser) return;
+  let issues;
+  try{ issues = runDataHealthCheck(); }
+  catch(e){
+    // The check itself failing is worth surfacing, not hiding.
+    el.innerHTML = `❔ Could not run the data check (${e && e.message ? e.message : 'error'})`;
+    el.style.color = '#7f8c8d';
+    return;
+  }
+  const errors = issues.filter(i=>i.severity==='error').length;
+  const warnings = issues.filter(i=>i.severity==='warning').length;
+  const stamp = new Date().toTimeString().slice(0,5);
+  const isAdmin = currentUser.role==='admin' || currentUser.role==='owner';
+  const goToCheck = isAdmin ? ` <span style="text-decoration:underline;cursor:pointer;" onclick="document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));switchTab('Admin',document.getElementById('adminTab'));setTimeout(()=>{if(typeof runFullCheckAndShow==='function')runFullCheckAndShow();document.getElementById('adminTab')?.scrollIntoView();},50);">— view details</span>` : '';
+  if(errors>0){
+    el.style.color = '#e74c3c';
+    el.innerHTML = `❌ ${errors} known issue${errors>1?'s':''} found as of ${stamp}${goToCheck}`;
+  } else if(warnings>0){
+    el.style.color = '#e67e22';
+    el.innerHTML = `⚠️ ${warnings} item${warnings>1?'s':''} to review as of ${stamp}${goToCheck}`;
+  } else {
+    el.style.color = '#27ae60';
+    el.innerHTML = `✅ No known issues found as of ${stamp}`;
+  }
+}
+// Safety-net timer so cross-device changes (which don't always route through THIS device's
+// saveAll) still get periodically re-checked, not just on this device's own edits.
+function startHealthPeriodicCheck(){
+  if(healthPeriodicStarted) return;
+  healthPeriodicStarted = true;
+  setInterval(updateHealthBadge, 5*60*1000);
+}
+
 // ---- Real-time listeners: one per collection ----
 function attachFirestoreListeners(onAllFirstSnapshots){
   const firstSeen = {};
@@ -549,6 +605,7 @@ function attachFirestoreListeners(onAllFirstSnapshots){
           syncStatus='live';
           updateSyncIndicator();
           setTimeout(()=>{syncStatus='idle';updateSyncIndicator();},2000);
+          if(typeof scheduleHealthBadgeUpdate==='function') scheduleHealthBadgeUpdate();
         }
       }
       firstSeen[stateKey] = true;
@@ -785,6 +842,9 @@ function saveAll(){
   // Always sync: writes are per-record diffs (never whole-list overwrites), and Firestore's
   // offline persistence durably queues them if there's no connection right now.
   syncToFirestore();
+  // Keep the header health badge current after every data-touching action — debounced so
+  // rapid successive saves (e.g. typing) don't run the full check on every keystroke.
+  if(typeof scheduleHealthBadgeUpdate==='function') scheduleHealthBadgeUpdate();
 }
 
 function addLedgerEntry(type, material, batchNo, qty, direction, note, size='', vendor=''){
@@ -5346,6 +5406,8 @@ function renderAuthenticatedApp(){
   if(resetProdBtn) resetProdBtn.style.display = isAdmin ? '' : 'none';
   if(resetAllBtn) resetAllBtn.style.display = isAdmin ? '' : 'none';
   renderTab(firstTab);
+  if(typeof scheduleHealthBadgeUpdate==='function') scheduleHealthBadgeUpdate();
+  if(typeof startHealthPeriodicCheck==='function') startHealthPeriodicCheck();
 }
 
 function renderAdminPanel(){
