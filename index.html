@@ -175,6 +175,7 @@ input,select{width:100%;padding:8px 10px;border:1px solid #d4b896;border-radius:
   <button class="tab" id="adminTab" onclick="switchTab('Admin',this)">⚙️ Admin</button>
 </div>
 
+<div id="syncBanner" style="display:none;background:#c0392b;color:#fff;padding:10px 16px;font-size:13px;font-weight:600;text-align:center;position:sticky;top:0;z-index:200;"></div>
 <div id="installBar" class="hidden" style="background:#5c3d1e;color:#fff;padding:10px 16px;display:flex;justify-content:space-between;align-items:center;">
   <span style="font-size:13px;">📲 Add to Home Screen for app experience</span>
   <button onclick="installApp()" style="background:#d4a84b;color:#fff;border:none;border-radius:6px;padding:6px 14px;font-weight:700;font-size:13px;cursor:pointer;">Install</button>
@@ -359,10 +360,15 @@ function recordsOf(stateKey){
   return out;
 }
 
+let syncConsecutiveFailures = 0;
+let syncRetryTimeout = null;
+let lastSyncError = null;
+
 function syncToFirestore(){
   if(!fbDb) return;
   clearTimeout(syncTimeout);
-  syncTimeout = setTimeout(doFirestoreSync, 1200);
+  clearTimeout(syncRetryTimeout);
+  syncTimeout = setTimeout(()=>{ doFirestoreSync().catch(()=>{}); }, 1200);
 }
 
 function doFirestoreSync(){
@@ -374,55 +380,94 @@ function doFirestoreSync(){
   try{
     const ops = [];
     const now = new Date().toISOString();
+    // Remember exactly which docId belongs to which collection's batch, so that once we know
+    // whether a batch actually succeeded, we know precisely which shadow entries are allowed
+    // to be updated. Batches that fail leave their shadow untouched — meaning those exact
+    // records look "changed" again on the next attempt and get resent automatically, instead
+    // of being silently forgotten forever.
     Object.keys(SK).forEach(stateKey=>{
-      // Never touch a collection we haven't received a confirmed first snapshot for yet —
-      // this is the guard that prevents the exact bug that caused data loss: syncing (and
-      // possibly deleting) against a shadow that doesn't actually reflect the server yet.
       if(!collectionReady[stateKey]) return;
       const col = SK[stateKey];
       const recs = recordsOf(stateKey);
       const shadow = syncShadow[stateKey] || {};
       Object.entries(recs).forEach(([docId, rec])=>{
         const j = JSON.stringify(rec);
-        if(shadow[docId] !== j) ops.push({t:'set', col, docId, data:{v:j, updatedAt:now}});
+        if(shadow[docId] !== j) ops.push({t:'set', col, docId, data:{v:j, updatedAt:now}, stateKey, j});
       });
       Object.keys(shadow).forEach(docId=>{
-        if(!(docId in recs)) ops.push({t:'del', col, docId});
+        if(!(docId in recs)) ops.push({t:'del', col, docId, stateKey});
       });
     });
-    if(ops.length===0){ syncStatus='saved'; updateSyncIndicator(); setTimeout(()=>{syncStatus='idle';updateSyncIndicator();},1500); return Promise.resolve(); }
-    // Chunked batches (Firestore caps a batch at 500 ops). With offline persistence these
-    // are durably queued the moment they're issued; commit promises are also collected so a
-    // caller that needs REAL cloud confirmation (e.g. data fixes) can await them.
-    const commitPromises = [];
+    if(ops.length===0){
+      syncStatus='saved'; syncConsecutiveFailures=0; lastSyncError=null;
+      updateSyncIndicator(); setTimeout(()=>{syncStatus='idle';updateSyncIndicator();},1500);
+      return Promise.resolve();
+    }
+    const chunkPromises = [];
     for(let i=0; i<ops.length; i+=400){
+      const chunk = ops.slice(i, i+400);
       const batch = fbDb.batch();
-      ops.slice(i, i+400).forEach(o=>{
+      chunk.forEach(o=>{
         const ref = fbDb.collection(o.col).doc(o.docId);
         if(o.t==='set') batch.set(ref, o.data);
         else batch.delete(ref);
       });
-      commitPromises.push(batch.commit().catch(err=>{ console.error('Firestore batch error:', err); throw err; }));
+      // On success, THIS chunk's records (and only this chunk's) get marked synced. On
+      // failure, none of them do — so the diff picks them right back up next attempt.
+      chunkPromises.push(
+        batch.commit()
+          .then(()=>{
+            chunk.forEach(o=>{
+              if(!syncShadow[o.stateKey]) syncShadow[o.stateKey] = {};
+              if(o.t==='set') syncShadow[o.stateKey][o.docId] = o.j;
+              else delete syncShadow[o.stateKey][o.docId];
+            });
+          })
+          .catch(err=>{ console.error('Firestore batch error:', err); throw err; })
+      );
     }
-    // Update the shadow optimistically — the writes are durably queued.
-    Object.keys(SK).forEach(stateKey=>{
-      if(!collectionReady[stateKey]) return;
-      const recs = recordsOf(stateKey);
-      const sh = {};
-      Object.entries(recs).forEach(([k,r])=>{ sh[k]=JSON.stringify(r); });
-      syncShadow[stateKey] = sh;
+    return Promise.allSettled(chunkPromises).then(results=>{
+      const failed = results.filter(r=>r.status==='rejected');
+      if(failed.length===0){
+        syncStatus='saved'; syncConsecutiveFailures=0; lastSyncError=null;
+        updateSyncIndicator();
+        setTimeout(()=>{syncStatus='idle';updateSyncIndicator();},2000);
+        return;
+      }
+      syncStatus='error';
+      syncConsecutiveFailures++;
+      lastSyncError = failed[0].reason;
+      updateSyncIndicator();
+      scheduleSyncRetry();
+      throw lastSyncError;
     });
-    syncStatus='saved';
-    updateSyncIndicator();
-    setTimeout(()=>{syncStatus='idle';updateSyncIndicator();},2000);
-    return Promise.all(commitPromises);
   } catch(err){
     syncStatus='error';
+    syncConsecutiveFailures++;
+    lastSyncError = err;
     console.error('Firestore sync error:', err);
     updateSyncIndicator();
-    setTimeout(()=>{syncStatus='idle';updateSyncIndicator();},2000);
+    scheduleSyncRetry();
     return Promise.reject(err);
   }
+}
+
+// Auto-retry with backoff (15s, 30s, 60s, then capped at 60s) — so a transient problem heals
+// itself without anyone needing to notice or intervene, but doesn't hammer a genuinely broken
+// connection either.
+function scheduleSyncRetry(){
+  clearTimeout(syncRetryTimeout);
+  const delayMs = Math.min(60000, 15000 * Math.pow(2, Math.min(syncConsecutiveFailures-1, 2)));
+  syncRetryTimeout = setTimeout(()=>{ doFirestoreSync().catch(()=>{}); }, delayMs);
+}
+
+// Recovery tool for exactly the incident that prompted this: if writes silently failed for a
+// while, the shadow may already (wrongly) believe some of them succeeded. This wipes this
+// device's memory of what it thinks is synced, forcing EVERY record it currently holds to be
+// re-sent on the next sync — the safe way to guarantee nothing from this device stays stuck.
+function forceFullResync(){
+  syncShadow = {};
+  return doFirestoreSync();
 }
 
 // Safety net: flush a pending debounced sync immediately if the tab is hidden or closed.
@@ -434,12 +479,32 @@ window.addEventListener('pagehide', flushPendingSync);
 
 function updateSyncIndicator(){
   const el = document.getElementById('syncIndicator');
+  if(el){
+    if(syncStatus==='saving') { el.textContent='⏳ Syncing...'; el.style.color='#e67e22'; }
+    else if(syncStatus==='saved') { el.textContent='✅ Synced'; el.style.color='#27ae60'; }
+    else if(syncStatus==='error') { el.textContent='❌ Sync failed'; el.style.color='#e74c3c'; }
+    else if(syncStatus==='live') { el.textContent='🔄 Live update from another device'; el.style.color='#27ae60'; }
+    else { el.textContent=''; }
+  }
+  updateSyncBanner();
+}
+
+// A persistent, full-width banner — unlike the small corner indicator, this does NOT auto-hide.
+// It stays up on every tab until a sync actually succeeds, specifically so a failure that
+// started while nobody was watching (like the App Check / Firestore rules incident) can never
+// go unnoticed again. Shows after 2 consecutive failures, not the first — a single blip (e.g.
+// a phone losing signal for a moment) shouldn't alarm anyone; a real, ongoing problem should.
+function updateSyncBanner(){
+  const el = document.getElementById('syncBanner');
   if(!el) return;
-  if(syncStatus==='saving') { el.textContent='⏳ Syncing...'; el.style.color='#e67e22'; }
-  else if(syncStatus==='saved') { el.textContent='✅ Synced'; el.style.color='#27ae60'; }
-  else if(syncStatus==='error') { el.textContent='❌ Sync failed — saved locally only'; el.style.color='#e74c3c'; }
-  else if(syncStatus==='live') { el.textContent='🔄 Live update from another device'; el.style.color='#27ae60'; }
-  else { el.textContent=''; }
+  if(syncStatus==='error' && syncConsecutiveFailures>=2){
+    const codeHint = lastSyncError && lastSyncError.code ? ` (${lastSyncError.code})` : '';
+    el.innerHTML = `⚠️ <b>Changes are NOT reaching the shared database</b>${codeHint} — they only exist on this device right now. Check your internet connection, or ask the Owner to check Firebase permissions.
+      <button onclick="doFirestoreSync().catch(()=>{})" style="margin-left:10px;background:#fff;color:#c0392b;border:none;border-radius:4px;padding:3px 10px;font-weight:700;font-size:12px;cursor:pointer;">🔄 Retry Now</button>`;
+    el.style.display = 'block';
+  } else {
+    el.style.display = 'none';
+  }
 }
 
 // ---- Real-time listeners: one per collection ----
@@ -4612,51 +4677,116 @@ function renameWoodPieceType(oldName, newName){
 // batch that happens to share the same current name. This is for fixing "this specific batch
 // got mislabeled," as opposed to renameWoodPieceType, which relabels EVERY record of a name
 // system-wide (for genuinely renaming a product type going forward).
-function reassignBatchLineage(woodBatchNo, oldName, newName){
+// Shared by the investigator and the fixer: given a wood batch number, finds every batch
+// number in its downstream lineage (BB batches derived from it, and FB batches derived from
+// those — handling both new-style two-hop and legacy single-hop genealogy). Kept as ONE
+// function so the two tools can never disagree about a batch's structure between them.
+function getBatchLineage(woodBatchNo){
   const gen = state.batchGenealogy || {};
-  // Every genealogy entry directly sourced from this wood batch, with the product we're moving.
-  const candidates = Object.keys(gen).filter(k => gen[k] && gen[k].sourceWoodBatch===woodBatchNo && gen[k].productName===oldName);
-  // Distinguish true BB (pre-socket) entries from legacy single-hop FB entries that point
-  // straight at a wood batch: FB-stage entries always carry socketUsage/screwUsage (even if
-  // empty), because that's where Socket Dept records its usage — BB entries never get those
-  // fields added at all. sourceBrushBatch presence isn't a safe test here, since plain BB
-  // entries never have it either (only NEW-style FB entries do).
+  const candidates = Object.keys(gen).filter(k => gen[k] && gen[k].sourceWoodBatch===woodBatchNo);
+  // FB-stage entries always carry socketUsage/screwUsage (even if empty) — that's where
+  // Socket Dept records its usage. BB entries never get those fields at all.
   const trueBbBatchNos = candidates.filter(k => !('socketUsage' in gen[k]));
   const legacyFb = candidates.filter(k => 'socketUsage' in gen[k]);
-  // FB batches properly chained from any of those BB batches (new-style two-hop).
-  const fbFromBb = Object.keys(gen).filter(k => gen[k] && trueBbBatchNos.includes(gen[k].sourceBrushBatch) && gen[k].productName===oldName);
+  const fbFromBb = Object.keys(gen).filter(k => gen[k] && trueBbBatchNos.includes(gen[k].sourceBrushBatch));
   const fbBatchNos = [...new Set([...fbFromBb, ...legacyFb])];
+  return { trueBbBatchNos, legacyFb, fbBatchNos, brushLevelBatches: [...trueBbBatchNos, ...legacyFb] };
+}
 
-  const renameIfBatch = (arr, field, batchField, batchSet) =>
-    (arr||[]).map(x => x && x[field]===oldName && batchSet.includes(x[batchField]) ? {...x, [field]: newName} : x);
+function reassignBatchLineage(woodBatchNo, oldName, newName){
+  const { trueBbBatchNos, legacyFb, fbBatchNos, brushLevelBatches } = getBatchLineage(woodBatchNo);
+  // Every single record actually changed gets logged here — {collection, count, detail} —
+  // so the caller can show the FULL chain of implications, not just a one-line summary.
+  const manifest = [];
+  const logChange = (collection, count, detail) => { if(count>0) manifest.push({collection, count, detail}); };
+
+  const renameIfBatch = (arr, field, batchField, batchSet) => {
+    let n = 0;
+    const out = (arr||[]).map(x => {
+      if(x && x[field]===oldName && batchSet.includes(x[batchField])){ n++; return {...x, [field]: newName}; }
+      return x;
+    });
+    return {out, n};
+  };
 
   // 1. Wood Finishing level
-  state.production = renameIfBatch(state.production, 'woodPieceName', 'batchNo', [woodBatchNo]);
-  state.finishedInventory = renameIfBatch(state.finishedInventory, 'productName', 'batchNo', [woodBatchNo]);
+  { const {out,n} = renameIfBatch(state.production, 'woodPieceName', 'batchNo', [woodBatchNo]);
+    state.production = out; logChange('Wood Finishing production runs', n, `batch ${woodBatchNo}`); }
+  { const {out,n} = renameIfBatch(state.finishedInventory, 'productName', 'batchNo', [woodBatchNo]);
+    state.finishedInventory = out; logChange('Wood Finishing stock records', n, `batch ${woodBatchNo}`); }
 
-  // 2. Brush Dept level (BB batches derived from this wood batch)
-  if(trueBbBatchNos.length){
-    state.finishedBrushes = renameIfBatch(state.finishedBrushes, 'productName', 'batchNo', trueBbBatchNos);
+  // 1b. Every production run is ALSO duplicated inside openBatches/closedBatches[].runs[] —
+  // a separate copy used by the void system to look up a run by id. This copy is never read
+  // for restocking math (that always prefers the state.production copy), but it IS a second
+  // place the same product name lives, and it must be corrected too or it becomes a silent,
+  // permanently stale duplicate. Found via a full audit prompted by exactly this concern.
+  let openRunsFixed = 0;
+  if(state.openBatches){
+    Object.keys(state.openBatches).forEach(size=>{
+      const ob = state.openBatches[size];
+      if(ob && ob.batchNo===woodBatchNo && Array.isArray(ob.runs)){
+        ob.runs = ob.runs.map(r => {
+          if(r && r.woodPieceName===oldName){ openRunsFixed++; return {...r, woodPieceName:newName}; }
+          return r;
+        });
+      }
+    });
   }
-  // brushProcessingLog.fbBatchNo holds the source batch for BOTH new-style (a BB number) and
-  // legacy (the FB number itself) — matching against the combined set covers both uniformly.
-  state.brushProcessingLog = renameIfBatch(state.brushProcessingLog, 'productName', 'fbBatchNo', [...trueBbBatchNos, ...legacyFb]);
+  logChange('Open batch internal run records', openRunsFixed, `batch ${woodBatchNo}`);
+  let closedRunsFixed = 0;
+  state.closedBatches = (state.closedBatches||[]).map(cb=>{
+    if(!cb || !Array.isArray(cb.runs)) return cb;
+    if(getRootBatchNo(cb.batchNo)!==getRootBatchNo(woodBatchNo)) return cb;
+    const runs = cb.runs.map(r => {
+      if(r && r.woodPieceName===oldName){ closedRunsFixed++; return {...r, woodPieceName:newName}; }
+      return r;
+    });
+    return {...cb, runs};
+  });
+  logChange('Closed batch internal run records', closedRunsFixed, `batch ${woodBatchNo}`);
+
+  // 2. Brush Dept level. Covers new-style BB batches AND legacy FB batches — in legacy
+  // (pre-split) data there was never a separate BB stage, so the FB identifier itself IS
+  // where "brushed, pre-socket" stock is held. Missing this for legacy batches was a real
+  // bug: it left old batches showing the wrong name in Brush Dept even after Wood Finishing
+  // and Ready-for-Sale were both correctly fixed.
+  if(brushLevelBatches.length){
+    const {out,n} = renameIfBatch(state.finishedBrushes, 'productName', 'batchNo', brushLevelBatches);
+    state.finishedBrushes = out; logChange('Brush Dept stock records', n, `batches ${brushLevelBatches.join(', ')}`);
+  }
+  { const {out,n} = renameIfBatch(state.brushProcessingLog, 'productName', 'fbBatchNo', brushLevelBatches);
+    state.brushProcessingLog = out; logChange('Brush Dept processing log entries', n, `batches ${brushLevelBatches.join(', ')||'(none)'}`); }
+
+  // 2b. Rework stock (Color/Regmal) and brush scrap log — both reference the WOOD batch
+  // (the finished-wood-stock batch consumed at the brush machine), not a BB/FB number.
+  { const {out,n} = renameIfBatch(state.reworkStock, 'productName', 'batchNo', [woodBatchNo]);
+    state.reworkStock = out; logChange('Rework stock (Color/Regmal) records', n, `batch ${woodBatchNo}`); }
+  { const {out,n} = renameIfBatch(state.brushScrapLog, 'productName', 'batchNo', [woodBatchNo]);
+    state.brushScrapLog = out; logChange('Brush scrap (Kharab Maal) log entries', n, `batch ${woodBatchNo}`); }
 
   // 3. Socket Dept / Ready-for-Sale level. socketProcessingLog.fbBatchNo is the SOURCE it
   // processed (a BB batch new-style, or the FB itself directly for legacy data) — same
   // uniform match as brushProcessingLog above.
-  state.socketProcessingLog = (state.socketProcessingLog||[]).map(x =>
-    x && x.productName===oldName && [...trueBbBatchNos, ...legacyFb].includes(x.fbBatchNo)
-      ? {...x, productName:newName} : x);
+  let socketLogFixed = 0;
+  state.socketProcessingLog = (state.socketProcessingLog||[]).map(x => {
+    if(x && x.productName===oldName && brushLevelBatches.includes(x.fbBatchNo)){ socketLogFixed++; return {...x, productName:newName}; }
+    return x;
+  });
+  logChange('Socket Dept processing log entries', socketLogFixed, `batches ${brushLevelBatches.join(', ')||'(none)'}`);
   if(fbBatchNos.length){
-    state.readyForSale = renameIfBatch(state.readyForSale, 'productName', 'batchNo', fbBatchNos);
+    const {out,n} = renameIfBatch(state.readyForSale, 'productName', 'batchNo', fbBatchNos);
+    state.readyForSale = out; logChange('Ready-for-Sale stock records', n, `batches ${fbBatchNos.join(', ')}`);
   }
 
   // 4. Genealogy records themselves
+  const gen = state.batchGenealogy || {};
   const allGenKeys = [...trueBbBatchNos, ...fbBatchNos];
-  state.batchGenealogy = Object.fromEntries(Object.entries(gen).map(([k,g])=>
-    [k, g && g.productName===oldName && allGenKeys.includes(k) ? {...g, productName:newName} : g]
-  ));
+  let genFixed = 0;
+  state.batchGenealogy = Object.fromEntries(Object.entries(gen).map(([k,g])=>{
+    if(g && g.productName===oldName && allGenKeys.includes(k)){ genFixed++; return [k, {...g, productName:newName}]; }
+    return [k, g];
+  }));
+  logChange('Batch genealogy (traceability) records', genFixed, `batches ${allGenKeys.join(', ')||'(none)'}`);
 
   // 5. Ledger — only entries tagged with one of these specific batch numbers
   const allBatchNos = [woodBatchNo, ...trueBbBatchNos, ...fbBatchNos];
@@ -4665,22 +4795,28 @@ function reassignBatchLineage(woodBatchNo, oldName, newName){
     if(m && m.startsWith(oldName+' (')) return newName + m.slice(oldName.length);
     return m;
   };
+  let ledgerFixed = 0;
   state.ledger = (state.ledger||[]).map(e => {
     if(!e || !e.material || !allBatchNos.includes(e.batchNo)) return e;
     const renamed = renameLedgerMaterial(e.material);
-    return renamed!==e.material ? {...e, material: renamed} : e;
+    if(renamed!==e.material){ ledgerFixed++; return {...e, material: renamed}; }
+    return e;
   });
+  logChange('Ledger entries', ledgerFixed, `batches ${allBatchNos.join(', ')} (labels only — history text unchanged)`);
 
   // 6. Wastage tied to this specific wood batch
+  let wastageFixed = 0;
   state.wastage = (state.wastage||[]).map(w=>{
     if(!w || w.batchNo!==woodBatchNo) return w;
     const upd = {};
     if(w.woodPieceName===oldName) upd.woodPieceName = newName;
     if(w.plankSizeName===oldName) upd.plankSizeName = newName;
-    return Object.keys(upd).length ? {...w, ...upd} : w;
+    if(Object.keys(upd).length){ wastageFixed++; return {...w, ...upd}; }
+    return w;
   });
+  logChange('Wastage records', wastageFixed, `batch ${woodBatchNo}`);
 
-  return { woodBatchNo, bbBatchNos: trueBbBatchNos, fbBatchNos };
+  return { woodBatchNo, bbBatchNos: trueBbBatchNos, fbBatchNos, manifest };
 }
 
 // ==================== BATCH NAME INVESTIGATION (read-only forensics) ====================
@@ -4700,7 +4836,17 @@ function investigateBatchNames(){
   const woodBatches = [...new Set((state.production||[]).map(p=>p.batchNo))];
   return woodBatches.map(batchNo=>{
     const runs = (state.production||[]).filter(p=>p.batchNo===batchNo);
-    const currentNames = [...new Set(runs.map(p=>p.woodPieceName))];
+    // Current name(s) are gathered from EVERY stage this batch's lineage touches, not just
+    // Wood Finishing production. This matters: a partial fix can leave production correct
+    // while a downstream stage (e.g. Brush Dept's own stock pool) still shows the old name —
+    // checking production alone would make that leftover problem invisible forever.
+    const { trueBbBatchNos, fbBatchNos, brushLevelBatches } = getBatchLineage(batchNo);
+    const currentNames = [...new Set([
+      ...runs.map(p=>p.woodPieceName),
+      ...(state.finishedInventory||[]).filter(f=>f.batchNo===batchNo).map(f=>f.productName),
+      ...(state.finishedBrushes||[]).filter(f=>brushLevelBatches.includes(f.batchNo)).map(f=>f.productName),
+      ...(state.readyForSale||[]).filter(f=>fbBatchNos.includes(f.batchNo)).map(f=>f.productName),
+    ])];
     // Evidence: ledger entries tied to this batch (exact match, or derived batches like
     // "WB001-Scrap-X") whose note embeds a product name.
     const evidence = {};
@@ -4740,12 +4886,31 @@ function investigateBatchNames(){
 // clear-cut is listed for manual review instead of guessed at.
 function planBatchNameFixes(){
   const results = investigateBatchNames();
-  const fixes = [];   // {batchNo, from, to}
+  const fixes = [];   // {batchNo, from, to, noteCount}
   const manual = [];  // {batchNo, reason}
   results.forEach(r=>{
     const current = [...r.currentNames];
     const evidence = Object.keys(r.evidence);
     if(evidence.length===0) return; // nothing to verify against — leave alone silently
+
+    if(evidence.length===1){
+      // One confidently-known original name for this batch. Every current name that differs
+      // from it is stray — most often leftover from an earlier fix that only reached some
+      // stages of this batch's lineage (e.g. Wood Finishing got corrected but Brush Dept's
+      // own stock pool didn't) — and gets corrected. A batch can have more than one distinct
+      // stray name across its stages; each converges on the same confirmed answer.
+      const correctName = evidence[0];
+      current.filter(n=>n!==correctName).forEach(strayName=>{
+        fixes.push({batchNo:r.batchNo, from:strayName, to:correctName, noteCount:r.evidence[correctName]||0});
+      });
+      return;
+    }
+
+    // Evidence shows more than one distinct original name — this batch may genuinely mix
+    // more than one real product (e.g. two different items produced from the same wood
+    // lot). Names appearing in BOTH current and evidence are assumed correct as-is; if
+    // exactly one current-only name and one evidence-only name remain after that, they must
+    // correspond to each other. Anything less clear-cut goes to manual review.
     const matchedBoth = current.filter(n=>evidence.includes(n));
     const currentLeft = current.filter(n=>!matchedBoth.includes(n));
     const evidenceLeft = evidence.filter(n=>!matchedBoth.includes(n));
@@ -5101,6 +5266,13 @@ function renderAdminPanel(){
       <button class="btn" style="background:#3498db;width:100%;" onclick="exportDataJSON()">💾 Export Raw Data (JSON backup)</button>
     </div>
 
+    <div class="card" style="border:2px solid #c0392b;background:#fdf2f0;">
+      <div class="label" style="color:#c0392b;">🔄 Force Full Resync (this device)</div>
+      <div style="font-size:11px;color:#888;margin-bottom:12px;">Use this after fixing a sync problem (like broken Firestore permissions) — it re-sends EVERYTHING this device currently holds to the cloud, in case some of it silently failed to save before and this device doesn't realize it. Safe to run any time; does nothing harmful if everything was already synced.</div>
+      <button class="btn" style="background:#c0392b;width:100%;" onclick="runForceFullResync()">🔄 Force Full Resync Now</button>
+      <div id="resyncResult" style="margin-top:8px;font-size:12px;"></div>
+    </div>
+
     <div class="card" style="border:2px solid #16a085;background:#f0fdfa;">
       <div class="label" style="color:#16a085;">🩺 Full Module Check & Fix</div>
       <div style="font-size:11px;color:#888;margin-bottom:12px;">One scan of everything — stock levels, batch names vs original records, traces, ledger balances, accounts. Fixes what's safe to fix automatically (with your confirmation), and clearly separates anything that needs your judgment. Run this after any app update to confirm all previous data is still in order.</div>
@@ -5306,7 +5478,29 @@ function runDataHealthCheck(){
   const ownerCount = (state.users||[]).filter(u=>u.role==='owner').length;
   if(ownerCount===0) add('error','Users','No Owner account exists at all. This would lock out owner-only functions (data migration, JSON backup, void permission management).');
 
-  // 5. Ledger balance going negative for a specific batch. IMPORTANT scoping, learned the
+  // 5. Cross-stage naming consistency — for every batch derived from a wood batch, does its
+  // product name agree across EVERY stage it touches (Wood Finishing, the internal run
+  // copies inside open/closed batches, Brush Dept, Ready-for-Sale)? A real incident showed
+  // this can drift: a partial fix corrected some stages but silently left others stale,
+  // and nothing before this check would have caught it automatically. This doesn't rely on
+  // knowing the specific pattern in advance — it just asks "does this one batch agree with
+  // itself everywhere," which generalizes to catch this whole class of problem going forward.
+  const allWoodBatches = [...new Set((state.production||[]).map(p=>p.batchNo))];
+  allWoodBatches.forEach(batchNo=>{
+    const { trueBbBatchNos, fbBatchNos, brushLevelBatches } = getBatchLineage(batchNo);
+    const sightings = {}; // name -> [source labels, each naming the exact batch]
+    const note = (name, source) => { if(!name) return; (sightings[name]=sightings[name]||[]).push(source); };
+    (state.production||[]).filter(p=>p.batchNo===batchNo && !p.voided).forEach(p=>note(p.woodPieceName, `Wood Finishing production, batch ${batchNo}`));
+    (state.finishedInventory||[]).filter(f=>f.batchNo===batchNo).forEach(f=>note(f.productName, `Wood Finishing stock, batch ${batchNo}`));
+    (state.finishedBrushes||[]).filter(f=>brushLevelBatches.includes(f.batchNo)).forEach(f=>note(f.productName, `Brush Dept stock, batch ${f.batchNo}`));
+    (state.readyForSale||[]).filter(f=>fbBatchNos.includes(f.batchNo)).forEach(f=>note(f.productName, `Ready-for-Sale, batch ${f.batchNo}`));
+    const distinctNames = Object.keys(sightings);
+    if(distinctNames.length>1){
+      add('error','Traceability', `Batch ${batchNo}'s lineage shows different product names at different stages: ${distinctNames.map(n=>`"${n}" (${sightings[n].join('; ')})`).join(' vs ')}. Use "Batch Name Check & Auto-Fix" in Materials to correct this.`);
+    }
+  });
+
+  // 6. Ledger balance going negative for a specific batch. IMPORTANT scoping, learned the
   // hard way (v1 of this check false-alarmed on perfectly good data):
   //   - 'finished': the SAME physical pieces get different material labels per stage —
   //     "X" at Wood Finishing, "X (Brush)" after the brush machine, "X (Ready for Sale)"
@@ -5427,6 +5621,16 @@ function collectStructuralFixes(){
 }
 
 // ==================== FULL MODULE CHECK & FIX ====================
+function runForceFullResync(){
+  const el = document.getElementById('resyncResult');
+  if(el) el.innerHTML = `<span style="color:#e67e22;">⏳ Re-sending everything this device holds...</span>`;
+  forceFullResync().then(()=>{
+    if(el) el.innerHTML = `<span style="color:#27ae60;font-weight:700;">☁️ Done — everything on this device has been re-sent and confirmed by the cloud.</span>`;
+  }).catch(err=>{
+    if(el) el.innerHTML = `<span style="color:#e74c3c;font-weight:700;">❌ Still couldn't reach the cloud (${err && err.code ? err.code : 'connection error'}). Fix the underlying problem first, then try again.</span>`;
+  });
+}
+
 function runFullCheckAndShow(){
   const results = document.getElementById('healthCheckResults');
   if(!results) return;
@@ -5482,8 +5686,14 @@ function applyAllSafeFixes(){
   const structural = collectStructuralFixes();
   const total = namePlan.fixes.length + structural.length;
   if(total===0){ runFullCheckAndShow(); return; }
-  if(!confirm(`Apply ${total} safe fix${total>1?'es':''} now? Only the deterministic items listed above are touched — nothing that needs a judgment call. You'll see a fresh scan afterwards.`)) return;
-  namePlan.fixes.forEach(f=>reassignBatchLineage(f.batchNo, f.from, f.to));
+  if(!confirm(`Apply ${total} safe fix${total>1?'es':''} now? Only the deterministic items listed above are touched — nothing that needs a judgment call. You'll see the full list of everything actually changed afterwards.`)) return;
+  // Collect a full manifest of every record touched, across every fix, so the complete chain
+  // of implications is visible afterward — not just a one-line "done" message.
+  const fullManifest = []; // {batchLabel, manifest: [{collection,count,detail}]}
+  namePlan.fixes.forEach(f=>{
+    const result = reassignBatchLineage(f.batchNo, f.from, f.to);
+    fullManifest.push({batchLabel:`${f.batchNo}: "${f.from}" → "${f.to}"`, manifest: result.manifest});
+  });
   structural.forEach(f=>f.apply());
   saveAll();
   re();
@@ -5494,8 +5704,27 @@ function applyAllSafeFixes(){
   if(el) el.innerHTML = `<div style="font-size:12px;color:#e67e22;font-weight:700;">⏳ Saving fixes to the cloud — please don't refresh yet...</div>`;
   Promise.resolve(doFirestoreSync()).then(()=>{
     const el2 = document.getElementById('healthCheckResults');
-    if(el2) el2.innerHTML = `<div style="background:#e8f5e9;border-radius:8px;padding:10px;margin-bottom:8px;font-size:12px;font-weight:700;color:#27ae60;">☁️ Fixes saved to the cloud — safe to refresh. Re-scanning...</div>`;
-    setTimeout(runFullCheckAndShow, 900);
+    if(el2){
+      let html = `<div style="background:#e8f5e9;border-radius:8px;padding:10px;margin-bottom:10px;font-size:12px;font-weight:700;color:#27ae60;">☁️ Fixes saved to the cloud — safe to refresh.</div>`;
+      if(fullManifest.length>0){
+        html += `<div style="background:#f0f8ff;border-radius:8px;padding:10px;margin-bottom:10px;">
+          <div style="font-size:12px;font-weight:700;color:#2980b9;margin-bottom:6px;">📋 Full chain of everything actually changed:</div>`;
+        fullManifest.forEach(bm=>{
+          html += `<div style="font-size:11px;font-weight:700;margin-top:8px;">${bm.batchLabel}</div>`;
+          if(bm.manifest.length===0){
+            html += `<div style="font-size:11px;color:#888;margin-left:8px;">No records needed changing for this one (already fully consistent everywhere else).</div>`;
+          } else {
+            bm.manifest.forEach(m=>{
+              html += `<div style="font-size:11px;color:#444;margin-left:8px;">• ${m.collection}: ${m.count} record${m.count>1?'s':''} <span style="color:#999;">(${m.detail})</span></div>`;
+            });
+          }
+        });
+        html += `</div>`;
+      }
+      html += `<div style="font-size:11px;color:#888;">Re-scanning...</div>`;
+      el2.innerHTML = html;
+    }
+    setTimeout(runFullCheckAndShow, 2500);
   }).catch(err=>{
     const el2 = document.getElementById('healthCheckResults');
     if(el2) el2.innerHTML = `<div style="background:#fdecea;border-radius:8px;padding:10px;font-size:12px;font-weight:700;color:#e74c3c;">❌ The fixes could NOT be saved to the cloud (${err && err.code ? err.code : 'connection or permission error'}). They are applied on this device only and WILL REVERT on refresh. Check your internet connection and try again — if this keeps happening, the database may be rejecting writes.</div>`;
