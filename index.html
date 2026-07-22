@@ -4681,16 +4681,51 @@ function renameWoodPieceType(oldName, newName){
 // number in its downstream lineage (BB batches derived from it, and FB batches derived from
 // those — handling both new-style two-hop and legacy single-hop genealogy). Kept as ONE
 // function so the two tools can never disagree about a batch's structure between them.
+// DISCOVERY IS MULTI-SOURCE — learned from a real incident: batches created before genealogy
+// tracking existed (e.g. FB003) have NO batchGenealogy record at all, so the old genealogy-only
+// version of this function couldn't see them. That made both the checker and the fixer blind
+// to a mislabel sitting plainly visible on the Ready-for-Sale screen: "Check Everything"
+// reported all-clear while the mismatch was right there. Relying on any single collection is
+// also risky after the July Firestore-rules outage, when writes could silently fail per-device.
+// So lineage is now the UNION of every independent record type that captures the link:
+//   1. batchGenealogy       (sourceWoodBatch / sourceBrushBatch — when present)
+//   2. brushProcessingLog   (every brush-machine run stores sourceBatch → fbBatchNo)
+//   3. finishedBrushes      (each Brush Dept stock row stores its own sourceBatch)
+//   4. socketProcessingLog  (each socket run stores its BB input → FB outputBatchNo)
+// A batch found by ANY source is in the lineage. Voided runs still count for discovery — a
+// voided run proves the batches are related even though its quantities don't count.
+// Classifying a brush-level batch as "true BB" vs "legacy FB" uses genealogy's socketUsage
+// marker when a genealogy record exists (FB-stage entries always carry socketUsage, even if
+// empty; BB entries never get that field), and falls back to the batch-number prefix
+// convention (FB… = legacy pre-split, anything else = BB) when no genealogy exists at all.
 function getBatchLineage(woodBatchNo){
   const gen = state.batchGenealogy || {};
-  const candidates = Object.keys(gen).filter(k => gen[k] && gen[k].sourceWoodBatch===woodBatchNo);
-  // FB-stage entries always carry socketUsage/screwUsage (even if empty) — that's where
-  // Socket Dept records its usage. BB entries never get those fields at all.
-  const trueBbBatchNos = candidates.filter(k => !('socketUsage' in gen[k]));
-  const legacyFb = candidates.filter(k => 'socketUsage' in gen[k]);
-  const fbFromBb = Object.keys(gen).filter(k => gen[k] && trueBbBatchNos.includes(gen[k].sourceBrushBatch));
-  const fbBatchNos = [...new Set([...fbFromBb, ...legacyFb])];
-  return { trueBbBatchNos, legacyFb, fbBatchNos, brushLevelBatches: [...trueBbBatchNos, ...legacyFb] };
+
+  // --- Hop 1: wood batch → brush-level batches (BB new-style, or FB directly for legacy) ---
+  const fromGenealogy = Object.keys(gen).filter(k => gen[k] && gen[k].sourceWoodBatch===woodBatchNo);
+  const fromBrushLog = (state.brushProcessingLog||[])
+    .filter(r => r && r.sourceBatch===woodBatchNo && r.fbBatchNo)
+    .map(r => String(r.fbBatchNo));
+  const fromBrushStock = (state.finishedBrushes||[])
+    .filter(b => b && b.sourceBatch===woodBatchNo && b.batchNo)
+    .map(b => String(b.batchNo));
+  const brushLevelBatches = [...new Set([...fromGenealogy, ...fromBrushLog, ...fromBrushStock])];
+
+  const isLegacyFb = k => {
+    const g = gen[k];
+    return g ? ('socketUsage' in g) : String(k).toUpperCase().startsWith('FB');
+  };
+  const trueBbBatchNos = brushLevelBatches.filter(k => !isLegacyFb(k));
+  const legacyFb = brushLevelBatches.filter(isLegacyFb);
+
+  // --- Hop 2: BB batches → FB batches (new-style only; a legacy FB already IS the sale batch) ---
+  const fbFromGen = Object.keys(gen).filter(k => gen[k] && trueBbBatchNos.includes(gen[k].sourceBrushBatch));
+  const fbFromSocketLog = (state.socketProcessingLog||[])
+    .filter(r => r && trueBbBatchNos.includes(r.fbBatchNo) && r.outputBatchNo)
+    .map(r => String(r.outputBatchNo));
+  const fbBatchNos = [...new Set([...fbFromGen, ...fbFromSocketLog, ...legacyFb])];
+
+  return { trueBbBatchNos, legacyFb, fbBatchNos, brushLevelBatches };
 }
 
 function reassignBatchLineage(woodBatchNo, oldName, newName){
