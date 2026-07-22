@@ -4860,14 +4860,33 @@ function reassignBatchLineage(woodBatchNo, oldName, newName){
 // (e.g. "Production → Commando Broom"). That makes them reliable evidence of what a batch's
 // product was originally called, even after any number of renames. This scans those notes
 // and compares against each batch's CURRENT name. Purely read-only — changes nothing.
+// Note patterns + evidence extraction shared by the investigator, the auto-fix planner AND
+// the health check — ONE definition so the three tools can never disagree about what counts
+// as production-time evidence.
+const BATCH_NOTE_PATTERNS = [
+  /^Production → (.+)$/,
+  /^Used in production → (.+)$/,
+  /^Remainder from (.+) production$/,
+  /^Rejected (.+?) \(/,
+  /^Restored — voided run (.+?) \(/
+];
+// Evidence: ledger entries tied to this batch (exact match, or derived batches like
+// "WB001-Scrap-X") whose note embeds a product name. Returns {name: noteCount}.
+function getBatchNoteEvidence(batchNo){
+  const evidence = {};
+  (state.ledger||[]).forEach(e=>{
+    if(!e || !e.note) return;
+    const bn = String(e.batchNo||'');
+    if(bn!==batchNo && !bn.startsWith(batchNo+'-')) return;
+    for(const pat of BATCH_NOTE_PATTERNS){
+      const m = e.note.match(pat);
+      if(m){ evidence[m[1]] = (evidence[m[1]]||0)+1; break; }
+    }
+  });
+  return evidence;
+}
+
 function investigateBatchNames(){
-  const notePatterns = [
-    /^Production → (.+)$/,
-    /^Used in production → (.+)$/,
-    /^Remainder from (.+) production$/,
-    /^Rejected (.+?) \(/,
-    /^Restored — voided run (.+?) \(/
-  ];
   const woodBatches = [...new Set((state.production||[]).map(p=>p.batchNo))];
   return woodBatches.map(batchNo=>{
     const runs = (state.production||[]).filter(p=>p.batchNo===batchNo);
@@ -4882,18 +4901,7 @@ function investigateBatchNames(){
       ...(state.finishedBrushes||[]).filter(f=>brushLevelBatches.includes(f.batchNo)).map(f=>f.productName),
       ...(state.readyForSale||[]).filter(f=>fbBatchNos.includes(f.batchNo)).map(f=>f.productName),
     ])];
-    // Evidence: ledger entries tied to this batch (exact match, or derived batches like
-    // "WB001-Scrap-X") whose note embeds a product name.
-    const evidence = {};
-    (state.ledger||[]).forEach(e=>{
-      if(!e || !e.note) return;
-      const bn = String(e.batchNo||'');
-      if(bn!==batchNo && !bn.startsWith(batchNo+'-')) return;
-      for(const pat of notePatterns){
-        const m = e.note.match(pat);
-        if(m){ evidence[m[1]] = (evidence[m[1]]||0)+1; break; }
-      }
-    });
+    const evidence = getBatchNoteEvidence(batchNo);
     const evidenceNames = Object.keys(evidence);
     let verdict, detail;
     if(evidenceNames.length===0){
@@ -4905,9 +4913,19 @@ function investigateBatchNames(){
     } else if(evidenceNames.length===1){
       verdict='mismatch';
       detail=`Ledger notes written at production time say "${evidenceNames[0]}" (${evidence[evidenceNames[0]]} note${evidence[evidenceNames[0]]>1?'s':''}) — but the batch is currently labeled "${currentNames.join('", "')}". The original name was almost certainly "${evidenceNames[0]}".`;
+    } else if(evidenceNames.length===currentNames.length && evidenceNames.every(n=>currentNames.includes(n))){
+      // A wood batch CAN genuinely carry more than one product (several runs of different
+      // items cut from the same wood lot). When every current name is backed by production-
+      // time evidence and nothing extra has crept in, that's a full match — flagging it
+      // "review manually" was pure noise (a real WB001 did exactly this).
+      verdict='match';
+      detail=`Ledger notes confirm this batch genuinely carries ${evidenceNames.length} products: ${evidenceNames.map(n=>`"${n}" (${evidence[n]} note${evidence[n]>1?'s':''})`).join(', ')} — every current name matches a production-time record.`;
     } else {
+      const strays = currentNames.filter(n=>!evidenceNames.includes(n));
       verdict='mixed';
-      detail=`Ledger notes show more than one name over time: ${evidenceNames.map(n=>`"${n}" (${evidence[n]})`).join(', ')}. This batch may genuinely have had multiple products, or was renamed mid-life — review manually.`;
+      detail=`Ledger notes show more than one name over time: ${evidenceNames.map(n=>`"${n}" (${evidence[n]})`).join(', ')}.`+
+        (strays.length?` Currently there ${strays.length>1?'are':'is'} also ${strays.map(n=>`"${n}"`).join(', ')} with NO production-time record at all — likely stray${strays.length>1?'s':''} from a bad rename.`:'')+
+        ` This batch may genuinely have had multiple products, or was renamed mid-life — review manually if not auto-fixed.`;
     }
     return { batchNo, currentNames, evidence, verdict, detail };
   });
@@ -4945,16 +4963,65 @@ function planBatchNameFixes(){
     // more than one real product (e.g. two different items produced from the same wood
     // lot). Names appearing in BOTH current and evidence are assumed correct as-is; if
     // exactly one current-only name and one evidence-only name remain after that, they must
-    // correspond to each other. Anything less clear-cut goes to manual review.
+    // correspond to each other.
     const matchedBoth = current.filter(n=>evidence.includes(n));
     const currentLeft = current.filter(n=>!matchedBoth.includes(n));
     const evidenceLeft = evidence.filter(n=>!matchedBoth.includes(n));
     if(currentLeft.length===0 && evidenceLeft.length===0) return; // everything already matches
     if(currentLeft.length===1 && evidenceLeft.length===1){
       fixes.push({batchNo:r.batchNo, from:currentLeft[0], to:evidenceLeft[0], noteCount:r.evidence[evidenceLeft[0]]||0});
-    } else {
-      manual.push({batchNo:r.batchNo, reason:`Current: ${current.join(', ')} vs recorded: ${evidence.join(', ')} — more than one possible pairing, won't guess.`});
+      return;
     }
+
+    // Stray names with NO evidence of their own, in a batch whose real products are all
+    // accounted for (evidenceLeft empty). The whole-batch view can't tell which real product
+    // each stray belongs to — but the SUB-batch it sits on can: every BB/FB number is minted
+    // per-product, so one physical brush batch is exactly one product. If every other record
+    // on the sub-batch(es) carrying the stray agrees on a single evidence-backed name, the
+    // stray must be that product wearing a bad label. (Real case: FB003's Brush Dept stock
+    // said "Smart Commando Broom" while FB003's own Ready-for-Sale row said "Commando
+    // Broom" — unambiguous, because they're the same physical pieces.) A stray that also
+    // appears on wood-level records, or whose sub-batch context is missing or conflicting,
+    // stays in manual review — no guessing.
+    if(evidenceLeft.length===0 && currentLeft.length>=1){
+      const { brushLevelBatches, fbBatchNos } = getBatchLineage(r.batchNo);
+      const subBatches = [...new Set([...brushLevelBatches, ...fbBatchNos])];
+      const resolved = [], unresolved = [];
+      currentLeft.forEach(stray=>{
+        const atWoodLevel =
+          (state.production||[]).some(p=>p && p.batchNo===r.batchNo && !p.voided && p.woodPieceName===stray) ||
+          (state.finishedInventory||[]).some(f=>f && f.batchNo===r.batchNo && f.productName===stray);
+        const carrying = subBatches.filter(sub=>
+          (state.finishedBrushes||[]).some(f=>f && f.batchNo===sub && f.productName===stray) ||
+          (state.readyForSale||[]).some(f=>f && f.batchNo===sub && f.productName===stray) ||
+          (state.brushProcessingLog||[]).some(x=>x && x.fbBatchNo===sub && x.productName===stray) ||
+          (state.socketProcessingLog||[]).some(x=>x && (x.fbBatchNo===sub||x.outputBatchNo===sub) && x.productName===stray)
+        );
+        if(atWoodLevel || carrying.length===0){ unresolved.push(stray); return; }
+        const targets = new Set();
+        carrying.forEach(sub=>{
+          (state.finishedBrushes||[]).filter(f=>f && f.batchNo===sub && f.productName && f.productName!==stray).forEach(f=>targets.add(f.productName));
+          (state.readyForSale||[]).filter(f=>f && f.batchNo===sub && f.productName && f.productName!==stray).forEach(f=>targets.add(f.productName));
+          (state.brushProcessingLog||[]).filter(x=>x && x.fbBatchNo===sub && x.productName && x.productName!==stray).forEach(x=>targets.add(x.productName));
+          (state.socketProcessingLog||[]).filter(x=>x && (x.fbBatchNo===sub||x.outputBatchNo===sub) && x.productName && x.productName!==stray).forEach(x=>targets.add(x.productName));
+          const g = (state.batchGenealogy||{})[sub];
+          if(g && g.productName && g.productName!==stray) targets.add(g.productName);
+        });
+        const evidenceTargets = [...targets].filter(t=>evidence.includes(t));
+        if(evidenceTargets.length===1){
+          resolved.push({stray, to:evidenceTargets[0], via:carrying.join(', ')});
+        } else {
+          unresolved.push(stray);
+        }
+      });
+      resolved.forEach(x=>fixes.push({batchNo:r.batchNo, from:x.stray, to:x.to, noteCount:r.evidence[x.to]||0, via:x.via}));
+      if(unresolved.length){
+        manual.push({batchNo:r.batchNo, reason:`Stray name${unresolved.length>1?'s':''} ${unresolved.map(n=>`"${n}"`).join(', ')} (no production-time record) couldn't be matched to one recorded product unambiguously — review manually.`});
+      }
+      return;
+    }
+
+    manual.push({batchNo:r.batchNo, reason:`Current: ${current.join(', ')} vs recorded: ${evidence.join(', ')} — more than one possible pairing, won't guess.`});
   });
   return {fixes, manual};
 }
@@ -5513,16 +5580,44 @@ function runDataHealthCheck(){
   const ownerCount = (state.users||[]).filter(u=>u.role==='owner').length;
   if(ownerCount===0) add('error','Users','No Owner account exists at all. This would lock out owner-only functions (data migration, JSON backup, void permission management).');
 
-  // 5. Cross-stage naming consistency — for every batch derived from a wood batch, does its
-  // product name agree across EVERY stage it touches (Wood Finishing, the internal run
-  // copies inside open/closed batches, Brush Dept, Ready-for-Sale)? A real incident showed
-  // this can drift: a partial fix corrected some stages but silently left others stale,
-  // and nothing before this check would have caught it automatically. This doesn't rely on
-  // knowing the specific pattern in advance — it just asks "does this one batch agree with
-  // itself everywhere," which generalizes to catch this whole class of problem going forward.
+  // 5. Cross-stage naming consistency — two separate questions, both learned from real incidents:
+  //
+  // 5a. Every BB/FB batch number is minted per-product, so ONE physical brush batch is
+  //     exactly ONE product — every record mentioning that number (Brush Dept stock,
+  //     Ready-for-Sale, both processing logs, genealogy) must agree on its name.
+  //     Disagreement within one sub-batch is ALWAYS wrong, regardless of what else the
+  //     wood batch produced. (This is what the real FB003 looked like: its Brush Dept
+  //     stock row said one name while its own Ready-for-Sale row said another.)
+  //
+  // 5b. A WOOD batch, unlike BB/FB, can legitimately carry more than one product (several
+  //     runs of different items cut from the same wood lot) — so multiple names across a
+  //     lineage are NOT automatically an error. They're only a problem when a name has no
+  //     production-time ledger evidence behind it: that's a stray left by a bad rename.
+  //     v1 of this check flagged every multi-name lineage and false-alarmed on genuinely
+  //     multi-product batches (a real WB001); this version verifies against the frozen
+  //     ledger notes first, using the same evidence rules as the investigator/auto-fixer.
   const allWoodBatches = [...new Set((state.production||[]).map(p=>p.batchNo))];
   allWoodBatches.forEach(batchNo=>{
-    const { trueBbBatchNos, fbBatchNos, brushLevelBatches } = getBatchLineage(batchNo);
+    const { brushLevelBatches, fbBatchNos } = getBatchLineage(batchNo);
+    const subBatches = [...new Set([...brushLevelBatches, ...fbBatchNos])];
+
+    // 5a — each sub-batch must agree with itself everywhere it's mentioned
+    subBatches.forEach(sub=>{
+      const subSightings = {}; // name -> [stage labels]
+      const noteSub = (name, source) => { if(!name) return; (subSightings[name]=subSightings[name]||[]).push(source); };
+      (state.finishedBrushes||[]).filter(f=>f && f.batchNo===sub).forEach(f=>noteSub(f.productName, 'Brush Dept stock'));
+      (state.readyForSale||[]).filter(f=>f && f.batchNo===sub).forEach(f=>noteSub(f.productName, 'Ready-for-Sale'));
+      (state.brushProcessingLog||[]).filter(x=>x && !x.voided && x.fbBatchNo===sub).forEach(x=>noteSub(x.productName, 'Brush Dept processing log'));
+      (state.socketProcessingLog||[]).filter(x=>x && !x.voided && (x.fbBatchNo===sub || x.outputBatchNo===sub)).forEach(x=>noteSub(x.productName, 'Socket Dept processing log'));
+      const g = (state.batchGenealogy||{})[sub];
+      if(g && g.productName) noteSub(g.productName, 'genealogy record');
+      const subNames = Object.keys(subSightings);
+      if(subNames.length>1){
+        add('error','Traceability', `Batch ${sub} (from wood batch ${batchNo}) is ONE physical batch but is named differently in different places: ${subNames.map(n=>`"${n}" (${[...new Set(subSightings[n])].join(', ')})`).join(' vs ')}. Use "Batch Name Check & Auto-Fix" in Materials to correct this.`);
+      }
+    });
+
+    // 5b — names in the lineage that no production-time record ever used
     const sightings = {}; // name -> [source labels, each naming the exact batch]
     const note = (name, source) => { if(!name) return; (sightings[name]=sightings[name]||[]).push(source); };
     (state.production||[]).filter(p=>p.batchNo===batchNo && !p.voided).forEach(p=>note(p.woodPieceName, `Wood Finishing production, batch ${batchNo}`));
@@ -5531,7 +5626,15 @@ function runDataHealthCheck(){
     (state.readyForSale||[]).filter(f=>fbBatchNos.includes(f.batchNo)).forEach(f=>note(f.productName, `Ready-for-Sale, batch ${f.batchNo}`));
     const distinctNames = Object.keys(sightings);
     if(distinctNames.length>1){
-      add('error','Traceability', `Batch ${batchNo}'s lineage shows different product names at different stages: ${distinctNames.map(n=>`"${n}" (${sightings[n].join('; ')})`).join(' vs ')}. Use "Batch Name Check & Auto-Fix" in Materials to correct this.`);
+      const evidence = getBatchNoteEvidence(batchNo);
+      const evidenceNames = Object.keys(evidence);
+      const strays = distinctNames.filter(n=>!evidenceNames.includes(n));
+      if(evidenceNames.length && strays.length){
+        add('error','Traceability', `Batch ${batchNo}'s lineage contains name${strays.length>1?'s':''} that NO production-time ledger record ever used: ${strays.map(n=>`"${n}" (${[...new Set(sightings[n])].join('; ')})`).join(' and ')}. Recorded when actually produced: ${evidenceNames.map(n=>`"${n}"`).join(', ')}. Use "Batch Name Check & Auto-Fix" in Materials to correct this.`);
+      } else if(!evidenceNames.length){
+        add('warning','Traceability', `Batch ${batchNo}'s lineage shows different product names at different stages (${distinctNames.map(n=>`"${n}"`).join(', ')}) and no ledger notes exist to verify which is original — review manually.`);
+      }
+      // All names evidence-backed → genuinely multi-product wood batch. Not an error.
     }
   });
 
