@@ -366,7 +366,7 @@ function syncToFirestore(){
 }
 
 function doFirestoreSync(){
-  if(!fbDb) return;
+  if(!fbDb) return Promise.resolve();
   clearTimeout(syncTimeout);
   syncTimeout = null;
   syncStatus='saving';
@@ -390,9 +390,11 @@ function doFirestoreSync(){
         if(!(docId in recs)) ops.push({t:'del', col, docId});
       });
     });
-    if(ops.length===0){ syncStatus='saved'; updateSyncIndicator(); setTimeout(()=>{syncStatus='idle';updateSyncIndicator();},1500); return; }
-    // Chunked batches (Firestore caps a batch at 500 ops). Fire-and-forget: with offline
-    // persistence these are durably queued the moment they're issued, even with no signal.
+    if(ops.length===0){ syncStatus='saved'; updateSyncIndicator(); setTimeout(()=>{syncStatus='idle';updateSyncIndicator();},1500); return Promise.resolve(); }
+    // Chunked batches (Firestore caps a batch at 500 ops). With offline persistence these
+    // are durably queued the moment they're issued; commit promises are also collected so a
+    // caller that needs REAL cloud confirmation (e.g. data fixes) can await them.
+    const commitPromises = [];
     for(let i=0; i<ops.length; i+=400){
       const batch = fbDb.batch();
       ops.slice(i, i+400).forEach(o=>{
@@ -400,7 +402,7 @@ function doFirestoreSync(){
         if(o.t==='set') batch.set(ref, o.data);
         else batch.delete(ref);
       });
-      batch.commit().catch(err=>console.error('Firestore batch error:', err));
+      commitPromises.push(batch.commit().catch(err=>{ console.error('Firestore batch error:', err); throw err; }));
     }
     // Update the shadow optimistically — the writes are durably queued.
     Object.keys(SK).forEach(stateKey=>{
@@ -411,12 +413,16 @@ function doFirestoreSync(){
       syncShadow[stateKey] = sh;
     });
     syncStatus='saved';
+    updateSyncIndicator();
+    setTimeout(()=>{syncStatus='idle';updateSyncIndicator();},2000);
+    return Promise.all(commitPromises);
   } catch(err){
     syncStatus='error';
     console.error('Firestore sync error:', err);
+    updateSyncIndicator();
+    setTimeout(()=>{syncStatus='idle';updateSyncIndicator();},2000);
+    return Promise.reject(err);
   }
-  updateSyncIndicator();
-  setTimeout(()=>{syncStatus='idle';updateSyncIndicator();},2000);
 }
 
 // Safety net: flush a pending debounced sync immediately if the tab is hidden or closed.
@@ -4774,6 +4780,12 @@ function runAutoFixBatchNames(){
   });
   saveAll();
   re();
+  // Same cloud-confirmation as applyAllSafeFixes: sync immediately and don't declare success
+  // until the writes are actually committed, so a fast refresh can't silently revert them.
+  Promise.resolve(doFirestoreSync()).catch(err=>{
+    const elErr = document.getElementById('nameInvestigationResults');
+    if(elErr) elErr.innerHTML = `<div style="background:#fdecea;border-radius:8px;padding:10px;font-size:12px;font-weight:700;color:#e74c3c;">❌ The fixes could NOT be saved to the cloud and WILL REVERT on refresh. Check your connection and try again.</div>`;
+  });
   setTimeout(()=>{
     const el2 = document.getElementById('nameInvestigationResults');
     if(!el2) return;
@@ -5378,7 +5390,12 @@ function collectStructuralFixes(){
   // c) Duplicate stock rows — the same product+batch listed as two separate rows in the same
   //    inventory list. Merging them into one row with the summed quantity is pure arithmetic:
   //    total stock is identical before and after.
-  const dupRowFix = (arr, keyFn, label) => {
+  // NOTE: apply() reads state[stateKey] LIVE at apply time — never a captured copy from scan
+  // time. Fixes run in sequence (e.g. a batch rename first), and applying a stale snapshot
+  // captured before an earlier fix would silently overwrite that fix's changes. (This was a
+  // real bug, caught in testing: the merge used to restore pre-rename product names.)
+  const dupRowFix = (stateKey, keyFn, label) => {
+    const arr = state[stateKey];
     const counts = {};
     (arr||[]).forEach(x=>{ if(!x) return; const k=keyFn(x); counts[k]=(counts[k]||0)+1; });
     const dupKeys = Object.keys(counts).filter(k=>counts[k]>1);
@@ -5386,24 +5403,25 @@ function collectStructuralFixes(){
     return {
       desc:`Merge ${dupKeys.length} split ${label} entr${dupKeys.length===1?'y':'ies'} (same product & batch listed more than once) into single rows — total quantities stay exactly the same.`,
       apply(){
+        const live = state[stateKey];
         const merged = {};
         const out = [];
-        (arr||[]).forEach(x=>{
+        (live||[]).forEach(x=>{
           if(!x){ return; }
           const k = keyFn(x);
           if(merged[k]!==undefined){ out[merged[k]] = {...out[merged[k]], qty: (out[merged[k]].qty||0)+(x.qty||0)}; }
           else { merged[k] = out.length; out.push({...x}); }
         });
-        return out;
+        state[stateKey] = out;
       }
     };
   };
-  const fiFix = dupRowFix(state.finishedInventory, x=>x.productName+'|'+x.batchNo, 'Wood Finishing stock');
-  if(fiFix) fixes.push({desc:fiFix.desc, apply(){ state.finishedInventory = fiFix.apply(); }});
-  const fbFix = dupRowFix(state.finishedBrushes, x=>x.productName+'|'+x.batchNo, 'Brush Dept stock');
-  if(fbFix) fixes.push({desc:fbFix.desc, apply(){ state.finishedBrushes = fbFix.apply(); }});
-  const rfsFix = dupRowFix(state.readyForSale, x=>x.productName+'|'+x.batchNo, 'Ready-for-Sale stock');
-  if(rfsFix) fixes.push({desc:rfsFix.desc, apply(){ state.readyForSale = rfsFix.apply(); }});
+  const fiFix = dupRowFix('finishedInventory', x=>x.productName+'|'+x.batchNo, 'Wood Finishing stock');
+  if(fiFix) fixes.push(fiFix);
+  const fbFix = dupRowFix('finishedBrushes', x=>x.productName+'|'+x.batchNo, 'Brush Dept stock');
+  if(fbFix) fixes.push(fbFix);
+  const rfsFix = dupRowFix('readyForSale', x=>x.productName+'|'+x.batchNo, 'Ready-for-Sale stock');
+  if(rfsFix) fixes.push(rfsFix);
 
   return fixes;
 }
@@ -5469,10 +5487,19 @@ function applyAllSafeFixes(){
   structural.forEach(f=>f.apply());
   saveAll();
   re();
-  setTimeout(()=>{
-    // Re-open the Admin results area with a fresh scan so the person sees the after-state
-    runFullCheckAndShow();
-  }, 150);
+  // Push to the cloud NOW (not after the usual 1.2s debounce) and wait for real confirmation
+  // before telling the person it's done — otherwise a quick refresh right after fixing could
+  // kill the writes mid-flight and silently revert everything on reload.
+  const el = document.getElementById('healthCheckResults');
+  if(el) el.innerHTML = `<div style="font-size:12px;color:#e67e22;font-weight:700;">⏳ Saving fixes to the cloud — please don't refresh yet...</div>`;
+  Promise.resolve(doFirestoreSync()).then(()=>{
+    const el2 = document.getElementById('healthCheckResults');
+    if(el2) el2.innerHTML = `<div style="background:#e8f5e9;border-radius:8px;padding:10px;margin-bottom:8px;font-size:12px;font-weight:700;color:#27ae60;">☁️ Fixes saved to the cloud — safe to refresh. Re-scanning...</div>`;
+    setTimeout(runFullCheckAndShow, 900);
+  }).catch(err=>{
+    const el2 = document.getElementById('healthCheckResults');
+    if(el2) el2.innerHTML = `<div style="background:#fdecea;border-radius:8px;padding:10px;font-size:12px;font-weight:700;color:#e74c3c;">❌ The fixes could NOT be saved to the cloud (${err && err.code ? err.code : 'connection or permission error'}). They are applied on this device only and WILL REVERT on refresh. Check your internet connection and try again — if this keeps happening, the database may be rejecting writes.</div>`;
+  });
 }
 
 function runHealthCheckAndShow(){
