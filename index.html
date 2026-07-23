@@ -422,7 +422,11 @@ function doFirestoreSync(){
       });
     });
     if(ops.length===0){
-      syncStatus='saved'; syncConsecutiveFailures=0; lastSyncError=null;
+      // Nothing pending proves nothing about writability — a denied write's revert snapshot
+      // resets both state and shadow, making the queue LOOK empty right after a rejection.
+      // So an empty pass must never clear failure evidence; only a real successful commit
+      // (below) does. Otherwise a permanent permission denial disguises itself as all-clear.
+      syncStatus='saved';
       updateSyncIndicator(); setTimeout(()=>{syncStatus='idle';updateSyncIndicator();},1500);
       return Promise.resolve();
     }
@@ -446,7 +450,10 @@ function doFirestoreSync(){
               else delete syncShadow[o.stateKey][o.docId];
             });
           })
-          .catch(err=>{ console.error('Firestore batch error:', err); throw err; })
+          .catch(err=>{
+            console.error('Firestore batch error:', err, '— collections in this failed chunk:', [...new Set(chunk.map(o=>o.col))].join(', '));
+            throw err;
+          })
       );
     }
     return Promise.allSettled(chunkPromises).then(results=>{
@@ -520,6 +527,17 @@ function updateSyncIndicator(){
 function updateSyncBanner(){
   const el = document.getElementById('syncBanner');
   if(!el) return;
+  const permissionDenied = lastSyncError && (lastSyncError.code==='permission-denied' || /insufficient permissions/i.test(String(lastSyncError && lastSyncError.message || '')));
+  if(permissionDenied){
+    // A permission denial is never a transient blip — the database is actively REJECTING
+    // saves, and its revert snapshots make the sync queue look clean immediately afterward
+    // (which is why the consecutive-failure counter can't be relied on here). Show at once,
+    // and keep showing until a real write actually succeeds.
+    el.innerHTML = `⚠️ <b>The database is REJECTING some saves (permissions error)</b> — those changes exist on screen only and are being reverted. The Owner needs to fix the Firestore security rules in the Firebase console; nothing entered in the affected areas will stick until then.
+      <button onclick="doFirestoreSync().catch(()=>{})" style="margin-left:10px;background:#fff;color:#c0392b;border:none;border-radius:4px;padding:3px 10px;font-weight:700;font-size:12px;cursor:pointer;">🔄 Retry Now</button>`;
+    el.style.display = 'block';
+    return;
+  }
   if(syncStatus==='error' && syncConsecutiveFailures>=2){
     const codeHint = lastSyncError && lastSyncError.code ? ` (${lastSyncError.code})` : '';
     el.innerHTML = `⚠️ <b>Changes are NOT reaching the shared database</b>${codeHint} — they only exist on this device right now. Check your internet connection, or ask the Owner to check Firebase permissions.
