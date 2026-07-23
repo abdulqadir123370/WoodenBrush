@@ -338,7 +338,19 @@ function sv(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch(e){}}
 // them the first time they sync, which then travels with the record to all devices.
 function genSid(){ return 's'+Date.now().toString(36)+Math.random().toString(36).slice(2,10); }
 function recKey(rec){
-  if(!rec || typeof rec!=='object') return null;
+  if(rec===undefined || rec===null) return null;
+  // Almost every collection stores structured records with their own .id — but a few (like
+  // Socket Types) store plain strings with nothing to key by. Falling through to `null` here
+  // was a real bug: the sync engine reads "zero valid records" for a plain-string collection
+  // on EVERY save, and concludes every previously-saved document must have been deleted —
+  // actively deleting real data from the cloud, not just failing to save new entries. Instead,
+  // derive a stable key from the value's own content (Firestore doc IDs forbid '/' and a
+  // couple of reserved exact-match names; sanitize defensively and cap length).
+  if(typeof rec !== 'object'){
+    const raw = String(rec);
+    if(raw==='') return null;
+    return 'v_' + raw.replace(/[\/\.]/g, '_').slice(0, 1400);
+  }
   if(rec._sid!==undefined && rec._sid!==null && rec._sid!=='') return String(rec._sid);
   if(rec.id!==undefined && rec.id!==null && rec.id!=='') return String(rec.id);
   rec._sid = genSid();
@@ -2970,12 +2982,21 @@ function renderBOM(){
     html+=`<div style="color:#e74c3c;font-size:12px;">⚠️ Add at least one Socket Type above first.</div>`;
   } else {
     wp.forEach(w=>{
+      // SAFETY: if this product has a SAVED socket type that's missing from the master list
+      // (e.g. the list was lost or a name was re-added with different spelling), still show
+      // the saved value — selected and clearly marked — instead of silently falling back to
+      // "-- Select --". Without this, the saved assignment would display as blank, and ANY
+      // interaction with this row (even just typing in the screws box, which also re-saves
+      // the dropdown's current value) would silently overwrite the real saved value with ''.
+      const savedMissing = w.socketType && !socketTypes.includes(w.socketType);
       html+=`<div style="background:#f9f5f0;border-radius:8px;padding:10px;margin-bottom:8px;">
         <div style="font-size:12px;font-weight:700;margin-bottom:6px;">${w.name} (${w.size}")</div>
+        ${savedMissing?`<div style="font-size:11px;color:#e67e22;font-weight:700;margin-bottom:6px;">⚠️ This product's saved socket type "${w.socketType}" is not in the Socket Types list above — re-add it there with this exact spelling to make it fully valid again. The saved value is protected and still shown below.</div>`:''}
         <div class="grid2">
           <div><div class="label">Socket Type</div>
             <select id="bomSocket_${w.id}" onchange="updateBOM(${w.id})" style="margin-bottom:0;">
               <option value="">-- Select --</option>
+              ${savedMissing?`<option value="${w.socketType}" selected>${w.socketType} (saved)</option>`:''}
               ${socketTypes.map(t=>`<option value="${t}" ${w.socketType===t?'selected':''}>${t}</option>`).join('')}
             </select></div>
           <div><div class="label">Screws Required</div>
@@ -5216,6 +5237,16 @@ function updateBOM(woodPieceId){
   const screwsEl = document.getElementById('bomScrews_'+woodPieceId);
   const socketType = socketEl?.value?.trim()||'';
   const screwsRequired = +screwsEl?.value||0;
+  // SAFETY GUARD: never silently replace a real saved socket type with blank. This can be
+  // triggered indirectly — e.g. typing in the screws box while the dropdown sits on
+  // "-- Select --" — which without this guard would wipe the saved assignment as a side
+  // effect the person never intended. Blanking now requires an explicit confirmation;
+  // cancelling restores the display from the saved value untouched.
+  const existing = (state.woodPieces||[]).find(w=>w.id===woodPieceId);
+  if(existing && existing.socketType && !socketType){
+    const ok = confirm(`Remove the saved socket type "${existing.socketType}" from ${existing.name}?\n\nThis product's Bill of Materials would become incomplete and Socket Dept processing for it would be blocked until a socket type is set again.\n\nPress Cancel to keep "${existing.socketType}".`);
+    if(!ok){ re(); return; }
+  }
   state.woodPieces = (state.woodPieces||[]).map(w=>w.id===woodPieceId?{...w, socketType, screwsRequired}:w);
   saveAll();
 }
