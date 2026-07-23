@@ -3819,84 +3819,150 @@ function openBatchTraceModal(fbBatchNo){
   }
 
   const fieldBox = (val) => `<div style="padding:8px 10px;background:#f9f5f0;border-radius:6px;font-weight:600;font-size:14px;">${val!==undefined&&val!==null&&val!==''?val:'—'}</div>`;
+  const nf = n => (n||0).toLocaleString();
 
   // New-style entries trace back through a BB (Brushed, pre-socket) batch to the WB wood batch.
-  // Old-style entries (from before the BB/FB split) had sourceWoodBatch set directly here.
+  // Old-style entries (from before the BB/FB split) had sourceWoodBatch set directly here, and
+  // their brushed stock sits under the FB number itself rather than a separate BB batch.
   const brushBatchNo = gen.sourceBrushBatch || null;
   const brushGen = brushBatchNo ? (state.batchGenealogy||{})[brushBatchNo] : null;
   const woodBatchNo = gen.sourceWoodBatch || brushGen?.sourceWoodBatch || '—';
+  // Whichever batch number the actual brushed PIECES live/lived under — this is the shared pool
+  // that Socket Dept draws from. For new-style batches that's the BB number; for old-style
+  // (pre-split) batches it's the FB number itself.
+  const preSocketBatchNo = brushBatchNo || fbBatchNo;
 
   let html = `<div class="card" style="border:2px solid #8e44ad;margin-bottom:12px;">
-    <div class="label" style="color:#8e44ad;">🪥 Finished Batch — ${fbBatchNo}</div>
+    <div class="label" style="color:#8e44ad;">🪥 This Batch — ${fbBatchNo}</div>
     <div class="grid2">
       <div><div class="label">Product</div>${fieldBox(gen.productName)}</div>
       <div><div class="label">Date Created</div>${fieldBox(gen.dateCreated)}</div>
     </div>
   </div>`;
 
+  // If the pool this batch drew from ALSO exists as its own independent Ready-for-Sale batch
+  // (the old-style pattern — one batch number doing double duty), call that out in plain words
+  // right up front, since it's the single most common source of confusion when reading this.
+  const poolSoldSeparately = preSocketBatchNo!==fbBatchNo && (state.readyForSale||[]).some(r=>r.batchNo===preSocketBatchNo);
+  if(poolSoldSeparately){
+    html += `<div style="background:#fff8e1;border:1px solid #f0ad4e;border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:12px;">
+      💡 <b>${fbBatchNo}</b> didn't come from fresh brushing — it was made using leftover, not-yet-sold pieces from <b>Batch ${preSocketBatchNo}</b>, which is its own separate batch you can also sell from.
+      <button class="btn" style="background:#f0ad4e;color:#fff;font-size:11px;padding:4px 10px;margin-top:6px;" onclick="openBatchTraceModal('${preSocketBatchNo}')">🧬 View Batch ${preSocketBatchNo}'s story</button>
+    </div>`;
+  }
+
   if(brushBatchNo){
-    // Pieces actually counted going INTO this BB batch — pulled from Brush Dept's own log,
-    // not just the batch number label.
     const brushRuns = (state.brushProcessingLog||[]).filter(r=>r.fbBatchNo===brushBatchNo);
     const brushTotalQty = brushRuns.reduce((s,r)=>s+(r.voided?0:r.qty||0),0);
     html += `<div class="card" style="border:2px solid #d35400;margin-bottom:12px;">
-      <div class="label" style="color:#d35400;">🪥 Source Brush Batch (pre-socket)</div>
+      <div class="label" style="color:#d35400;">🪥 Brushing — turned wood pieces into brush shapes</div>
       ${fieldBox(brushBatchNo)}
-      <div style="margin-top:8px;font-size:12px;font-weight:700;color:#d35400;">Pieces Brushed: ${brushTotalQty}${brushRuns.some(r=>r.voided)?' (excludes voided runs)':''}</div>
+      <div style="margin-top:8px;font-size:12px;font-weight:700;color:#d35400;">Total brushed: ${nf(brushTotalQty)} pcs${brushRuns.some(r=>r.voided)?' (excludes voided runs)':''}</div>
       ${brushRuns.length>0?brushRuns.map(r=>`<div style="display:flex;justify-content:space-between;font-size:11px;padding:3px 0;border-bottom:1px solid #f0e8de;${r.voided?'opacity:0.5;text-decoration:line-through;':''}">
-        <span>${r.date} — from ${r.sourceBatch||'—'}</span><span style="font-weight:700;">${r.qty} pcs${r.voided?' (voided)':''}</span>
+        <span>${r.date} — from ${r.sourceBatch||'—'}</span><span style="font-weight:700;">${nf(r.qty)} pcs${r.voided?' (voided)':''}</span>
       </div>`).join(''):`<div style="color:#aaa;font-size:11px;margin-top:4px;">No Brush Dept log entries found for this batch (may predate detailed logging).</div>`}
     </div>`;
   } else {
-    // Old-style genealogy (from before the BB/FB split) — Brush Dept logged directly against
-    // the FB number itself rather than a separate BB batch. Look there instead.
     const legacyBrushRuns = (state.brushProcessingLog||[]).filter(r=>r.fbBatchNo===fbBatchNo);
     if(legacyBrushRuns.length>0){
       const legacyBrushTotalQty = legacyBrushRuns.reduce((s,r)=>s+(r.voided?0:r.qty||0),0);
       html += `<div class="card" style="border:2px solid #d35400;margin-bottom:12px;">
-        <div class="label" style="color:#d35400;">🪥 Brush Dept (legacy pre-split data)</div>
-        <div style="font-size:12px;font-weight:700;color:#d35400;">Pieces Brushed: ${legacyBrushTotalQty}${legacyBrushRuns.some(r=>r.voided)?' (excludes voided runs)':''}</div>
+        <div class="label" style="color:#d35400;">🪥 Brushing — turned wood pieces into brush shapes</div>
+        <div style="font-size:12px;font-weight:700;color:#d35400;">Total brushed: ${nf(legacyBrushTotalQty)} pcs${legacyBrushRuns.some(r=>r.voided)?' (excludes voided runs)':''}</div>
         ${legacyBrushRuns.map(r=>`<div style="display:flex;justify-content:space-between;font-size:11px;padding:3px 0;border-bottom:1px solid #f0e8de;${r.voided?'opacity:0.5;text-decoration:line-through;':''}">
-          <span>${r.date} — from ${r.sourceBatch||'—'}</span><span style="font-weight:700;">${r.qty} pcs${r.voided?' (voided)':''}</span>
+          <span>${r.date} — from ${r.sourceBatch||'—'}</span><span style="font-weight:700;">${nf(r.qty)} pcs${r.voided?' (voided)':''}</span>
         </div>`).join('')}
       </div>`;
     }
   }
 
-  // Pieces + planks actually counted at Wood Finishing — matched to this specific batch AND
-  // product, since one wood batch (a delivered lot of planks) can yield several different
-  // products across multiple production runs.
-  const woodRuns = (state.production||[]).filter(p=>p.batchNo===woodBatchNo && p.woodPieceName===gen.productName);
-  const woodTotalPlanks = woodRuns.reduce((s,p)=>s+(p.voided?0:p.planksUsed||0),0);
-  const woodTotalPieces = woodRuns.reduce((s,p)=>s+(p.voided?0:p.piecesProduced||0),0);
+  // ==== WHERE DID THE BRUSHED PIECES GO? ====
+  // This is the reconciliation that used to require opening two modals and doing the math by
+  // hand. Built entirely from records that already exist — never changes any stored data.
+  {
+    const brushRunsForPool = (brushBatchNo
+      ? (state.brushProcessingLog||[]).filter(r=>r.fbBatchNo===brushBatchNo)
+      : (state.brushProcessingLog||[]).filter(r=>r.fbBatchNo===fbBatchNo));
+    const totalBrushed = brushRunsForPool.reduce((s,r)=>s+(r.voided?0:r.qty||0),0);
+    if(totalBrushed>0 || brushRunsForPool.length>0){
+      const socketRuns = (state.socketProcessingLog||[]).filter(r=>!r.voided && r.fbBatchNo===preSocketBatchNo);
+      const byOutput = {};
+      socketRuns.forEach(r=>{ const out=r.outputBatchNo||r.fbBatchNo; byOutput[out]=(byOutput[out]||0)+(r.qty||0); });
+      const stillInStock = (state.finishedBrushes||[]).find(b=>b.batchNo===preSocketBatchNo)?.qty || 0;
+      const totalSocketed = Object.values(byOutput).reduce((a,b)=>a+b,0);
+      const accountedFor = totalSocketed + stillInStock;
+      const gap = totalBrushed - accountedFor;
+
+      let rows = '';
+      Object.entries(byOutput).forEach(([out,qty])=>{
+        if(out===fbBatchNo){
+          rows += `<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid #f0e8de;font-size:12px;">
+            <span>✅ Sold as <b>this batch</b> (${fbBatchNo})</span><span style="font-weight:700;">${nf(qty)} pcs</span>
+          </div>`;
+        } else {
+          rows += `<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid #f0e8de;font-size:12px;">
+            <span>↪️ Sent onward — became a different batch, <b>${out}</b></span>
+            <span style="display:flex;align-items:center;gap:6px;"><b>${nf(qty)} pcs</b>
+              <button class="btn" style="background:#8e44ad;color:#fff;font-size:10px;padding:3px 8px;" onclick="openBatchTraceModal('${out}')">View ${out}</button>
+            </span>
+          </div>`;
+        }
+      });
+      if(stillInStock>0){
+        rows += `<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid #f0e8de;font-size:12px;">
+          <span>📦 Still sitting as brushed stock — not sent to Socket Dept yet</span><span style="font-weight:700;">${nf(stillInStock)} pcs</span>
+        </div>`;
+      }
+      if(rows===''){
+        rows = `<div style="color:#aaa;font-size:12px;padding:5px 0;">Nothing recorded yet — this brushed stock hasn't been sent to Socket Dept or counted in current stock.</div>`;
+      }
+
+      html += `<div class="card" style="border:2px solid #16a085;margin-bottom:12px;">
+        <div class="label" style="color:#16a085;">📊 Where did those ${nf(totalBrushed)} brushed pieces go?</div>
+        ${rows}
+        <div style="display:flex;justify-content:space-between;padding:8px 0 0;margin-top:4px;border-top:2px solid #16a085;font-size:13px;font-weight:700;">
+          <span>${gap===0?'✅ All accounted for':'⚠️ Doesn\'t fully add up'}</span>
+          <span>${nf(accountedFor)} / ${nf(totalBrushed)} pcs</span>
+        </div>
+        ${gap!==0?`<div style="font-size:11px;color:#e67e22;margin-top:4px;">${gap>0?`${nf(gap)} pcs not yet explained by Socket Dept records or current stock — may include wastage/rework recorded elsewhere.`:`${nf(-gap)} pcs more than what was brushed — worth double-checking with Check Everything in Admin.`}</div>`:''}
+      </div>`;
+    }
+  }
+
   html += `<div class="card" style="border:2px solid #5c3d1e;margin-bottom:12px;">
-    <div class="label" style="color:#5c3d1e;">🪵 Source Wood Batch</div>
-    ${fieldBox(woodBatchNo)}
+    <div class="label" style="color:#5c3d1e;">🪵 Original Wood Batch</div>
+    ${fieldBox(woodBatchNo)}`;
+  {
+    const woodRuns = (state.production||[]).filter(p=>p.batchNo===woodBatchNo && p.woodPieceName===gen.productName);
+    const woodTotalPlanks = woodRuns.reduce((s,p)=>s+(p.voided?0:p.planksUsed||0),0);
+    const woodTotalPieces = woodRuns.reduce((s,p)=>s+(p.voided?0:p.piecesProduced||0),0);
+    html += `<div style="font-size:11px;color:#888;margin-top:6px;">This wood batch made ${nf(woodTotalPieces)} pcs of ${gen.productName||'this product'} in total — only some of that went into this specific batch (see brushing above).</div>
     <div class="grid2" style="margin-top:8px;">
-      <div><div class="label" style="font-size:10px;">Planks Used</div><div style="font-size:16px;font-weight:700;color:#5c3d1e;">${woodTotalPlanks}</div></div>
-      <div><div class="label" style="font-size:10px;">Pieces Produced</div><div style="font-size:16px;font-weight:700;color:#27ae60;">${woodTotalPieces}</div></div>
+      <div><div class="label" style="font-size:10px;">Planks Used (total)</div><div style="font-size:16px;font-weight:700;color:#5c3d1e;">${nf(woodTotalPlanks)}</div></div>
+      <div><div class="label" style="font-size:10px;">Pieces Produced (total)</div><div style="font-size:16px;font-weight:700;color:#27ae60;">${nf(woodTotalPieces)}</div></div>
     </div>
     ${woodRuns.some(p=>p.voided)?`<div style="font-size:10px;color:#e74c3c;margin-top:4px;">Excludes voided production runs.</div>`:''}
     ${woodRuns.length>0?woodRuns.map(p=>`<div style="display:flex;justify-content:space-between;font-size:11px;padding:3px 0;border-bottom:1px solid #f0e8de;${p.voided?'opacity:0.5;text-decoration:line-through;':''}">
-      <span>${p.date}</span><span style="font-weight:700;">${p.planksUsed} planks → ${p.piecesProduced} pcs${p.voided?' (voided)':''}</span>
-    </div>`).join(''):`<div style="color:#aaa;font-size:11px;margin-top:4px;">No matching Wood Finishing run found for this batch/product — may predate detailed tracking, or the product name was changed since.</div>`}
-  </div>`;
+      <span>${p.date}</span><span style="font-weight:700;">${nf(p.planksUsed)} planks → ${nf(p.piecesProduced)} pcs${p.voided?' (voided)':''}</span>
+    </div>`).join(''):`<div style="color:#aaa;font-size:11px;margin-top:4px;">No matching Wood Finishing run found for this batch/product — may predate detailed tracking, or the product name was changed since.</div>`}`;
+  }
+  html += `</div>`;
 
   html += `<div class="card" style="border:2px solid #9b59b6;margin-bottom:12px;">
-    <div class="label" style="color:#9b59b6;">🔌 Sockets Used</div>
+    <div class="label" style="color:#9b59b6;">🔌 Sockets Used On This Batch</div>
     ${(gen.socketUsage||[]).length===0?`<div style="color:#aaa;font-size:12px;">None yet — not sent through Socket Dept.</div>`:
       (gen.socketUsage||[]).map(u=>`<div style="display:flex;justify-content:space-between;font-size:12px;padding:4px 0;border-bottom:1px solid #f0e8de;">
         <span>${u.batchNo} — ${u.socketType} (${u.date})</span>
-        <span style="font-weight:700;">${u.qty} pcs</span>
+        <span style="font-weight:700;">${nf(u.qty)} pcs</span>
       </div>`).join('')}
   </div>`;
 
   html += `<div class="card" style="border:2px solid #7f8c8d;">
-    <div class="label" style="color:#7f8c8d;">🔩 Screws Used</div>
+    <div class="label" style="color:#7f8c8d;">🔩 Screws Used On This Batch</div>
     ${(gen.screwUsage||[]).length===0?`<div style="color:#aaa;font-size:12px;">None yet — not sent through Socket Dept.</div>`:
       (gen.screwUsage||[]).map(u=>`<div style="display:flex;justify-content:space-between;font-size:12px;padding:4px 0;border-bottom:1px solid #f0e8de;">
         <span>${u.batchNo} (${u.date})</span>
-        <span style="font-weight:700;">${u.qty} pcs</span>
+        <span style="font-weight:700;">${nf(u.qty)} pcs</span>
       </div>`).join('')}
   </div>`;
 
