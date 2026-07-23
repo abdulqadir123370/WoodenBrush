@@ -326,6 +326,12 @@ try{
 
 let syncTimeout = null;
 let syncStatus = 'idle'; // idle | saving | saved | error | live
+// True only once EVERY collection has delivered its first snapshot from the live cloud.
+// Stays false on the offline/timeout fallback path (stale localStorage data) and on file://
+// copies where the API key blocks Firestore. Automatic fixing is gated on this: acting on
+// stale or partial data and then syncing those "fixes" up when the connection returns would
+// corrupt good cloud data with conclusions drawn from an incomplete picture.
+let cloudDataConfirmed = false;
 let hasLoadedOnce = false;
 
 // Local storage fallback functions
@@ -543,6 +549,14 @@ function scheduleHealthBadgeUpdate(){
 function updateHealthBadge(){
   const el = document.getElementById('healthBadge');
   if(!el || !currentUser) return;
+  // On unconfirmed/offline data (stale localStorage fallback, or a file:// copy that can't
+  // reach Firestore), issue counts computed from a partial picture are meaningless and
+  // alarming — say so plainly instead of pretending to know.
+  if(typeof cloudDataConfirmed!=='undefined' && !cloudDataConfirmed){
+    el.style.color = '#7f8c8d';
+    el.innerHTML = `⏸️ Offline/local data — checks paused (can't verify against the cloud)`;
+    return;
+  }
   let issues;
   try{ issues = runDataHealthCheck(); }
   catch(e){
@@ -555,7 +569,7 @@ function updateHealthBadge(){
   const warnings = issues.filter(i=>i.severity==='warning').length;
   const stamp = new Date().toTimeString().slice(0,5);
   const isAdmin = currentUser.role==='admin' || currentUser.role==='owner';
-  const goToCheck = isAdmin ? ` <span style="text-decoration:underline;cursor:pointer;" onclick="document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));switchTab('Admin',document.getElementById('adminTab'));setTimeout(()=>{if(typeof runFullCheckAndShow==='function')runFullCheckAndShow();document.getElementById('adminTab')?.scrollIntoView();},50);">— view details</span>` : '';
+  const goToCheck = isAdmin ? ` <span style="text-decoration:underline;cursor:pointer;" onclick="document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));switchTab('Admin',document.getElementById('adminTab'));setTimeout(()=>{document.getElementById('adminTab')?.scrollIntoView();},50);">— view details</span>` : '';
   if(errors>0){
     el.style.color = '#e74c3c';
     el.innerHTML = `❌ ${errors} known issue${errors>1?'s':''} found as of ${stamp}${goToCheck}`;
@@ -658,7 +672,7 @@ function loadFromFirestore(){
   if(!fbDb){ startApp(false); return; }
 
   firebase.auth().signInAnonymously().then(()=>{
-    attachFirestoreListeners(()=>startApp(false));
+    attachFirestoreListeners(()=>{ cloudDataConfirmed = true; startApp(false); });
   }).catch(err=>{
     console.error('Firebase anonymous sign-in failed:', err);
     startApp(true);
@@ -2967,16 +2981,6 @@ function renderBOM(){
     html+=`<div style="color:#aaa;font-size:12px;">None yet</div>`;
   }
   html+=`</div>
-    ${(() => {
-      const cands = collectSocketTypeNameCandidates();
-      if(cands.length===0) return '';
-      return `<div style="background:#e8f5e9;border:1px solid #27ae60;border-radius:8px;padding:10px;margin-bottom:10px;">
-        <div style="font-size:12px;font-weight:700;color:#27ae60;margin-bottom:6px;">🔎 Found ${cands.length} socket type name${cands.length>1?'s':''} inside your existing records, missing from this list:</div>
-        ${cands.map(c=>`<div style="font-size:12px;padding:2px 0;">• <b>${c.name}</b> <span style="color:#888;font-size:10px;">— found in ${c.sources.slice(0,3).join(', ')}${c.sources.length>3?` +${c.sources.length-3} more`:''}</span></div>`).join('')}
-        <button class="btn btn-green" style="width:100%;margin-top:8px;font-size:12px;" onclick="restoreSocketTypeNames()">♻️ Restore ${cands.length===1?'this name':'these names'} to the list</button>
-        <div style="font-size:10px;color:#888;margin-top:4px;">Only adds the name${cands.length>1?'s':''} back — changes nothing else.</div>
-      </div>`;
-    })()}
     <input type="text" placeholder="e.g. Socket-A" id="newSocketTypeName" value="${state.newSocketTypeName||''}" oninput="state.newSocketTypeName=this.value" style="margin-bottom:8px;"/>
     <button class="btn" style="background:#9b59b6;width:100%;" onclick="addSocketType()">Add Socket Type</button>
     <div id="socketTypeMsg" class="msg"></div>
@@ -3022,7 +3026,8 @@ function renderBOM(){
 
 function renderMaterials(){
   const wp=state.woodPieces||[];
-  let html=`<div class="card" style="border:2px solid #27ae60;">
+  let html='';
+  html+=`<div class="card" style="border:2px solid #27ae60;">
     <div class="label">📦 Add Purchase (Vendor Lot)</div>
     <div style="font-size:11px;color:#888;margin-bottom:10px;">One vendor delivery can include multiple plank sizes — they'll all share the same batch number.</div>
 
@@ -3094,16 +3099,6 @@ function renderMaterials(){
     <button class="btn btn-blue" onclick="addWoodPiece()">Add Wood Piece</button>
     <div id="wpMsg" class="msg"></div>
   </div>`;
-
-  if(currentUser?.role==='owner'){
-    html += `<div class="card" style="border:2px solid #2980b9;">
-      <div class="label" style="color:#2980b9;">🔍 Batch Name Check & Auto-Fix <span style="font-size:9px;background:#8e44ad;color:#fff;border-radius:4px;padding:1px 6px;vertical-align:middle;">OWNER</span></div>
-      <div style="font-size:11px;color:#888;margin-bottom:10px;">If a rename accidentally relabeled old batches, this finds the original names (from records written at production time) and puts everything back in order — one click, with a confirmation showing exactly what will change before anything happens.</div>
-      <button class="btn" style="background:#27ae60;width:100%;margin-bottom:6px;" onclick="runAutoFixBatchNames()">🪄 Check & Fix Automatically</button>
-      <button class="btn btn-gray" style="font-size:11px;padding:6px 12px;" onclick="runNameInvestigationAndShow()">View details only (no changes)</button>
-      <div id="nameInvestigationResults" style="margin-top:10px;"></div>
-    </div>`;
-  }
 
   // Add Socket Stock — produced in-house, no vendor needed, but track batch + date
   const socketTypesForStock = state.socketTypes||[];
@@ -4716,6 +4711,204 @@ function reviewConfirmEdit(){
 
 // ---- MATERIALS ACTIONS ----
 let isSubmittingPurchase = false;
+// ==================== MATERIALS STOCK RECONCILIATION ====================
+// state.materials is synced as ONE Firestore document per plank size (a "map" collection),
+// containing every batch for that size bundled together — unlike the ledger, where every
+// purchase/consumption is its own separately-synced record. That bundling makes it possible
+// for a single failed or out-of-order sync to silently overwrite an entire size's batch list
+// with a stale version, quietly losing real purchased stock — while the ledger, being
+// per-record, keeps its own copy intact regardless. The ledger is therefore the more
+// trustworthy record of what SHOULD be in stock; this scans for places where the two disagree.
+// Read-only scan; restoring only overwrites state.materials[size].batches to match what the
+// ledger says — it never touches the ledger itself.
+function computeLedgerPlankBalances(){
+  const balances = {}; // size -> { batchNo -> qty }
+  (state.ledger||[]).forEach(e=>{
+    if(!e || e.type!=='plank' || !e.size || !e.batchNo) return;
+    const size = String(e.size);
+    balances[size] = balances[size] || {};
+    const delta = e.direction==='IN' ? (e.qty||0) : -(e.qty||0);
+    balances[size][e.batchNo] = (balances[size][e.batchNo]||0) + delta;
+  });
+  return balances;
+}
+
+function collectMaterialsStockDiscrepancies(){
+  const ledgerBalances = computeLedgerPlankBalances();
+  const discrepancies = [];
+  Object.keys(ledgerBalances).forEach(size=>{
+    const currentBatches = (state.materials[size]?.batches)||[];
+    Object.entries(ledgerBalances[size]).forEach(([batchNo, ledgerQty])=>{
+      const rounded = Math.round(ledgerQty);
+      const current = currentBatches.find(b=>b.batchNo===batchNo);
+      const currentQty = current ? current.qty : 0;
+      if(currentQty!==rounded){
+        // A NEGATIVE ledger balance can never be a correct stock figure — it means the ledger
+        // history itself is incomplete (e.g. production OUT entries exist but the purchase IN
+        // is missing, as happens on a device with stale/partial data). "Fixing" stock to a
+        // negative number would be nonsense, so these are marked unfixable and surfaced for a
+        // person instead of being touched.
+        discrepancies.push({size, batchNo, currentQty, ledgerQty: rounded, unfixable: rounded<0});
+      }
+    });
+  });
+  return discrepancies;
+}
+
+function restoreMaterialsStockFromLedger(){
+  const discrepancies = collectMaterialsStockDiscrepancies();
+  if(discrepancies.length===0){ alert('Nothing to restore — current stock already matches the ledger for every batch.'); return; }
+  const lines = discrepancies.map(d=>`• ${d.size}" batch ${d.batchNo}: shows ${d.currentQty} pcs → ledger says ${d.ledgerQty} pcs`);
+  const ok = confirm(`Restore stock to match the ledger for ${discrepancies.length} batch${discrepancies.length>1?'es':''}?\n\n${lines.join('\n')}\n\nThis only updates the CURRENT STOCK numbers to match your purchase/production history — it does not change the ledger itself, and does not touch any other data.`);
+  if(!ok) return;
+  discrepancies.forEach(d=>{
+    if(!state.materials[d.size]) state.materials[d.size] = {name:d.size+'" Planks', size:+d.size, low:50, batches:[]};
+    const batches = state.materials[d.size].batches || [];
+    const idx = batches.findIndex(b=>b.batchNo===d.batchNo);
+    if(d.ledgerQty<=0){
+      if(idx>=0) batches.splice(idx,1);
+    } else if(idx>=0){
+      batches[idx] = {...batches[idx], qty:d.ledgerQty};
+    } else {
+      batches.push({batchNo:d.batchNo, qty:d.ledgerQty, dateAdded:new Date().toISOString().slice(0,10), vendor:'(restored from ledger)', pricePerPiece:0});
+    }
+    state.materials[d.size].batches = batches;
+  });
+  saveAll();
+  re();
+}
+
+// ==================== ONE AUTOMATIC FIX CYCLE — replaces every separate fix button ====================
+// Runs on its own: once after login, then every 2 hours while the app stays open. Also
+// available as a single on-demand button for right after a data change or app update.
+// No confirmation dialogs — everything in this cycle is limited to fixes the underlying
+// detection logic ALREADY refuses to propose unless there's exactly one evidence-backed
+// answer (see planBatchNameFixes/collectMaterialsStockDiscrepancies/etc.) — the safety check
+// lives in what gets proposed, not in a click a person has to make afterward. Anything that
+// genuinely can't be inferred (ambiguous batch names with no single correct pairing) is never
+// touched here — there's no way to "auto-solve" a case with no determinable answer without
+// guessing, so those stay visible-only until a person supplies the missing information.
+function runAutoFixCycle(){
+  // HARD GATE: never act on data that hasn't been confirmed loaded from the live cloud.
+  // On the offline/timeout fallback (or a file:// copy where Firestore is unreachable), the
+  // local picture can be stale or partial — "fixing" against an incomplete ledger and later
+  // syncing those changes up would corrupt good cloud data. Pausing entirely is the only
+  // safe behavior; everything gets checked normally once a real connection loads.
+  if(typeof cloudDataConfirmed!=='undefined' && !cloudDataConfirmed){
+    const logEntry = {
+      timestamp: new Date().toISOString(), appliedCount: 0, applied: [], needsJudgment: [],
+      skipped: 'This device is running on offline/local data that could not be confirmed against the cloud — automatic checking and fixing is PAUSED so it can never act on a stale or partial picture. It resumes automatically once the app loads with a live connection.',
+    };
+    state.autoFixLog = [logEntry, ...(state.autoFixLog||[])].slice(0, 20); // in-memory only: deliberately no saveAll on unconfirmed data
+    if(typeof renderAutoFixResults==='function') renderAutoFixResults();
+    if(typeof updateHealthBadge==='function') updateHealthBadge();
+    return logEntry;
+  }
+
+  const namePlan = planBatchNameFixes();
+  const structural = collectStructuralFixes();
+  const socketNames = collectSocketTypeNameCandidates();
+  const materialsAll = collectMaterialsStockDiscrepancies();
+  const materialsFix = materialsAll.filter(d=>!d.unfixable);
+
+  const applied = [];
+  namePlan.fixes.forEach(f=>{
+    reassignBatchLineage(f.batchNo, f.from, f.to);
+    applied.push(`Batch ${f.batchNo}: renamed "${f.from}" back to "${f.to}"`);
+  });
+  structural.forEach(f=>{ f.apply(); applied.push(f.desc); });
+  if(socketNames.length>0){
+    state.socketTypes = [...(state.socketTypes||[]), ...socketNames.map(c=>c.name)];
+    applied.push(`Restored ${socketNames.length} socket type name${socketNames.length>1?'s':''} found in existing records: ${socketNames.map(c=>c.name).join(', ')}`);
+  }
+  materialsFix.forEach(d=>{
+    if(!state.materials[d.size]) state.materials[d.size] = {name:d.size+'" Planks', size:+d.size, low:50, batches:[]};
+    const batches = state.materials[d.size].batches || [];
+    const idx = batches.findIndex(b=>b.batchNo===d.batchNo);
+    if(d.ledgerQty<=0){
+      // Fully-consumed batch lingering as a stale row: only log if a row actually got removed.
+      if(idx>=0){ batches.splice(idx,1); applied.push(`${d.size}" batch ${d.batchNo}: removed stale stock row (Ledger shows this batch fully consumed)`); }
+    } else {
+      if(idx>=0){ batches[idx] = {...batches[idx], qty:d.ledgerQty}; }
+      else { batches.push({batchNo:d.batchNo, qty:d.ledgerQty, dateAdded:new Date().toISOString().slice(0,10), vendor:'(restored from ledger)', pricePerPiece:0}); }
+      applied.push(`${d.size}" batch ${d.batchNo}: stock corrected from ${d.currentQty} to ${d.ledgerQty} pcs to match the Ledger`);
+    }
+    state.materials[d.size].batches = batches;
+  });
+
+  // Re-check AFTER applying, not before — otherwise something this very cycle just fixed
+  // would still show up in the "needs judgment" list, which would be misleading.
+  const issues = runDataHealthCheck();
+  const stillNeedsJudgment = namePlan.manual.map(m=>`Batch ${m.batchNo}: ${m.reason}`);
+  const stillFlagged = issues.map(i=>`${i.category}: ${i.message}`);
+
+  const logEntry = {
+    timestamp: new Date().toISOString(),
+    appliedCount: applied.length,
+    applied,
+    needsJudgment: [...stillNeedsJudgment, ...stillFlagged],
+  };
+  state.autoFixLog = [logEntry, ...(state.autoFixLog||[])].slice(0, 20); // keep a rolling history, not unbounded
+
+  saveAll();
+  if(applied.length>0){
+    Promise.resolve(doFirestoreSync()).catch(()=>{}); // best-effort immediate push; periodic sync will retry regardless
+  }
+  if(typeof re==='function') re();
+  // Refresh the header badge NOW, not on its 3s debounce — otherwise the badge briefly shows
+  // pre-fix counts next to a log saying things were just fixed, which reads as a contradiction.
+  if(typeof updateHealthBadge==='function') updateHealthBadge();
+  return logEntry;
+}
+
+let autoFixCycleTimer = null;
+function startAutoFixCycle(){
+  if(autoFixCycleTimer) return; // never start more than one interval, even if called again
+  setTimeout(()=>{ try{ runAutoFixCycle(); renderAutoFixResults(); }catch(e){ console.error('Auto-fix cycle failed:', e); } }, 4000); // small delay so initial data load settles first
+  autoFixCycleTimer = setInterval(()=>{ try{ runAutoFixCycle(); renderAutoFixResults(); }catch(e){ console.error('Auto-fix cycle failed:', e); } }, 2*60*60*1000); // every 2 hours
+}
+
+function renderAutoFixResultsHTML(){
+  const last = (state.autoFixLog||[])[0];
+  if(!last){
+    return `<div style="font-size:12px;color:#888;">Hasn't run yet — will check automatically shortly after this page loads.</div>`;
+  }
+  const when = new Date(last.timestamp);
+  const stamp = isNaN(when.getTime()) ? '' : when.toLocaleString();
+  let html = `<div style="font-size:11px;color:#888;margin-bottom:8px;">Last checked: ${stamp}</div>`;
+  if(last.skipped){
+    html += `<div style="background:#f4f4f4;border-radius:8px;padding:12px;">
+      <div style="font-size:13px;font-weight:700;color:#7f8c8d;">⏸️ Paused</div>
+      <div style="font-size:11px;color:#666;margin-top:4px;">${last.skipped}</div>
+    </div>`;
+    return html;
+  }
+  if(last.appliedCount===0 && last.needsJudgment.length===0){
+    html += `<div style="background:#e8f5e9;border-radius:8px;padding:12px;text-align:center;">
+      <div style="font-size:22px;">✅</div>
+      <div style="font-size:13px;font-weight:700;color:#27ae60;">Nothing needed fixing</div>
+    </div>`;
+    return html;
+  }
+  if(last.appliedCount>0){
+    html += `<div style="background:#e8f4fd;border-radius:8px;padding:10px;margin-bottom:8px;">
+      <div style="font-size:12px;font-weight:700;color:#2980b9;margin-bottom:6px;">🔧 Fixed automatically (${last.appliedCount}):</div>
+      ${last.applied.map(a=>`<div style="font-size:11px;margin-bottom:3px;">• ${a}</div>`).join('')}
+    </div>`;
+  }
+  if(last.needsJudgment.length>0){
+    html += `<div style="background:#fff8ec;border-radius:8px;padding:10px;">
+      <div style="font-size:12px;font-weight:700;color:#e67e22;margin-bottom:6px;">⚠️ Needs a person to look (${last.needsJudgment.length}) — can't be safely guessed:</div>
+      ${last.needsJudgment.map(m=>`<div style="font-size:11px;margin-bottom:3px;">• ${m}</div>`).join('')}
+    </div>`;
+  }
+  return html;
+}
+function renderAutoFixResults(){
+  const el = document.getElementById('autoFixResults');
+  if(el) el.innerHTML = renderAutoFixResultsHTML();
+}
+
 function addPurchaseBatch(){
   if(isSubmittingPurchase) return; // prevent double-tap duplicate purchase entries
   isSubmittingPurchase = true;
@@ -5104,15 +5297,21 @@ function planBatchNameFixes(){
     if(evidence.length===0) return; // nothing to verify against — leave alone silently
 
     if(evidence.length===1){
-      // One confidently-known original name for this batch. Every current name that differs
-      // from it is stray — most often leftover from an earlier fix that only reached some
-      // stages of this batch's lineage (e.g. Wood Finishing got corrected but Brush Dept's
-      // own stock pool didn't) — and gets corrected. A batch can have more than one distinct
-      // stray name across its stages; each converges on the same confirmed answer.
+      // One confidently-known original name for this batch. If there's exactly ONE distinct
+      // stray name across every stage, it's unambiguous — most often leftover from an earlier
+      // fix that only reached some stages of this batch's lineage (e.g. Wood Finishing got
+      // corrected but Brush Dept's own stock pool didn't) — and gets corrected automatically.
+      // If there's MORE than one distinct stray name, auto-fixing would mean asserting they're
+      // ALL the same mislabel rather than, say, one real mislabel plus one genuinely different
+      // (just not-yet-evidenced) product — a stronger claim that deserves a person's judgment,
+      // especially now that nothing reviews this before it applies.
       const correctName = evidence[0];
-      current.filter(n=>n!==correctName).forEach(strayName=>{
-        fixes.push({batchNo:r.batchNo, from:strayName, to:correctName, noteCount:r.evidence[correctName]||0});
-      });
+      const strays = current.filter(n=>n!==correctName);
+      if(strays.length===1){
+        fixes.push({batchNo:r.batchNo, from:strays[0], to:correctName, noteCount:r.evidence[correctName]||0});
+      } else if(strays.length>1){
+        manual.push({batchNo:r.batchNo, reason:`Multiple different names (${strays.map(n=>`"${n}"`).join(', ')}) have no production-time record, while only "${correctName}" does — could be several mislabels of the same product, or one mislabel plus one genuinely different product. Won't guess which.`});
+      }
       return;
     }
 
@@ -5183,77 +5382,7 @@ function planBatchNameFixes(){
   return {fixes, manual};
 }
 
-function runAutoFixBatchNames(){
-  if(currentUser?.role!=='owner'){ alert('🔒 Only the Owner can apply data fixes.'); return; }
-  const el = document.getElementById('nameInvestigationResults');
-  const {fixes, manual} = planBatchNameFixes();
-  if(fixes.length===0 && manual.length===0){
-    if(el) el.innerHTML = `<div style="background:#e8f5e9;border-radius:8px;padding:12px;text-align:center;font-size:13px;font-weight:700;color:#27ae60;">✅ All batch names already match their original records — nothing to fix.</div>`;
-    return;
-  }
-  if(fixes.length===0){
-    runNameInvestigationAndShow();
-    return;
-  }
-  const planText = fixes.map(f=>`• ${f.batchNo}: "${f.from}" → "${f.to}"`).join('\n');
-  if(!confirm(`This will correct ${fixes.length} batch${fixes.length>1?'es':''} back to the product name recorded when they were produced:\n\n${planText}\n\nBatches already labeled correctly are not touched. Downstream Brush/Socket records for these batches move together automatically. Proceed?`)) return;
-  const done = [];
-  fixes.forEach(f=>{
-    reassignBatchLineage(f.batchNo, f.from, f.to);
-    done.push(f);
-  });
-  saveAll();
-  re();
-  // Same cloud-confirmation as applyAllSafeFixes: sync immediately and don't declare success
-  // until the writes are actually committed, so a fast refresh can't silently revert them.
-  Promise.resolve(doFirestoreSync()).catch(err=>{
-    const elErr = document.getElementById('nameInvestigationResults');
-    if(elErr) elErr.innerHTML = `<div style="background:#fdecea;border-radius:8px;padding:10px;font-size:12px;font-weight:700;color:#e74c3c;">❌ The fixes could NOT be saved to the cloud and WILL REVERT on refresh. Check your connection and try again.</div>`;
-  });
-  setTimeout(()=>{
-    const el2 = document.getElementById('nameInvestigationResults');
-    if(!el2) return;
-    let html = `<div style="background:#e8f5e9;border-radius:8px;padding:10px;margin-bottom:6px;">
-      <div style="font-size:13px;font-weight:700;color:#27ae60;">✅ Fixed ${done.length} batch${done.length>1?'es':''}:</div>
-      ${done.map(f=>`<div style="font-size:11px;margin-top:3px;">• ${f.batchNo}: "${f.from}" → "${f.to}" (${f.noteCount} record${f.noteCount>1?'s':''} confirmed the original)</div>`).join('')}
-    </div>`;
-    if(manual.length>0){
-      html += manual.map(m=>`<div style="background:#fff8ec;border-left:3px solid #e67e22;border-radius:4px;padding:8px 10px;margin-bottom:6px;font-size:11px;">
-        <span style="font-weight:700;color:#e67e22;">⚠️ ${m.batchNo} needs your judgment</span><br/>${m.reason}</div>`).join('');
-    }
-    html += `<div style="font-size:11px;color:#888;margin-top:6px;">Tip: run the 🩺 Data Health Check in the Admin tab now to confirm everything is consistent.</div>`;
-    el2.innerHTML = html;
-  }, 100);
-}
 
-function runNameInvestigationAndShow(){
-  const el = document.getElementById('nameInvestigationResults');
-  if(!el) return;
-  el.innerHTML = `<div style="font-size:12px;color:#888;">Scanning ledger history...</div>`;
-  setTimeout(()=>{
-    const results = investigateBatchNames();
-    if(results.length===0){ el.innerHTML = `<div style="color:#aaa;font-size:12px;">No production batches found.</div>`; return; }
-    const styles = {
-      match:    {icon:'✅', color:'#27ae60', bg:'#e8f5e9', label:'Name matches original records'},
-      mismatch: {icon:'❌', color:'#e74c3c', bg:'#fdecea', label:'Current name does NOT match original records'},
-      mixed:    {icon:'⚠️', color:'#e67e22', bg:'#fff8ec', label:'Multiple names in history — review manually'},
-      'no-evidence': {icon:'❔', color:'#7f8c8d', bg:'#f5f5f5', label:'No evidence available'}
-    };
-    let html = '';
-    results.forEach(r=>{
-      const s = styles[r.verdict];
-      html += `<div style="background:${s.bg};border-left:3px solid ${s.color};border-radius:4px;padding:8px 10px;margin-bottom:6px;font-size:11px;">
-        <div style="font-weight:700;color:${s.color};">${s.icon} ${r.batchNo} — currently "${r.currentNames.join('", "')}"</div>
-        <div style="margin-top:2px;">${r.detail}</div>
-      </div>`;
-    });
-    const mismatches = results.filter(r=>r.verdict==='mismatch').length;
-    if(mismatches>0){
-      html += `<div style="font-size:11px;color:#888;margin-top:6px;">To fix mismatched batches, use the "🪄 Check & Fix Automatically" button above.</div>`;
-    }
-    el.innerHTML = html;
-  }, 50);
-}
 
 function startEditWoodPiece(id){
   const w = (state.woodPieces||[]).find(x=>x.id===id);
@@ -5552,6 +5681,7 @@ function renderAuthenticatedApp(){
   renderTab(firstTab);
   if(typeof scheduleHealthBadgeUpdate==='function') scheduleHealthBadgeUpdate();
   if(typeof startHealthPeriodicCheck==='function') startHealthPeriodicCheck();
+  if(typeof startAutoFixCycle==='function') startAutoFixCycle();
 }
 
 function renderAdminPanel(){
@@ -5582,10 +5712,10 @@ function renderAdminPanel(){
     </div>
 
     <div class="card" style="border:2px solid #16a085;background:#f0fdfa;">
-      <div class="label" style="color:#16a085;">🩺 Full Module Check & Fix</div>
-      <div style="font-size:11px;color:#888;margin-bottom:12px;">One scan of everything — stock levels, batch names vs original records, traces, ledger balances, accounts. Fixes what's safe to fix automatically (with your confirmation), and clearly separates anything that needs your judgment. Run this after any app update to confirm all previous data is still in order.</div>
-      <button class="btn" style="background:#16a085;width:100%;" onclick="runFullCheckAndShow()">🩺 Check Everything</button>
-      <div id="healthCheckResults" style="margin-top:12px;"></div>
+      <div class="label" style="color:#16a085;">🤖 Auto-Fix</div>
+      <div style="font-size:11px;color:#888;margin-bottom:12px;">Runs on its own — once when the app loads, then every 2 hours while it's open. Checks stock levels, batch names vs. original records, and account setup, and fixes what's safe to fix without asking. Anything that genuinely can't be inferred (no single correct answer to guess between) stays listed below instead of being touched.</div>
+      <button class="btn" style="background:#16a085;width:100%;" onclick="document.getElementById('autoFixResults').innerHTML='<div style=\\'font-size:12px;color:#888;\\'>Checking now...</div>';setTimeout(()=>{runAutoFixCycle();renderAutoFixResults();},50);">🔄 Check Now</button>
+      <div id="autoFixResults" style="margin-top:12px;">${renderAutoFixResultsHTML()}</div>
     </div>
 
   `;
@@ -5748,6 +5878,18 @@ function runDataHealthCheck(){
   (state.readyForSale||[]).forEach(f=>{
     if((f.qty||0) < -0.001) add('error','Stock',`Negative Ready-for-Sale stock: ${f.productName} — Batch ${f.batchNo} shows ${f.qty} pcs`);
   });
+
+  // 1b. Plank stock disagreeing with its own purchase/production history. Materials syncs as
+  // one bundled record per size, unlike the ledger's one-record-per-entry — meaning a failed
+  // or out-of-order sync can silently overwrite real purchased stock while the ledger stays
+  // intact. Compare them directly rather than trusting the (more fragile) current-stock figure.
+  collectMaterialsStockDiscrepancies().forEach(d=>{
+    if(d.unfixable){
+      add('error','Stock',`The Ledger's own history for ${d.size}" plank batch ${d.batchNo} doesn't add up: more planks recorded as used than were ever recorded as purchased (balance comes to ${d.ledgerQty}). This usually means a purchase entry is missing from the ledger — a person needs to review this batch's purchase records. Stock numbers are deliberately left untouched.`);
+    } else {
+      add('error','Stock',`${d.size}" plank batch ${d.batchNo} shows ${d.currentQty} pcs in stock, but the Ledger's purchase/production history says it should be ${d.ledgerQty} pcs. Auto-Fix corrects this automatically on its next pass; if it keeps reappearing, something is repeatedly overwriting the stock and needs a person to investigate.`);
+    }
+  });
   (state.socketInventory||[]).forEach(s=>{
     if((s.qty||0) < -0.001) add('error','Stock',`Negative socket stock: ${s.socketType||''} — Batch ${s.batchNo} shows ${s.qty} pcs`);
   });
@@ -5819,7 +5961,7 @@ function runDataHealthCheck(){
       if(g && g.productName) noteSub(g.productName, 'genealogy record');
       const subNames = Object.keys(subSightings);
       if(subNames.length>1){
-        add('error','Traceability', `Batch ${sub} (from wood batch ${batchNo}) is ONE physical batch but is named differently in different places: ${subNames.map(n=>`"${n}" (${[...new Set(subSightings[n])].join(', ')})`).join(' vs ')}. Use "Batch Name Check & Auto-Fix" in Materials to correct this.`);
+        add('error','Traceability', `Batch ${sub} (from wood batch ${batchNo}) is ONE physical batch but is named differently in different places: ${subNames.map(n=>`"${n}" (${[...new Set(subSightings[n])].join(', ')})`).join(' vs ')}. This is checked automatically — if it doesn't clear on its own, it needs a person to review the underlying records directly.`);
       }
     });
 
@@ -5836,7 +5978,7 @@ function runDataHealthCheck(){
       const evidenceNames = Object.keys(evidence);
       const strays = distinctNames.filter(n=>!evidenceNames.includes(n));
       if(evidenceNames.length && strays.length){
-        add('error','Traceability', `Batch ${batchNo}'s lineage contains name${strays.length>1?'s':''} that NO production-time ledger record ever used: ${strays.map(n=>`"${n}" (${[...new Set(sightings[n])].join('; ')})`).join(' and ')}. Recorded when actually produced: ${evidenceNames.map(n=>`"${n}"`).join(', ')}. Use "Batch Name Check & Auto-Fix" in Materials to correct this.`);
+        add('error','Traceability', `Batch ${batchNo}'s lineage contains name${strays.length>1?'s':''} that NO production-time ledger record ever used: ${strays.map(n=>`"${n}" (${[...new Set(sightings[n])].join('; ')})`).join(' and ')}. Recorded when actually produced: ${evidenceNames.map(n=>`"${n}"`).join(', ')}. This is checked automatically — if it doesn't clear on its own, it needs a person to review the underlying records directly.`);
       } else if(!evidenceNames.length){
         add('warning','Traceability', `Batch ${batchNo}'s lineage shows different product names at different stages (${distinctNames.map(n=>`"${n}"`).join(', ')}) and no ledger notes exist to verify which is original — review manually.`);
       }
@@ -5975,137 +6117,8 @@ function runForceFullResync(){
   });
 }
 
-function runFullCheckAndShow(){
-  const results = document.getElementById('healthCheckResults');
-  if(!results) return;
-  results.innerHTML = `<div style="font-size:12px;color:#888;">Scanning the whole module...</div>`;
-  setTimeout(()=>{
-    const issues = runDataHealthCheck();                 // detect-only findings
-    const namePlan = planBatchNameFixes();               // {fixes, manual}
-    const structural = collectStructuralFixes();         // deterministic repairs
-    const errors = issues.filter(i=>i.severity==='error');
-    const warnings = issues.filter(i=>i.severity==='warning');
-    const fixableCount = namePlan.fixes.length + structural.length;
 
-    if(issues.length===0 && fixableCount===0 && namePlan.manual.length===0){
-      results.innerHTML = `<div style="background:#e8f5e9;border-radius:8px;padding:14px;text-align:center;">
-        <div style="font-size:26px;">✅</div>
-        <div style="font-size:14px;font-weight:700;color:#27ae60;">Everything is in order</div>
-        <div style="font-size:11px;color:#888;margin-top:4px;">Stock levels, batch names, traces, ledger, accounts — all checked, nothing found.</div>
-      </div>`;
-      return;
-    }
 
-    let html = '';
-    if(fixableCount>0){
-      html += `<div style="background:#e8f4fd;border-radius:8px;padding:10px;margin-bottom:8px;">
-        <div style="font-size:12px;font-weight:700;color:#2980b9;margin-bottom:6px;">🔧 ${fixableCount} thing${fixableCount>1?'s':''} I can fix safely — no judgment calls involved:</div>
-        ${namePlan.fixes.map(f=>`<div style="font-size:11px;margin-bottom:3px;">• ${f.batchNo}: rename "${f.from}" back to "${f.to}" (${f.noteCount} original record${f.noteCount>1?'s':''} confirm it)</div>`).join('')}
-        ${structural.map(f=>`<div style="font-size:11px;margin-bottom:3px;">• ${f.desc}</div>`).join('')}
-        <button class="btn" style="background:#2980b9;width:100%;margin-top:6px;" onclick="applyAllSafeFixes()">🔧 Fix these ${fixableCount} now</button>
-      </div>`;
-    }
-    [...errors, ...warnings].forEach(i=>{
-      const color = i.severity==='error' ? '#e74c3c' : '#e67e22';
-      const bg = i.severity==='error' ? '#fdecea' : '#fff8ec';
-      const icon = i.severity==='error' ? '❌' : '⚠️';
-      html += `<div style="background:${bg};border-left:3px solid ${color};border-radius:4px;padding:8px 10px;margin-bottom:6px;font-size:11px;">
-        <span style="font-weight:700;color:${color};">${icon} ${i.category} — needs your attention</span><br/>${i.message}
-      </div>`;
-    });
-    namePlan.manual.forEach(m=>{
-      html += `<div style="background:#fff8ec;border-left:3px solid #e67e22;border-radius:4px;padding:8px 10px;margin-bottom:6px;font-size:11px;">
-        <span style="font-weight:700;color:#e67e22;">⚠️ Batch ${m.batchNo} — needs your judgment</span><br/>${m.reason}
-      </div>`;
-    });
-    results.innerHTML = html;
-  }, 50);
-}
-
-function applyAllSafeFixes(){
-  // Owner-only, enforced here too (not just by hiding buttons) so it can't be triggered
-  // from the console or by a stale UI on another role's session.
-  if(currentUser?.role!=='owner'){ alert('🔒 Only the Owner can apply data fixes.'); return; }
-  const namePlan = planBatchNameFixes();
-  const structural = collectStructuralFixes();
-  const total = namePlan.fixes.length + structural.length;
-  if(total===0){ runFullCheckAndShow(); return; }
-  if(!confirm(`Apply ${total} safe fix${total>1?'es':''} now? Only the deterministic items listed above are touched — nothing that needs a judgment call. You'll see the full list of everything actually changed afterwards.`)) return;
-  // Collect a full manifest of every record touched, across every fix, so the complete chain
-  // of implications is visible afterward — not just a one-line "done" message.
-  const fullManifest = []; // {batchLabel, manifest: [{collection,count,detail}]}
-  namePlan.fixes.forEach(f=>{
-    const result = reassignBatchLineage(f.batchNo, f.from, f.to);
-    fullManifest.push({batchLabel:`${f.batchNo}: "${f.from}" → "${f.to}"`, manifest: result.manifest});
-  });
-  structural.forEach(f=>f.apply());
-  saveAll();
-  re();
-  // Push to the cloud NOW (not after the usual 1.2s debounce) and wait for real confirmation
-  // before telling the person it's done — otherwise a quick refresh right after fixing could
-  // kill the writes mid-flight and silently revert everything on reload.
-  const el = document.getElementById('healthCheckResults');
-  if(el) el.innerHTML = `<div style="font-size:12px;color:#e67e22;font-weight:700;">⏳ Saving fixes to the cloud — please don't refresh yet...</div>`;
-  Promise.resolve(doFirestoreSync()).then(()=>{
-    const el2 = document.getElementById('healthCheckResults');
-    if(el2){
-      let html = `<div style="background:#e8f5e9;border-radius:8px;padding:10px;margin-bottom:10px;font-size:12px;font-weight:700;color:#27ae60;">☁️ Fixes saved to the cloud — safe to refresh.</div>`;
-      if(fullManifest.length>0){
-        html += `<div style="background:#f0f8ff;border-radius:8px;padding:10px;margin-bottom:10px;">
-          <div style="font-size:12px;font-weight:700;color:#2980b9;margin-bottom:6px;">📋 Full chain of everything actually changed:</div>`;
-        fullManifest.forEach(bm=>{
-          html += `<div style="font-size:11px;font-weight:700;margin-top:8px;">${bm.batchLabel}</div>`;
-          if(bm.manifest.length===0){
-            html += `<div style="font-size:11px;color:#888;margin-left:8px;">No records needed changing for this one (already fully consistent everywhere else).</div>`;
-          } else {
-            bm.manifest.forEach(m=>{
-              html += `<div style="font-size:11px;color:#444;margin-left:8px;">• ${m.collection}: ${m.count} record${m.count>1?'s':''} <span style="color:#999;">(${m.detail})</span></div>`;
-            });
-          }
-        });
-        html += `</div>`;
-      }
-      html += `<div style="font-size:11px;color:#888;">Re-scanning...</div>`;
-      el2.innerHTML = html;
-    }
-    setTimeout(runFullCheckAndShow, 2500);
-  }).catch(err=>{
-    const el2 = document.getElementById('healthCheckResults');
-    if(el2) el2.innerHTML = `<div style="background:#fdecea;border-radius:8px;padding:10px;font-size:12px;font-weight:700;color:#e74c3c;">❌ The fixes could NOT be saved to the cloud (${err && err.code ? err.code : 'connection or permission error'}). They are applied on this device only and WILL REVERT on refresh. Check your internet connection and try again — if this keeps happening, the database may be rejecting writes.</div>`;
-  });
-}
-
-function runHealthCheckAndShow(){
-  const results = document.getElementById('healthCheckResults');
-  if(!results) return;
-  results.innerHTML = `<div style="font-size:12px;color:#888;">Scanning...</div>`;
-  setTimeout(()=>{
-    const issues = runDataHealthCheck();
-    const errors = issues.filter(i=>i.severity==='error');
-    const warnings = issues.filter(i=>i.severity==='warning');
-    if(issues.length===0){
-      results.innerHTML = `<div style="background:#e8f5e9;border-radius:8px;padding:12px;text-align:center;">
-        <div style="font-size:24px;">✅</div>
-        <div style="font-size:13px;font-weight:700;color:#27ae60;">No problems found</div>
-      </div>`;
-      return;
-    }
-    let html = `<div style="font-size:12px;font-weight:700;margin-bottom:8px;">
-      ${errors.length>0?`<span style="color:#e74c3c;">${errors.length} problem${errors.length>1?'s':''}</span>`:''}
-      ${errors.length>0&&warnings.length>0?' · ':''}
-      ${warnings.length>0?`<span style="color:#e67e22;">${warnings.length} to review</span>`:''}
-    </div>`;
-    [...errors, ...warnings].forEach(i=>{
-      const color = i.severity==='error' ? '#e74c3c' : '#e67e22';
-      const bg = i.severity==='error' ? '#fdecea' : '#fff8ec';
-      const icon = i.severity==='error' ? '❌' : '⚠️';
-      html += `<div style="background:${bg};border-left:3px solid ${color};border-radius:4px;padding:8px 10px;margin-bottom:6px;font-size:11px;">
-        <span style="font-weight:700;color:${color};">${icon} ${i.category}</span><br/>${i.message}
-      </div>`;
-    });
-    results.innerHTML = html;
-  }, 50);
-}
 
 function exportDataJSON(){
   const exportObj = {};
