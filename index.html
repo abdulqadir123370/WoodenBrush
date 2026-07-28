@@ -240,7 +240,9 @@ const SK = {
   readyForSale:"wbt_ready_for_sale",
   voidLog:"wbt_void_log",
   batchGenealogy:"wbt_batch_genealogy", brushProcessingLog:"wbt_brush_processing_log",
-  socketProcessingLog:"wbt_socket_processing_log"
+  socketProcessingLog:"wbt_socket_processing_log",
+  dataSnapshots:"wbt_data_snapshots",     // System Watch: timestamped record of every stock number, for detecting unexplained changes
+  systemFindings:"wbt_system_findings"    // System Watch: permanent findings inbox with proof images, waits for the owner however long
 };
 
 const DEFAULT_USERS = [
@@ -262,11 +264,13 @@ const DEFAULT_WOOD_PIECES = [
 // 1. Go to https://console.firebase.google.com -> Create project -> Build > Firestore Database -> Create database (production mode)
 // 2. Project settings (gear icon) -> Your apps -> Add app -> Web (</> icon) -> copy the config object below
 // 3. Project settings -> also enable Authentication -> Sign-in method -> Anonymous (turn ON)
-// 4. In Firestore -> Rules, paste this and Publish:
+// 4. In Firestore -> Rules, paste this and Publish (the wildcard is IMPORTANT — enumerating
+//    collection names by hand means any collection added later gets silently DENIED, which
+//    has caused real silent data loss here before):
 //      rules_version = '2';
 //      service cloud.firestore {
 //        match /databases/{database}/documents {
-//          match /brushTrackerData/{doc} {
+//          match /{document=**} {
 //            allow read, write: if request.auth != null;
 //          }
 //        }
@@ -584,7 +588,8 @@ function updateHealthBadge(){
     return;
   }
   const errors = issues.filter(i=>i.severity==='error').length;
-  const warnings = issues.filter(i=>i.severity==='warning').length;
+  const openFindings = (state.systemFindings||[]).filter(f=>f.status==='open').length;
+  const warnings = issues.filter(i=>i.severity==='warning').length + openFindings;
   const stamp = new Date().toTimeString().slice(0,5);
   const isAdmin = currentUser.role==='admin' || currentUser.role==='owner';
   const goToCheck = isAdmin ? ` <span style="text-decoration:underline;cursor:pointer;" onclick="document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));switchTab('Admin',document.getElementById('adminTab'));setTimeout(()=>{document.getElementById('adminTab')?.scrollIntoView();},50);">— view details</span>` : '';
@@ -882,6 +887,8 @@ function saveAll(){
   sv(SK.voidLog,state.voidLog);
   sv(SK.batchGenealogy,state.batchGenealogy);
   sv(SK.brushProcessingLog,state.brushProcessingLog);
+  sv(SK.dataSnapshots,state.dataSnapshots);
+  sv(SK.systemFindings,state.systemFindings);
   sv(SK.socketProcessingLog,state.socketProcessingLog);
   // Always sync: writes are per-record diffs (never whole-list overwrites), and Firestore's
   // offline persistence durably queues them if there's no connection right now.
@@ -3508,7 +3515,7 @@ function renderSales(){
         </div>
       </div>
         <div style="font-size:11px;color:#888;${isVoidedSale?'text-decoration:line-through;':''}">${s.kgSold} KG @ Rs.${s.pricePerKg}/KG</div>
-      ${s.weighSlipUrl?`<a href="${s.weighSlipUrl}" target="_blank" rel="noopener" style="font-size:11px;color:#3498db;font-weight:700;text-decoration:none;">📷 View Weight Slip</a>${s.weighSlipReadKg!=null && Math.abs(s.weighSlipReadKg-s.kgSold)>0.05?` <span style="color:#e67e22;">(slip read ${s.weighSlipReadKg} KG — edited before saving)</span>`:''}`:''}
+      ${s.weighSlipUrl?`<a href="${s.weighSlipUrl}" target="_blank" rel="noopener" style="font-size:11px;color:#3498db;font-weight:700;text-decoration:none;">📷 View Weight Slip</a>${s.manualOverride?` <span style="color:#c0392b;font-weight:700;">(entered manually by ${s.manualOverrideBy||'Admin'} — slip was unreadable${s.weighSlipReadKg!=null?`, read as ${s.weighSlipReadKg} KG`:''})</span>`:(s.weighSlipReadKg!=null && Math.abs(s.weighSlipReadKg-s.kgSold)>0.05?` <span style="color:#e67e22;">(slip read ${s.weighSlipReadKg} KG)</span>`:'')}`:(s.manualOverride?`<span style="color:#c0392b;font-weight:700;">📷 No photo saved — entered manually by ${s.manualOverrideBy||'Admin'} (legacy record)</span>`:'')}
       ${s.flagged&&!isVoidedSale?`<div style="font-size:11px;color:#3498db;margin-top:6px;background:#e8f4fd;border-radius:6px;padding:6px 8px;">🚩 Flagged by ${s.flaggedBy} on ${s.flaggedDate} ${s.flaggedTime||''}<br/><span style="font-style:italic;">"${s.flagNote}"</span></div>`:''}
       ${isVoidedSale?`<div style="font-size:11px;color:#e74c3c;margin-top:6px;">Voided by ${s.voidedBy} on ${s.voidedDate}<br/><span style="font-style:italic;">"${s.voidedReason}"</span></div>`:''}
       ${isOwner && collectedByAccountant>0 && !isVoidedSale?`
@@ -3571,10 +3578,11 @@ function getWasteTypeStock(){
 
 function openSaleModal(){
   const stock = getWasteTypeStock();
-  state.saleModal = {stock, slipFile:null, slipUrl:null, slipReadKg:null, slipUploadPromise:null};
+  state.saleModal = {stock, slipFile:null, slipUrl:null, slipReadKg:null, slipUploadPromise:null, slipUploadFailed:false, readStatus:'none', manualOverrideUsed:false};
   document.getElementById('saleModalTitle').textContent = `💰 Sell Wastage`;
   document.getElementById('saleModalSub').textContent = `Choose a wastage type and enter sale details`;
   document.getElementById('saleErr').classList.add('hidden');
+  const isAdmin = isAdminOrOwner();
   document.getElementById('saleModalBody').innerHTML = `
     <div class="label">Wastage Type</div>
     <select id="saleWasteType" onchange="updateSaleTypeAvailable()">
@@ -3583,12 +3591,17 @@ function openSaleModal(){
     <div id="saleTypeAvailableNote" style="font-size:11px;color:#666;margin:4px 0 10px;"></div>
     <div class="label">Buyer Name</div>
     <input type="text" id="saleBuyer" placeholder="e.g. Ahmed Traders"/>
-    <div class="label">📷 Weight Slip Photo</div>
+    <div class="label">📷 Weight Slip Photo <span style="color:#e74c3c;">(required)</span></div>
+    <div style="font-size:11px;color:#888;margin-bottom:4px;">The KG figure can only come from this photo — there's no manual entry field anymore.</div>
     <input type="file" id="saleSlipFile" accept="image/*" capture="environment" onchange="handleSlipFileSelected(this)"/>
     <div id="saleSlipStatus" style="font-size:11px;margin:2px 0 6px;"></div>
     <div id="saleSlipPreview"></div>
     <div class="label">KG to Sell</div>
-    <input type="number" id="saleKg" step="0.1" min="0.1"/>
+    <input type="number" id="saleKg" step="0.1" min="0.1" readonly placeholder="Waiting for a slip photo..." style="background:#f0f0f0;color:#888;"/>
+    <div id="saleAdminOverrideBox" style="display:none;background:#fff3e0;border:1px solid #e67e22;border-radius:8px;padding:10px;margin:6px 0;">
+      <div style="font-size:11px;color:#a0522d;margin-bottom:6px;">⚠️ This slip couldn't be confidently read. As ${isAdmin?'Admin/Owner':'a regular user'}, ${isAdmin?'you may enter the weight manually — this gets recorded as an admin override, permanently, on this sale.':'you cannot enter this manually. Please retake a clearer photo, or ask an Admin/Owner to complete this sale.'}</div>
+      ${isAdmin?`<button type="button" class="btn" style="background:#e67e22;font-size:12px;" onclick="enableManualKgOverride()">🔓 Enter KG manually (Admin override)</button>`:''}
+    </div>
     <div class="label">Price per KG (Rs.)</div>
     <input type="number" id="salePrice" step="0.01" min="0" placeholder="e.g. 25.50"/>
     <div class="label">Sale Date</div>
@@ -3596,6 +3609,15 @@ function openSaleModal(){
     <div style="background:#e8f5e9;border-radius:6px;padding:8px;font-size:11px;color:#27ae60;font-weight:700;">✅ Payment collected in full at time of sale</div>`;
   document.getElementById('saleModal').classList.remove('hidden');
   updateSaleTypeAvailable();
+}
+
+function enableManualKgOverride(){
+  if(!isAdminOrOwner() || !state.saleModal) return;
+  state.saleModal.manualOverrideUsed = true;
+  const kgInput = document.getElementById('saleKg');
+  if(kgInput){ kgInput.readOnly = false; kgInput.style.background=''; kgInput.style.color=''; kgInput.placeholder='Enter weight (KG)'; kgInput.focus(); }
+  const box = document.getElementById('saleAdminOverrideBox');
+  if(box) box.innerHTML = `<div style="font-size:11px;color:#c0392b;font-weight:700;">🔓 Manual override active — this will be recorded as entered by ${currentUser?.name||'Admin'}, not read from the slip.</div>`;
 }
 
 // ==================== WEIGHT SLIP: photo -> auto-fill KG + permanent storage ====================
@@ -3614,6 +3636,14 @@ function handleSlipFileSelected(input){
   state.saleModal.slipFile = file;
   state.saleModal.slipUrl = null;
   state.saleModal.slipReadKg = null;
+  state.saleModal.slipUploadFailed = false;
+  state.saleModal.readStatus = 'none';
+  state.saleModal.manualOverrideUsed = false;
+
+  const kgInput = document.getElementById('saleKg');
+  if(kgInput){ kgInput.value = ''; kgInput.readOnly = true; kgInput.style.background='#f0f0f0'; kgInput.style.color='#888'; kgInput.placeholder='Reading slip...'; }
+  const box = document.getElementById('saleAdminOverrideBox');
+  if(box) box.style.display = 'none';
 
   const previewEl = document.getElementById('saleSlipPreview');
   if(previewEl){
@@ -3622,17 +3652,22 @@ function handleSlipFileSelected(input){
   }
 
   // Reading (for auto-fill) and uploading (for the permanent record) happen independently —
-  // one failing shouldn't block the other. Both degrade gracefully: if reading fails, the
-  // person just types the KG themselves; if the upload fails, the sale still saves, just
-  // without a linked photo.
+  // one failing shouldn't block the other. The photo is now MANDATORY evidence though, so
+  // unlike before, a failed upload is no longer allowed to pass silently — confirmSale checks
+  // slipUploadFailed and blocks the sale until it succeeds or the file is retried.
   readSlipAndAutofill(file);
   state.saleModal.slipUploadPromise = uploadSlipToStorage(file);
 }
 
 async function readSlipAndAutofill(file){
   const statusEl = document.getElementById('saleSlipStatus');
+  const kgInput = document.getElementById('saleKg');
+  const boxShow = () => { const b=document.getElementById('saleAdminOverrideBox'); if(b) b.style.display='block'; };
+  if(!state.saleModal) return;
   if(!WEIGHT_SLIP_READER_URL || !WEIGHT_SLIP_READER_SECRET){
-    if(statusEl) statusEl.innerHTML = `<span style="color:#888;">📎 Slip attached (auto-read isn't set up yet — enter KG manually)</span>`;
+    state.saleModal.readStatus = 'unreadable';
+    if(statusEl) statusEl.innerHTML = `<span style="color:#e67e22;">⚠️ Slip auto-reading isn't set up on this device — treated the same as an unreadable slip.</span>`;
+    boxShow();
     return;
   }
   if(statusEl) statusEl.innerHTML = `<span style="color:#3498db;">🔍 Reading slip...</span>`;
@@ -3644,39 +3679,61 @@ async function readSlipAndAutofill(file){
       body: JSON.stringify({ image: base64, mediaType: file.type || 'image/jpeg' })
     });
     const data = await resp.json().catch(()=>null);
+    if(!state.saleModal) return; // modal was closed while the request was in flight
     if(!resp.ok || !data || !data.success){
       const detail = data && data.error ? data.error : `HTTP ${resp.status}`;
       console.error('Slip reader error:', resp.status, data);
-      if(statusEl) statusEl.innerHTML = `<span style="color:#e67e22;">⚠️ Couldn't auto-read this slip (${detail}) — please enter KG manually.</span>`;
+      state.saleModal.readStatus = 'unreadable';
+      if(statusEl) statusEl.innerHTML = `<span style="color:#e74c3c;">⚠️ Couldn't auto-read this slip (${detail}).</span>`;
+      boxShow();
       return;
     }
     if(data.netWeightKg==null){
-      if(statusEl) statusEl.innerHTML = `<span style="color:#e67e22;">⚠️ Couldn't find a clear weight on this slip — please enter KG manually.${data.notes?' ('+data.notes+')':''}</span>`;
+      state.saleModal.readStatus = 'unreadable';
+      if(statusEl) statusEl.innerHTML = `<span style="color:#e74c3c;">⚠️ Couldn't find a clear weight on this slip.${data.notes?' ('+data.notes+')':''}</span>`;
+      boxShow();
       return;
     }
-    if(!state.saleModal) return; // modal was closed while the request was in flight
+    // Only a HIGH-confidence read is trusted enough to auto-fill and lock — medium/low
+    // confidence gets the same treatment as an outright failure, since a shaky number
+    // silently accepted defeats the whole point of requiring the photo in the first place.
+    if(data.confidence!=='high'){
+      state.saleModal.readStatus = 'unreadable';
+      state.saleModal.slipReadKg = data.netWeightKg; // kept for reference/audit even though not trusted
+      if(statusEl) statusEl.innerHTML = `<span style="color:#e67e22;">⚠️ Read ${data.netWeightKg} KG but only with ${data.confidence||'low'} confidence — not trusted enough to auto-fill.</span>`;
+      boxShow();
+      return;
+    }
+    state.saleModal.readStatus = 'confirmed';
     state.saleModal.slipReadKg = data.netWeightKg;
-    const kgInput = document.getElementById('saleKg');
-    if(kgInput) kgInput.value = data.netWeightKg;
-    const confColor = data.confidence==='high' ? '#27ae60' : data.confidence==='medium' ? '#e67e22' : '#e74c3c';
-    if(statusEl) statusEl.innerHTML = `<span style="color:${confColor};font-weight:700;">✅ Read ${data.netWeightKg} KG from slip (${data.confidence} confidence) — please double-check before saving.</span>`;
+    if(kgInput){ kgInput.value = data.netWeightKg; kgInput.readOnly = true; kgInput.style.background=''; kgInput.style.color=''; }
+    if(statusEl) statusEl.innerHTML = `<span style="color:#27ae60;font-weight:700;">✅ Read ${data.netWeightKg} KG from slip (high confidence).</span>`;
+    const box = document.getElementById('saleAdminOverrideBox');
+    if(box) box.style.display = 'none';
   }catch(e){
     console.error('Slip read failed:', e);
-    if(statusEl) statusEl.innerHTML = `<span style="color:#e67e22;">⚠️ Couldn't reach the reading service — please enter KG manually.</span>`;
+    if(!state.saleModal) return;
+    state.saleModal.readStatus = 'unreadable';
+    if(statusEl) statusEl.innerHTML = `<span style="color:#e74c3c;">⚠️ Couldn't reach the reading service.</span>`;
+    boxShow();
   }
 }
 
 async function uploadSlipToStorage(file){
-  if(!fbStorage) return null;
+  if(!fbStorage){
+    if(state.saleModal) state.saleModal.slipUploadFailed = true;
+    return null;
+  }
   try{
     const path = `weight-slips/${Date.now()}_${Math.random().toString(36).slice(2,8)}.jpg`;
     const ref = fbStorage.ref(path);
     await ref.put(file);
     const url = await ref.getDownloadURL();
-    if(state.saleModal) state.saleModal.slipUrl = url;
+    if(state.saleModal){ state.saleModal.slipUrl = url; state.saleModal.slipUploadFailed = false; }
     return url;
   }catch(e){
-    console.error('Slip upload failed (sale can still be recorded without it):', e);
+    console.error('Slip upload failed:', e);
+    if(state.saleModal) state.saleModal.slipUploadFailed = true;
     return null;
   }
 }
@@ -3708,17 +3765,38 @@ async function confirmSale(){
   const available = modal.stock.available[wasteType]||0;
   if(!wasteType){err.textContent="⚠️ Select a wastage type";err.classList.remove('hidden');return;}
   if(!buyer){err.textContent="⚠️ Enter buyer name";err.classList.remove('hidden');return;}
+  if(!modal.slipFile){err.textContent="⚠️ A weight slip photo is required — the KG can only come from a photo.";err.classList.remove('hidden');return;}
+  // The only two ways KG is allowed to have a value: a confirmed high-confidence photo read,
+  // or an explicit Admin/Owner override after the photo was proven unreadable. Anything else —
+  // including a non-admin trying to type past a locked field — is refused here regardless of
+  // what the UI already prevented, since this is the real backstop, not the display logic.
+  if(modal.readStatus!=='confirmed' && !(modal.manualOverrideUsed && isAdminOrOwner())){
+    err.textContent = "⚠️ This slip hasn't been confidently read yet. Wait for the read to finish, retake the photo, or ask an Admin/Owner to complete this sale.";
+    err.classList.remove('hidden'); return;
+  }
   if(!kg||kg<=0){err.textContent="⚠️ Enter KG to sell";err.classList.remove('hidden');return;}
   if(kg>available+0.001){err.textContent=`⚠️ Max available for ${wasteType} is ${available.toFixed(1)} KG`;err.classList.remove('hidden');return;}
   if(!price||price<=0){err.textContent="⚠️ Enter price per KG";err.classList.remove('hidden');return;}
   if(!date){err.textContent="⚠️ Enter sale date";err.classList.remove('hidden');return;}
 
-  // If a slip photo is still uploading, wait for it (briefly) so the URL makes it onto this
-  // sale record — but don't let a slow/failed upload block recording the sale itself.
+  // Every slip photo must genuinely be saved — wait properly for the upload rather than
+  // racing a short timeout and silently proceeding without it. If it's still in flight, wait;
+  // if it already failed, retry once before giving up and blocking the sale.
+  const statusEl = document.getElementById('saleSlipStatus');
   if(modal.slipUploadPromise){
-    const statusEl = document.getElementById('saleSlipStatus');
-    if(statusEl) statusEl.innerHTML = `<span style="color:#3498db;">⏳ Finishing photo upload...</span>`;
-    await Promise.race([modal.slipUploadPromise, new Promise(r=>setTimeout(r, 8000))]);
+    if(statusEl) statusEl.innerHTML = `<span style="color:#3498db;">⏳ Saving photo — please wait...</span>`;
+    await modal.slipUploadPromise;
+  }
+  if(modal.slipUploadFailed || !modal.slipUrl){
+    if(statusEl) statusEl.innerHTML = `<span style="color:#3498db;">⏳ Retrying photo save...</span>`;
+    modal.slipUploadPromise = uploadSlipToStorage(modal.slipFile);
+    await modal.slipUploadPromise;
+  }
+  if(modal.slipUploadFailed || !modal.slipUrl){
+    err.textContent = "⚠️ The slip photo could not be saved (connection problem). Please try again once you have a connection — the sale can't be recorded without it.";
+    err.classList.remove('hidden');
+    isSubmittingSale = false;
+    return;
   }
 
   const totalAmount=kg*price;
@@ -3730,7 +3808,9 @@ async function confirmSale(){
     amountReceived:totalAmount, pendingAmount:0,
     payment:'Paid', date, time: new Date().toTimeString().slice(0,5), datetime:new Date().toISOString(),
     voided:false,
-    weighSlipUrl: modal.slipUrl || null, weighSlipReadKg: modal.slipReadKg ?? null
+    weighSlipUrl: modal.slipUrl, weighSlipReadKg: modal.slipReadKg ?? null,
+    manualOverride: !!modal.manualOverrideUsed,
+    manualOverrideBy: modal.manualOverrideUsed ? (currentUser?.name||'Admin') : null,
   }];
   document.getElementById('saleModal').classList.add('hidden');
   state.saleModal=null;
@@ -4796,6 +4876,237 @@ function restoreMaterialsStockFromLedger(){
   re();
 }
 
+// ==================== SYSTEM WATCH ====================
+// Watches ALL data — every tab, popup, and corner — regardless of which screens anyone opens,
+// because it reads the underlying records directly rather than what's displayed. Runs on the
+// same 2-hour cycle as Auto-Fix. Three jobs:
+//   1. Snapshot every stock number, compare with the previous snapshot, and flag any number
+//      that changed with NO recorded transaction explaining it (the WB003-wipe class).
+//   2. Review every fresh entry made since the last snapshot against this data's own history
+//      (impossible quantities, rapid near-duplicates — the triple-save class).
+//   3. Turn each problem into a PERMANENT finding with a generated proof image, stored in the
+//      shared database — so it waits for the owner even if nobody opens the module for a week.
+// STRICTLY OBSERVATION ONLY: creates findings, never touches, voids, or flags any entry.
+
+function captureDataSnapshot(){
+  const q = {};
+  Object.entries(state.materials||{}).forEach(([size,m])=>{
+    (m.batches||[]).forEach(b=>{ q[`plank|${size}|${b.batchNo}`] = b.qty||0; });
+  });
+  (state.finishedInventory||[]).forEach(f=>{ q[`wood|${f.batchNo}|${f.productName}`] = (q[`wood|${f.batchNo}|${f.productName}`]||0)+(f.qty||0); });
+  (state.finishedBrushes||[]).forEach(f=>{ q[`brush|${f.batchNo}|${f.productName}`] = (q[`brush|${f.batchNo}|${f.productName}`]||0)+(f.qty||0); });
+  (state.readyForSale||[]).forEach(f=>{ q[`rfs|${f.batchNo}|${f.productName}`] = (q[`rfs|${f.batchNo}|${f.productName}`]||0)+(f.qty||0); });
+  (state.socketInventory||[]).forEach(s=>{ q[`socket|${s.batchNo}|${s.socketType}`] = (q[`socket|${s.batchNo}|${s.socketType}`]||0)+(s.qty||0); });
+  (state.screwInventory||[]).forEach(s=>{ q[`screw|${s.batchNo}`] = (q[`screw|${s.batchNo}`]||0)+(s.qty||0); });
+  return {
+    id: Date.now() + Math.random(),
+    ts: Date.now(),
+    quantities: q,
+    socketTypes: [...(state.socketTypes||[])],
+  };
+}
+
+function describeSnapshotKey(key){
+  const p = key.split('|');
+  if(p[0]==='plank')  return `${p[1]}" plank stock, batch ${p[2]}`;
+  if(p[0]==='wood')   return `Wood Finishing stock — ${p[2]}, batch ${p[1]}`;
+  if(p[0]==='brush')  return `Brush Dept stock — ${p[2]}, batch ${p[1]}`;
+  if(p[0]==='rfs')    return `Ready-for-Sale — ${p[2]}, batch ${p[1]}`;
+  if(p[0]==='socket') return `Socket stock — ${p[2]}, batch ${p[1]}`;
+  if(p[0]==='screw')  return `Screw stock, batch ${p[1]}`;
+  return key;
+}
+function tabForSnapshotKey(key){
+  const p = key.split('|');
+  if(p[0]==='plank') return 'Materials';
+  if(p[0]==='wood') return 'Wood Finishing';
+  if(p[0]==='brush') return 'Brush Dept';
+  if(p[0]==='rfs' || p[0]==='socket' || p[0]==='screw') return 'Socket Dept';
+  return 'Dashboard';
+}
+
+// Was there ANY recorded activity referencing this batch in the window? Record ids embed
+// their creation time (Date.now()-based), so the window test is id-based — this works even
+// though many records store only a date, not a time.
+function anyRecordedActivity(key, sinceId, untilId){
+  const p = key.split('|');
+  const batchNo = p[0]==='plank' ? p[2] : p[1];
+  const inWin = r => r && typeof r.id==='number' && r.id>=sinceId && r.id<=untilId;
+  const touches = r => String(r.batchNo||'')===batchNo
+    || String(r.batchNo||'').startsWith(batchNo+'-')
+    || String(r.sourceBatch||'')===batchNo || String(r.fbBatchNo||'')===batchNo || String(r.outputBatchNo||'')===batchNo
+    || String(r.socketBatchNo||'')===batchNo || String(r.screwBatchNo||'')===batchNo;
+  const collections = [state.ledger, state.production, state.brushProcessingLog, state.socketProcessingLog, state.wastage, state.sales, state.voidLog];
+  if(collections.some(col => (col||[]).some(r => inWin(r) && touches(r)))) return true;
+  // Voids don't create new records — they stamp existing ones. A void in the window counts as activity.
+  const voidInWin = r => r && r.voided && r.voidedDate && (new Date(r.voidedDate+'T'+(r.voidedTime||'00:00')+':00').getTime()>=sinceId-60000);
+  return [state.production, state.brushProcessingLog, state.socketProcessingLog, state.wastage, state.sales]
+    .some(col => (col||[]).some(r => voidInWin(r) && touches(r)));
+}
+
+// Proof image: the app draws its own evidence card as a PNG — exact numbers, timestamps, and
+// explanation, rendered visually. (A page cannot silently photograph the screen — browsers
+// require a permission popup for that — but it CAN render its own content to an image, which
+// is also more precise: the numbers come straight from the data, not from reading pixels.)
+function generateFindingProofImage(finding){
+  function wrapText(x, text, left, top, maxW, lineH){
+    const words = String(text||'').split(' ');
+    let line = '', y = top;
+    words.forEach(w=>{
+      const t = line ? line+' '+w : w;
+      if(x.measureText(t).width > maxW){ x.fillText(line, left, y); line = w; y += lineH; }
+      else line = t;
+    });
+    if(line) x.fillText(line, left, y);
+  }
+  try{
+    const c = document.createElement('canvas');
+    c.width = 640; c.height = 360;
+    const x = c.getContext('2d');
+    if(!x) return null;
+    x.fillStyle = '#fff8f0'; x.fillRect(0,0,640,360);
+    x.fillStyle = '#c0392b'; x.fillRect(0,0,640,54);
+    x.fillStyle = '#fff'; x.font = 'bold 20px Arial';
+    x.fillText('SYSTEM WATCH - PROOF OF FINDING', 18, 34);
+    x.fillStyle = '#333'; x.font = 'bold 17px Arial';
+    wrapText(x, finding.title, 18, 88, 604, 24);
+    x.font = '14px Arial'; x.fillStyle = '#555';
+    wrapText(x, finding.detail, 18, 160, 604, 20);
+    x.font = '12px Arial'; x.fillStyle = '#888';
+    x.fillText('Detected: ' + new Date(finding.ts).toLocaleString(), 18, 320);
+    x.fillText('Brush Manufacturing Tracker - automatic data watch', 18, 340);
+    return c.toDataURL('image/png');
+  }catch(e){ return null; }
+}
+
+function addSystemFinding(kind, refKey, title, detail, tab){
+  // Dedupe: an OPEN finding about the same thing is updated in place, not duplicated —
+  // otherwise a persisting problem would flood the inbox every 2 hours.
+  const dupe = (state.systemFindings||[]).find(f=>f.status==='open' && f.kind===kind && f.refKey===refKey);
+  if(dupe){ dupe.lastSeen = Date.now(); dupe.timesSeen = (dupe.timesSeen||1)+1; return dupe; }
+  const finding = {
+    id: Date.now() + Math.random(),
+    ts: Date.now(), lastSeen: Date.now(), timesSeen: 1,
+    kind, refKey, title, detail, tab: tab||'Dashboard',
+    status: 'open',
+  };
+  finding.proofImage = generateFindingProofImage(finding);
+  state.systemFindings = [finding, ...(state.systemFindings||[])].slice(0, 100); // bounded inbox
+  return finding;
+}
+
+function resolveSystemFinding(id){
+  const f = (state.systemFindings||[]).find(f=>f.id===id);
+  if(!f) return;
+  f.status = 'resolved';
+  f.resolvedBy = currentUser?.name || '?';
+  f.resolvedAt = Date.now();
+  saveAll();
+  re();
+}
+
+function runSystemWatch(){
+  const findings = [];
+  const snapshots = (state.dataSnapshots||[]).slice().sort((a,b)=>(b.ts||0)-(a.ts||0));
+  const prev = snapshots[0] || null;
+  const curr = captureDataSnapshot();
+
+  if(prev){
+    const sinceId = prev.ts, untilId = curr.ts + 1;
+
+    // 1a. Numbers that changed with no recorded activity — the silent-wipe class.
+    const allKeys = new Set([...Object.keys(prev.quantities||{}), ...Object.keys(curr.quantities||{})]);
+    allKeys.forEach(key=>{
+      const before = (prev.quantities||{})[key] ?? 0;
+      const after = (curr.quantities||{})[key] ?? 0;
+      if(before===after) return;
+      if(anyRecordedActivity(key, sinceId, untilId)) return; // explained — normal work happened
+      findings.push(addSystemFinding('unexplained-change', key,
+        `${describeSnapshotKey(key)} changed from ${before} to ${after} with NO recorded transaction explaining it`,
+        `At ${new Date(prev.ts).toLocaleString()} this showed ${before} pcs. At ${new Date(curr.ts).toLocaleString()} it shows ${after} pcs. No production run, purchase, sale, wastage, void, or any other record in that window touches this batch — so nothing in the books accounts for the change. This is the same pattern as the July stock-wipe incident and needs a person to look.`,
+        tabForSnapshotKey(key)));
+    });
+
+    // 1b. Socket type names that DISAPPEARED from the master list (additions are normal).
+    (prev.socketTypes||[]).forEach(name=>{
+      if(!(curr.socketTypes||[]).includes(name)){
+        findings.push(addSystemFinding('socket-type-removed', 'socketType|'+name,
+          `Socket type "${name}" disappeared from the master list`,
+          `"${name}" was in the Socket Types list at ${new Date(prev.ts).toLocaleString()} and is gone at ${new Date(curr.ts).toLocaleString()}. There is no delete button for socket types in the app, so a disappearance is never the result of normal use.`,
+          'BOM'));
+      }
+    });
+
+    // 2. Fresh entries since the last snapshot, judged against this data's own history.
+    const freshWin = r => r && typeof r.id==='number' && r.id>=sinceId && r.id<=untilId;
+
+    // 2a. Production quantities far beyond anything this product has ever done.
+    const histMax = {};
+    (state.production||[]).forEach(p=>{
+      if(!p || p.voided || freshWin(p)) return;
+      const k = p.woodPieceName;
+      histMax[k] = histMax[k] || {max:0, count:0};
+      histMax[k].max = Math.max(histMax[k].max, p.piecesProduced||0);
+      histMax[k].count++;
+    });
+    (state.production||[]).filter(p=>freshWin(p) && !p.voided).forEach(p=>{
+      const h = histMax[p.woodPieceName];
+      if(h && h.count>=3 && (p.piecesProduced||0) > h.max*3){
+        findings.push(addSystemFinding('quantity-outlier', 'prod|'+p.id,
+          `Production run of ${p.piecesProduced} pcs (${p.woodPieceName}) — far beyond anything recorded before`,
+          `The largest run ever recorded for ${p.woodPieceName} was ${h.max} pcs (across ${h.count} runs). This new entry on batch ${p.batchNo} is more than 3x that. Could be a genuine record day — or a typo that will distort stock. Worth a look while it is still inside the 24-hour void window.`,
+          'Wood Finishing'));
+      }
+    });
+
+    // 2b. Near-duplicate entries minutes apart — the accidental double-submit class.
+    const freshProd = (state.production||[]).filter(p=>freshWin(p) && !p.voided);
+    freshProd.forEach((p,i)=>{
+      const twin = freshProd.slice(i+1).find(q=>q.batchNo===p.batchNo && q.woodPieceName===p.woodPieceName
+        && q.piecesProduced===p.piecesProduced && Math.abs(q.id-p.id)<10*60*1000);
+      if(twin){
+        findings.push(addSystemFinding('near-duplicate', 'prod-dup|'+p.batchNo+'|'+p.woodPieceName+'|'+p.piecesProduced,
+          `Two identical production entries minutes apart: ${p.piecesProduced} pcs of ${p.woodPieceName} on batch ${p.batchNo}`,
+          `Both entries record exactly ${p.piecesProduced} pcs, same product, same batch, entered within 10 minutes of each other. This is the signature of an accidental double-submit. If only one run really happened, one entry should be voided while it is still inside the 24-hour window.`,
+          'Wood Finishing'));
+      }
+    });
+  }
+
+  // Store the new snapshot; keep 7 days of 2-hourly history (84), bounded.
+  state.dataSnapshots = [curr, ...snapshots].slice(0, 84);
+  return { findings, baseline: !prev };
+}
+
+function renderFindingsInboxHTML(){
+  const open = (state.systemFindings||[]).filter(f=>f.status==='open');
+  const resolved = (state.systemFindings||[]).filter(f=>f.status!=='open').slice(0,5);
+  if(open.length===0 && resolved.length===0){
+    return `<div style="font-size:12px;color:#888;">No findings — the watch has nothing waiting for you.</div>`;
+  }
+  let html = '';
+  open.forEach(f=>{
+    html += `<div style="background:#fdecea;border:1px solid #e74c3c;border-radius:8px;padding:10px;margin-bottom:8px;">
+      <div style="font-size:12px;font-weight:700;color:#c0392b;">${f.title}</div>
+      <div style="font-size:11px;color:#555;margin:4px 0;">${f.detail}</div>
+      <div style="font-size:10px;color:#888;">First seen: ${new Date(f.ts).toLocaleString()}${f.timesSeen>1?` · still present after ${f.timesSeen} checks`:''}</div>
+      <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;">
+        <button class="btn" style="background:#2980b9;color:#fff;font-size:11px;padding:4px 10px;" onclick="jumpToFindingTab('${f.tab}')">↗ Open ${f.tab}</button>
+        ${f.proofImage?`<a class="btn" style="background:#7f8c8d;color:#fff;font-size:11px;padding:4px 10px;text-decoration:none;" download="finding-${String(f.id).replace(/[^0-9]/g,'')}.png" href="${f.proofImage}">📷 Proof image</a>`:''}
+        <button class="btn" style="background:#27ae60;color:#fff;font-size:11px;padding:4px 10px;" onclick="resolveSystemFinding(${f.id})">✓ Mark handled</button>
+      </div>
+    </div>`;
+  });
+  if(resolved.length){
+    html += `<div style="font-size:10px;color:#aaa;margin-top:6px;">Recently handled: ${resolved.map(f=>`${f.title.slice(0,50)}… (by ${f.resolvedBy||'?'})`).join(' · ')}</div>`;
+  }
+  return html;
+}
+function jumpToFindingTab(tabName){
+  const el = document.querySelector(`.tab[onclick*="'${tabName}'"]`);
+  if(el){ switchTab(tabName, el); }
+}
+
 // ==================== ONE AUTOMATIC FIX CYCLE — replaces every separate fix button ====================
 // Runs on its own: once after login, then every 2 hours while the app stays open. Also
 // available as a single on-demand button for right after a data change or app update.
@@ -4854,6 +5165,11 @@ function runAutoFixCycle(){
     state.materials[d.size].batches = batches;
   });
 
+  // System Watch: snapshot comparison + fresh-entry review, AFTER fixes so it observes the
+  // corrected state, not a state this same cycle is about to repair. Observation only.
+  let watchResult = {findings:[], baseline:false};
+  try{ watchResult = runSystemWatch(); }catch(e){ console.error('System watch failed:', e); }
+
   // Re-check AFTER applying, not before — otherwise something this very cycle just fixed
   // would still show up in the "needs judgment" list, which would be misleading.
   const issues = runDataHealthCheck();
@@ -4865,6 +5181,7 @@ function runAutoFixCycle(){
     appliedCount: applied.length,
     applied,
     needsJudgment: [...stillNeedsJudgment, ...stillFlagged],
+    newFindings: watchResult.findings.length,
   };
   state.autoFixLog = [logEntry, ...(state.autoFixLog||[])].slice(0, 20); // keep a rolling history, not unbounded
 
@@ -5734,6 +6051,12 @@ function renderAdminPanel(){
       <div style="font-size:11px;color:#888;margin-bottom:12px;">Runs on its own — once when the app loads, then every 2 hours while it's open. Checks stock levels, batch names vs. original records, and account setup, and fixes what's safe to fix without asking. Anything that genuinely can't be inferred (no single correct answer to guess between) stays listed below instead of being touched.</div>
       <button class="btn" style="background:#16a085;width:100%;" onclick="document.getElementById('autoFixResults').innerHTML='<div style=\\'font-size:12px;color:#888;\\'>Checking now...</div>';setTimeout(()=>{runAutoFixCycle();renderAutoFixResults();},50);">🔄 Check Now</button>
       <div id="autoFixResults" style="margin-top:12px;">${renderAutoFixResultsHTML()}</div>
+    </div>
+
+    <div class="card" style="border:2px solid #c0392b;">
+      <div class="label" style="color:#c0392b;">📬 System Watch — Findings Inbox</div>
+      <div style="font-size:11px;color:#888;margin-bottom:10px;">The watch compares every stock number against its last snapshot and reviews every fresh entry, every 2 hours — across ALL tabs and data, whether anyone opens them or not. Anything suspicious waits here permanently (with a downloadable proof image) until someone marks it handled. The watch never touches, voids, or flags any entry itself.</div>
+      ${renderFindingsInboxHTML()}
     </div>
 
   `;
