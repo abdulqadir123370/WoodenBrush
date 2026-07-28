@@ -4902,6 +4902,89 @@ function computeLedgerPlankBalances(){
   return balances;
 }
 
+// ==================== DEAD-END SCRAP RESTORE (historical correction) ====================
+// The pre-fix cleanupDeadEndScrap bug (size<=minSize instead of size<minSize) converted usable
+// scrap into zero-weight wastage placeholders. This does NOT auto-restore — a person must
+// confirm the pieces are physically present on the floor before the system claims they exist
+// again. Detection is read-only; restoring one entry is a single Admin/Owner-confirmed action.
+// The original scrap batch LABEL isn't stored on the wastage placeholder, so it's reconstructed
+// from matching ledger evidence — only offered when evidence sums to EXACTLY the lost quantity
+// (no partial or ambiguous match is ever proposed).
+function collectDeadEndScrapMistakes(){
+  const mistakes = [];
+  (state.wastage||[]).forEach(w=>{
+    if(w.voided) return;
+    if(w.type!=='QualityControl' || !w.needsWeight) return;
+    const m = String(w.plankSizeName||'').match(/^([\d.]+)" pieces \(auto-moved from dead-end scrap\)$/);
+    if(!m) return;
+    const size = parseFloat(m[1]);
+    const rootBatchNo = w.batchNo;
+    const qty = w.rejectedPieces||0;
+    const candidates = {}; // reconstructed scrap key -> {qty, entries}
+    (state.ledger||[]).forEach(e=>{
+      if(e.type!=='scrap' || e.direction!=='IN') return;
+      if(Math.abs(parseFloat(e.size)-size)>0.001) return;
+      const eb = String(e.batchNo||'');
+      let key = null;
+      if(eb===rootBatchNo && /\(Kharab Maal\)$/.test(e.material||'')){
+        // Pre-fix Brush Dept scrap entries were ledgered under the bare batch number — the
+        // product name in the material field reconstructs the real scrap batch key.
+        key = `${rootBatchNo}-BrushScrap-${String(e.material).replace(/\s*\(Kharab Maal\)$/,'').trim()}`;
+      } else if(eb.startsWith(rootBatchNo+'-')){
+        key = eb; // production-reject/remainder entries already ledger the full correct key
+      }
+      if(!key) return;
+      candidates[key] = candidates[key] || {qty:0, entries:[]};
+      candidates[key].qty += e.qty;
+      candidates[key].entries.push(e);
+    });
+    const exact = Object.entries(candidates).filter(([k,v])=>Math.abs(v.qty-qty)<0.01);
+    mistakes.push({
+      wastageId: w.id, rootBatchNo, size, qty, date: w.date,
+      resolvedKey: exact.length===1 ? exact[0][0] : null,
+      evidenceCount: exact.length===1 ? exact[0][1].entries.length : 0,
+    });
+  });
+  return mistakes;
+}
+
+function restoreDeadEndScrapMistake(wastageId){
+  if(!isAdminOrOwner()) return;
+  const m = collectDeadEndScrapMistakes().find(x=>x.wastageId===wastageId);
+  if(!m || !m.resolvedKey) return;
+  const ok = confirm(`Restore ${m.qty} pcs of ${m.size}" scrap to "${m.resolvedKey}"?\n\nOnly do this if someone has PHYSICALLY CONFIRMED these pieces are on the factory floor.\n\nThis will:\n• Add ${m.qty} pcs back into Scrap Inventory\n• Record the correction in the Ledger\n• Void the placeholder wastage entry (batch ${m.rootBatchNo}, ${m.date}) with an explanatory reason — never deleted, same as every other void in this system`);
+  if(!ok) return;
+  const idx = (state.scrapInventory||[]).findIndex(s=>s.size===m.size && s.batch===m.resolvedKey);
+  if(idx>=0) state.scrapInventory[idx].quantity += m.qty;
+  else state.scrapInventory = [...(state.scrapInventory||[]), {size:m.size, quantity:m.qty, batch:m.resolvedKey, dateCreated:m.date}];
+  addLedgerEntry('scrap', `${m.size}" pieces (restored)`, m.resolvedKey, m.qty, 'IN',
+    `Correction: physically confirmed present on the floor — wrongly moved to wastage by a cleanup bug on ${m.date}`, String(m.size));
+  const now = new Date();
+  state.wastage = (state.wastage||[]).map(w=>w.id!==wastageId ? w : {
+    ...w, voided:true, voidedBy:currentUser?.name||'Admin',
+    voidedDate: now.toISOString().slice(0,10), voidedTime: now.toTimeString().slice(0,5),
+    voidedReason: `Restored to Scrap Inventory as "${m.resolvedKey}" — confirmed physically present, was never real wastage`,
+  });
+  saveAll();
+  re();
+}
+
+function renderScrapRestorationCardHTML(){
+  const mistakes = collectDeadEndScrapMistakes();
+  if(mistakes.length===0) return '';
+  return `<div class="card" style="border:2px solid #d35400;background:#fff8f0;">
+    <div class="label" style="color:#d35400;">♻️ Scrap Restoration Needed</div>
+    <div style="font-size:11px;color:#888;margin-bottom:10px;">A past cleanup bug wrongly moved usable scrap into wastage. This is fixed going forward, but these specific pieces need a person to confirm they're physically on the floor before the system claims them back — never restored automatically.</div>
+    ${mistakes.map(m=>`<div style="background:#fff;border-radius:8px;padding:10px;margin-bottom:8px;">
+      <div style="font-size:12px;font-weight:700;">${m.qty} pcs of ${m.size}" scrap — batch ${m.rootBatchNo} (lost ${m.date})</div>
+      ${m.resolvedKey?`
+        <div style="font-size:11px;color:#666;margin:4px 0;">Reconstructed origin: <b>${m.resolvedKey}</b> — confirmed by ${m.evidenceCount} matching Ledger record${m.evidenceCount>1?'s':''} summing to exactly ${m.qty} pcs</div>
+        <button class="btn" style="background:#d35400;color:#fff;font-size:12px;" onclick="if(confirm('Have you PHYSICALLY confirmed these ${m.qty} pcs are on the factory floor? Only proceed if yes.'))restoreDeadEndScrapMistake(${m.wastageId})">✓ Confirmed on floor — restore</button>
+      `:`<div style="font-size:11px;color:#e74c3c;margin:4px 0;">No single matching Ledger record found to confirm the original scrap batch — needs manual entry instead of automatic restore.</div>`}
+    </div>`).join('')}
+  </div>`;
+}
+
 function collectMaterialsStockDiscrepancies(){
   const ledgerBalances = computeLedgerPlankBalances();
   const discrepancies = [];
@@ -6389,6 +6472,8 @@ function renderAdminPanel(){
       <button class="btn" style="background:#16a085;width:100%;" onclick="document.getElementById('autoFixResults').innerHTML='<div style=\\'font-size:12px;color:#888;\\'>Checking now...</div>';setTimeout(()=>{runAutoFixCycle();renderAutoFixResults();},50);">🔄 Check Now</button>
       <div id="autoFixResults" style="margin-top:12px;">${renderAutoFixResultsHTML()}</div>
     </div>
+
+    ${renderScrapRestorationCardHTML()}
 
     <div class="card" style="border:2px solid #c0392b;">
       <div class="label" style="color:#c0392b;">📬 System Watch — Findings Inbox</div>
