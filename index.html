@@ -5093,8 +5093,16 @@ async function uploadFindingScreenshot(dataUrl, findingId){
   }
 }
 
-async function attachUIScreenshot(finding){
-  const shot = await captureTabScreenshot(finding.tab);
+async function attachUIScreenshot(finding, retryDelayMs){
+  // The capture library loads from a CDN and can arrive a few seconds AFTER the page — a
+  // finding created in that window would miss its screen image if we only tried once (which
+  // happened on live). Retry briefly before giving up.
+  let shot = null;
+  for(let attempt=0; attempt<4; attempt++){
+    shot = await captureTabScreenshot(finding.tab);
+    if(shot) break;
+    await new Promise(r=>setTimeout(r, retryDelayMs||2500));
+  }
   if(!shot) return;
   const url = await uploadFindingScreenshot(shot, finding.id);
   const f = (state.systemFindings||[]).find(x=>x.id===finding.id);
