@@ -226,6 +226,7 @@ input,select{width:100%;padding:8px 10px;border:1px solid #d4b896;border-radius:
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-check-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-storage-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 
 <script>
 const SK = {
@@ -4923,12 +4924,17 @@ function describeSnapshotKey(key){
   return key;
 }
 function tabForSnapshotKey(key){
+  // Returns the INTERNAL tab key (what switchTab/renderTab use) — display labels differ for
+  // some tabs ('Production' is displayed as "Wood Finishing"); see tabDisplayLabel.
   const p = key.split('|');
   if(p[0]==='plank') return 'Materials';
-  if(p[0]==='wood') return 'Wood Finishing';
-  if(p[0]==='brush') return 'Brush Dept';
-  if(p[0]==='rfs' || p[0]==='socket' || p[0]==='screw') return 'Socket Dept';
+  if(p[0]==='wood') return 'Production';
+  if(p[0]==='brush') return 'BrushDept';
+  if(p[0]==='rfs' || p[0]==='socket' || p[0]==='screw') return 'SocketDept';
   return 'Dashboard';
+}
+function tabDisplayLabel(tabKey){
+  return ({Production:'Wood Finishing', BrushDept:'Brush Dept', SocketDept:'Socket Dept'})[tabKey] || tabKey;
 }
 
 // Was there ANY recorded activity referencing this batch in the window? Record ids embed
@@ -4985,6 +4991,74 @@ function generateFindingProofImage(finding){
   }catch(e){ return null; }
 }
 
+// ==================== REAL UI SCREENSHOTS FOR FINDINGS ====================
+// Renders the ACTUAL app screen — the same HTML, styles, and live data a person would see on
+// that tab — into an image, using html2canvas. This is a true picture of the interface, not a
+// drawn summary card. (A browser page cannot silently photograph the monitor — that always
+// requires a permission popup — but it CAN render its own interface to an image, which shows
+// exactly the same thing.) The capture happens off-screen so whatever tab the person is
+// currently using is never disturbed; the copy is appended at the END of the page so any
+// duplicate element ids still resolve to the real page first. Skips gracefully when offline
+// (html2canvas unavailable) — the summary card still attaches regardless.
+function getTabRenderer(tabKey){
+  const map = {
+    Dashboard: (typeof renderDashboard==='function')&&renderDashboard,
+    Production: (typeof renderProduction==='function')&&renderProduction,
+    BrushDept: (typeof renderBrushDept==='function')&&renderBrushDept,
+    SocketDept: (typeof renderSocketDept==='function')&&renderSocketDept,
+    Inventory: (typeof renderInventory==='function')&&renderInventory,
+    Wastage: (typeof renderWastage==='function')&&renderWastage,
+    Materials: (typeof renderMaterials==='function')&&renderMaterials,
+    BOM: (typeof renderBOM==='function')&&renderBOM,
+    Ledger: (typeof renderLedger==='function')&&renderLedger,
+    Sales: (typeof renderSales==='function')&&renderSales,
+    Admin: (typeof renderAdminPanel==='function')&&renderAdminPanel,
+  };
+  return map[tabKey] || null;
+}
+
+async function captureTabScreenshot(tabKey){
+  let holder = null;
+  try{
+    if(typeof html2canvas === 'undefined') return null; // offline / CDN unavailable — skip gracefully
+    const fn = getTabRenderer(tabKey);
+    if(!fn) return null;
+    holder = document.createElement('div');
+    holder.style.cssText = 'position:absolute;left:-10000px;top:0;width:1000px;background:#f5efe6;padding:12px;';
+    holder.innerHTML = `<div style="font:700 14px Arial;padding:6px 10px;background:#5c3d1e;color:#fff;border-radius:6px;margin-bottom:8px;">📷 ${tabDisplayLabel(tabKey)} — live data at ${new Date().toLocaleString()}</div>` + fn();
+    document.body.appendChild(holder);
+    const canvas = await html2canvas(holder, {scale:0.8, backgroundColor:'#f5efe6', logging:false, height:Math.min(holder.scrollHeight+30, 1800), windowWidth:1024});
+    return canvas.toDataURL('image/jpeg', 0.7);
+  }catch(e){
+    console.error('Tab screenshot failed:', e);
+    return null;
+  }finally{
+    if(holder && holder.remove) holder.remove();
+  }
+}
+
+async function uploadFindingScreenshot(dataUrl, findingId){
+  if(!fbStorage || !dataUrl) return null;
+  try{
+    const path = `findings/${String(findingId).replace(/[^0-9]/g,'')}.jpg`;
+    const ref = fbStorage.ref(path);
+    await ref.putString(dataUrl, 'data_url');
+    return await ref.getDownloadURL();
+  }catch(e){ console.error('Finding screenshot upload failed (summary card still attached):', e); return null; }
+}
+
+async function attachUIScreenshot(finding){
+  const shot = await captureTabScreenshot(finding.tab);
+  if(!shot) return;
+  const url = await uploadFindingScreenshot(shot, finding.id);
+  const f = (state.systemFindings||[]).find(x=>x.id===finding.id);
+  if(!f) return;
+  if(url) f.uiProofUrl = url;
+  else if(shot.length < 400000) f.uiProofUrl = shot; // inline fallback only when small enough for the record
+  saveAll();
+  if(typeof renderAutoFixResults==='function') renderAutoFixResults();
+}
+
 function addSystemFinding(kind, refKey, title, detail, tab){
   // Dedupe: an OPEN finding about the same thing is updated in place, not duplicated —
   // otherwise a persisting problem would flood the inbox every 2 hours.
@@ -4998,6 +5072,7 @@ function addSystemFinding(kind, refKey, title, detail, tab){
   };
   finding.proofImage = generateFindingProofImage(finding);
   state.systemFindings = [finding, ...(state.systemFindings||[])].slice(0, 100); // bounded inbox
+  try{ attachUIScreenshot(finding); }catch(e){} // real-UI screenshot attaches asynchronously when it's ready
   return finding;
 }
 
@@ -5011,7 +5086,12 @@ function resolveSystemFinding(id){
   re();
 }
 
-function runSystemWatch(){
+function runSystemWatch(explainedBatches){
+  // explainedBatches: batch numbers whose stock THIS cycle's own fixes just changed (renames,
+  // ledger-restores). Those changes are corrections, not suspicious activity — without this,
+  // the watch flags the auto-fix's own work as an unexplained change (a real false alarm that
+  // fired on live data the day the catalog cleanup first ran).
+  const explained = explainedBatches instanceof Set ? explainedBatches : new Set(explainedBatches||[]);
   const findings = [];
   const snapshots = (state.dataSnapshots||[]).slice().sort((a,b)=>(b.ts||0)-(a.ts||0));
   const prev = snapshots[0] || null;
@@ -5026,6 +5106,9 @@ function runSystemWatch(){
       const before = (prev.quantities||{})[key] ?? 0;
       const after = (curr.quantities||{})[key] ?? 0;
       if(before===after) return;
+      const kp = key.split('|');
+      const keyBatch = kp[0]==='plank' ? kp[2] : kp[1];
+      if(explained.has(keyBatch)) return; // changed by this cycle's own corrections — not suspicious
       if(anyRecordedActivity(key, sinceId, untilId)) return; // explained — normal work happened
       findings.push(addSystemFinding('unexplained-change', key,
         `${describeSnapshotKey(key)} changed from ${before} to ${after} with NO recorded transaction explaining it`,
@@ -5097,8 +5180,9 @@ function renderFindingsInboxHTML(){
       <div style="font-size:11px;color:#555;margin:4px 0;">${f.detail}</div>
       <div style="font-size:10px;color:#888;">First seen: ${new Date(f.ts).toLocaleString()}${f.timesSeen>1?` · still present after ${f.timesSeen} checks`:''}</div>
       <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;">
-        <button class="btn" style="background:#2980b9;color:#fff;font-size:11px;padding:4px 10px;" onclick="jumpToFindingTab('${f.tab}')">↗ Open ${f.tab}</button>
-        ${f.proofImage?`<a class="btn" style="background:#7f8c8d;color:#fff;font-size:11px;padding:4px 10px;text-decoration:none;" download="finding-${String(f.id).replace(/[^0-9]/g,'')}.png" href="${f.proofImage}">📷 Proof image</a>`:''}
+        <button class="btn" style="background:#2980b9;color:#fff;font-size:11px;padding:4px 10px;" onclick="jumpToFindingTab('${f.tab}')">↗ Open ${tabDisplayLabel(f.tab)}</button>
+        ${f.uiProofUrl?`<a class="btn" style="background:#c0392b;color:#fff;font-size:11px;padding:4px 10px;text-decoration:none;" target="_blank" rel="noopener" ${String(f.uiProofUrl).startsWith('data:')?`download="finding-screen-${String(f.id).replace(/[^0-9]/g,'')}.jpg"`:''} href="${f.uiProofUrl}">📸 Screen image (live UI)</a>`:''}
+        ${f.proofImage?`<a class="btn" style="background:#7f8c8d;color:#fff;font-size:11px;padding:4px 10px;text-decoration:none;" download="finding-${String(f.id).replace(/[^0-9]/g,'')}.png" href="${f.proofImage}">📷 Summary card</a>`:''}
         <button class="btn" style="background:#27ae60;color:#fff;font-size:11px;padding:4px 10px;" onclick="resolveSystemFinding(${f.id})">✓ Mark handled</button>
       </div>
     </div>`;
@@ -5155,12 +5239,13 @@ function runAutoFixCycle(){
   }
 
   const applied = [];
+  const fixedBatchNos = []; // every batch whose stock this cycle's own fixes changed
 
   // FIRST: proven catalog remnants (see collectCatalogRemnants) — this runs before the
   // batch-name planner so the planner's catalog safety guard sees the CLEANED catalog and can
   // then resolve the same product's remaining strays by name automatically.
   collectCatalogRemnants().forEach(r=>{
-    r.batches.forEach(b=>reassignBatchLineage(b, r.name, r.target));
+    r.batches.forEach(b=>{ reassignBatchLineage(b, r.name, r.target); fixedBatchNos.push(b); });
     state.woodPieces = (state.woodPieces||[]).filter(w=>w.name!==r.name);
     applied.push(`Catalog cleanup: "${r.name}" was proven to be a rename remnant of "${r.target}" (never once produced under that name, and sitting as a wrong label on batch${r.batches.length>1?'es':''} ${r.batches.join(', ')}) — records corrected and the stale catalog entry removed`);
   });
@@ -5173,6 +5258,7 @@ function runAutoFixCycle(){
 
   namePlan.fixes.forEach(f=>{
     reassignBatchLineage(f.batchNo, f.from, f.to);
+    fixedBatchNos.push(f.batchNo);
     applied.push(`Batch ${f.batchNo}: renamed "${f.from}" back to "${f.to}"`);
   });
   structural.forEach(f=>{ f.apply(); applied.push(f.desc); });
@@ -5193,12 +5279,24 @@ function runAutoFixCycle(){
       applied.push(`${d.size}" batch ${d.batchNo}: stock corrected from ${d.currentQty} to ${d.ledgerQty} pcs to match the Ledger`);
     }
     state.materials[d.size].batches = batches;
+    fixedBatchNos.push(d.batchNo);
   });
 
   // System Watch: snapshot comparison + fresh-entry review, AFTER fixes so it observes the
-  // corrected state, not a state this same cycle is about to repair. Observation only.
+  // corrected state, not a state this same cycle is about to repair. Observation only. The
+  // batches this cycle itself just corrected (and their whole lineage — a wood-batch rename
+  // moves numbers on its brush/sale sub-batches too) are passed in as explained.
+  const correctedBatches = new Set();
+  fixedBatchNos.forEach(b=>{
+    if(!b) return;
+    correctedBatches.add(b);
+    try{
+      const lin = getBatchLineage(b);
+      [...(lin.brushLevelBatches||[]), ...(lin.fbBatchNos||[])].forEach(x=>correctedBatches.add(x));
+    }catch(e){}
+  });
   let watchResult = {findings:[], baseline:false};
-  try{ watchResult = runSystemWatch(); }catch(e){ console.error('System watch failed:', e); }
+  try{ watchResult = runSystemWatch(correctedBatches); }catch(e){ console.error('System watch failed:', e); }
 
   // Re-check AFTER applying, not before — otherwise something this very cycle just fixed
   // would still show up in the "needs judgment" list, which would be misleading.
