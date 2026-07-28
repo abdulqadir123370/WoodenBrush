@@ -5117,6 +5117,20 @@ function jumpToFindingTab(tabName){
 // genuinely can't be inferred (ambiguous batch names with no single correct pairing) is never
 // touched here — there's no way to "auto-solve" a case with no determinable answer without
 // guessing, so those stay visible-only until a person supplies the missing information.
+// A human, looking at the actual context, resolving an ambiguity the automatic system
+// correctly refused to guess at. Uses the exact same engine (reassignBatchLineage) as every
+// automatic fix — the only difference is WHO decided the pairing is correct. Re-runs the
+// cycle immediately afterward so the resolved item disappears from the list right away
+// instead of waiting up to 2 hours.
+function resolveAmbiguousBatchName(batchNo, stray, target){
+  if(!isAdminOrOwner()) return;
+  const ok = confirm(`Mark "${stray}" on batch ${batchNo} as actually being "${target}"?\n\nThis renames it everywhere in that batch's lineage — Wood Finishing, Brush Dept, Ready-for-Sale, ledger — the same correction Auto-Fix uses for unambiguous cases, just confirmed by you instead of inferred automatically.`);
+  if(!ok) return;
+  reassignBatchLineage(batchNo, stray, target);
+  runAutoFixCycle();
+  renderAutoFixResults();
+}
+
 function runAutoFixCycle(){
   // HARD GATE: never act on data that hasn't been confirmed loaded from the live cloud.
   // On the offline/timeout fallback (or a file:// copy where Firestore is unreachable), the
@@ -5173,8 +5187,17 @@ function runAutoFixCycle(){
   // Re-check AFTER applying, not before — otherwise something this very cycle just fixed
   // would still show up in the "needs judgment" list, which would be misleading.
   const issues = runDataHealthCheck();
-  const stillNeedsJudgment = namePlan.manual.map(m=>`Batch ${m.batchNo}: ${m.reason}`);
-  const stillFlagged = issues.map(i=>`${i.category}: ${i.message}`);
+  // Batches already covered by a resolvable namePlan.manual entry get suppressed from the
+  // plain health-check list — the same underlying batch problem was showing up twice (once
+  // actionable, once as a duplicate description), which reads as more unresolved issues than
+  // actually exist. The actionable version wins.
+  const manualBatchNos = new Set(namePlan.manual.map(m=>m.batchNo));
+  const stillNeedsJudgment = namePlan.manual.map(m=>({
+    text: `Batch ${m.batchNo}: ${m.reason}`, batchNo: m.batchNo, strays: m.strays||[], candidates: m.candidates||[],
+  }));
+  const stillFlagged = issues
+    .filter(i => !(i.category==='Traceability' && i.batchNo && manualBatchNos.has(i.batchNo)))
+    .map(i => ({ text: `${i.category}: ${i.message}`, batchNo: i.batchNo||null, strays: [], candidates: [] }));
 
   const logEntry = {
     timestamp: new Date().toISOString(),
@@ -5232,9 +5255,21 @@ function renderAutoFixResultsHTML(){
     </div>`;
   }
   if(last.needsJudgment.length>0){
+    const isAdmin = isAdminOrOwner();
     html += `<div style="background:#fff8ec;border-radius:8px;padding:10px;">
       <div style="font-size:12px;font-weight:700;color:#e67e22;margin-bottom:6px;">⚠️ Needs a person to look (${last.needsJudgment.length}) — can't be safely guessed:</div>
-      ${last.needsJudgment.map(m=>`<div style="font-size:11px;margin-bottom:3px;">• ${m}</div>`).join('')}
+      ${last.needsJudgment.map(m=>{
+        const item = typeof m==='string' ? {text:m, strays:[], candidates:[]} : m; // tolerate older log entries saved before this structure existed
+        const resolvable = isAdmin && item.strays.length>0 && item.candidates.length>0;
+        const picker = resolvable ? item.strays.map(stray=>`
+          <div style="margin-top:4px;padding:6px;background:#fff;border-radius:6px;">
+            <div style="font-size:10px;color:#888;">"${stray}" is really —</div>
+            <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:3px;">
+              ${item.candidates.map(cand=>`<button class="btn" style="background:#8e44ad;color:#fff;font-size:10px;padding:3px 8px;" onclick="resolveAmbiguousBatchName('${item.batchNo}','${stray.replace(/'/g,"\\'")}','${cand.replace(/'/g,"\\'")}')">→ "${cand}"</button>`).join('')}
+            </div>
+          </div>`).join('') : '';
+        return `<div style="font-size:11px;margin-bottom:3px;">• ${item.text}${picker}</div>`;
+      }).join('')}
     </div>`;
   }
   return html;
@@ -5645,7 +5680,8 @@ function planBatchNameFixes(){
       if(strays.length===1){
         fixes.push({batchNo:r.batchNo, from:strays[0], to:correctName, noteCount:r.evidence[correctName]||0});
       } else if(strays.length>1){
-        manual.push({batchNo:r.batchNo, reason:`Multiple different names (${strays.map(n=>`"${n}"`).join(', ')}) have no production-time record, while only "${correctName}" does — could be several mislabels of the same product, or one mislabel plus one genuinely different product. Won't guess which.`});
+        manual.push({batchNo:r.batchNo, strays, candidates:[correctName],
+          reason:`Multiple different names (${strays.map(n=>`"${n}"`).join(', ')}) have no production-time record, while only "${correctName}" does — could be several mislabels of the same product, or one mislabel plus one genuinely different product. Won't guess which.`});
       }
       return;
     }
@@ -5707,12 +5743,14 @@ function planBatchNameFixes(){
       });
       resolved.forEach(x=>fixes.push({batchNo:r.batchNo, from:x.stray, to:x.to, noteCount:r.evidence[x.to]||0, via:x.via}));
       if(unresolved.length){
-        manual.push({batchNo:r.batchNo, reason:`Stray name${unresolved.length>1?'s':''} ${unresolved.map(n=>`"${n}"`).join(', ')} (no production-time record) couldn't be matched to one recorded product unambiguously — review manually.`});
+        manual.push({batchNo:r.batchNo, strays:unresolved, candidates:evidence,
+          reason:`Stray name${unresolved.length>1?'s':''} ${unresolved.map(n=>`"${n}"`).join(', ')} (no production-time record) couldn't be matched to one recorded product unambiguously — review manually.`});
       }
       return;
     }
 
-    manual.push({batchNo:r.batchNo, reason:`Current: ${current.join(', ')} vs recorded: ${evidence.join(', ')} — more than one possible pairing, won't guess.`});
+    manual.push({batchNo:r.batchNo, strays:currentLeft, candidates:evidenceLeft,
+      reason:`Current: ${current.join(', ')} vs recorded: ${evidence.join(', ')} — more than one possible pairing, won't guess.`});
   });
   return {fixes, manual};
 }
@@ -6207,7 +6245,7 @@ function exportDataPDF(){
 // abnormal) to avoid crying wolf on legitimate historical data.
 function runDataHealthCheck(){
   const issues = []; // {severity:'error'|'warning', category, message}
-  const add = (severity, category, message) => issues.push({severity, category, message});
+  const add = (severity, category, message, batchNo) => issues.push({severity, category, message, batchNo});
 
   // 1. Negative stock anywhere — always a real bug, never legitimate.
   (state.finishedInventory||[]).forEach(f=>{
@@ -6302,7 +6340,7 @@ function runDataHealthCheck(){
       if(g && g.productName) noteSub(g.productName, 'genealogy record');
       const subNames = Object.keys(subSightings);
       if(subNames.length>1){
-        add('error','Traceability', `Batch ${sub} (from wood batch ${batchNo}) is ONE physical batch but is named differently in different places: ${subNames.map(n=>`"${n}" (${[...new Set(subSightings[n])].join(', ')})`).join(' vs ')}. This is checked automatically — if it doesn't clear on its own, it needs a person to review the underlying records directly.`);
+        add('error','Traceability', `Batch ${sub} (from wood batch ${batchNo}) is ONE physical batch but is named differently in different places: ${subNames.map(n=>`"${n}" (${[...new Set(subSightings[n])].join(', ')})`).join(' vs ')}. This is checked automatically — if it doesn't clear on its own, it needs a person to review the underlying records directly.`, batchNo);
       }
     });
 
@@ -6319,7 +6357,7 @@ function runDataHealthCheck(){
       const evidenceNames = Object.keys(evidence);
       const strays = distinctNames.filter(n=>!evidenceNames.includes(n));
       if(evidenceNames.length && strays.length){
-        add('error','Traceability', `Batch ${batchNo}'s lineage contains name${strays.length>1?'s':''} that NO production-time ledger record ever used: ${strays.map(n=>`"${n}" (${[...new Set(sightings[n])].join('; ')})`).join(' and ')}. Recorded when actually produced: ${evidenceNames.map(n=>`"${n}"`).join(', ')}. This is checked automatically — if it doesn't clear on its own, it needs a person to review the underlying records directly.`);
+        add('error','Traceability', `Batch ${batchNo}'s lineage contains name${strays.length>1?'s':''} that NO production-time ledger record ever used: ${strays.map(n=>`"${n}" (${[...new Set(sightings[n])].join('; ')})`).join(' and ')}. Recorded when actually produced: ${evidenceNames.map(n=>`"${n}"`).join(', ')}. This is checked automatically — if it doesn't clear on its own, it needs a person to review the underlying records directly.`, batchNo);
       } else if(!evidenceNames.length){
         add('warning','Traceability', `Batch ${batchNo}'s lineage shows different product names at different stages (${distinctNames.map(n=>`"${n}"`).join(', ')}) and no ledger notes exist to verify which is original — review manually.`);
       }
