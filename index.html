@@ -5154,13 +5154,23 @@ function runAutoFixCycle(){
     return logEntry;
   }
 
+  const applied = [];
+
+  // FIRST: proven catalog remnants (see collectCatalogRemnants) — this runs before the
+  // batch-name planner so the planner's catalog safety guard sees the CLEANED catalog and can
+  // then resolve the same product's remaining strays by name automatically.
+  collectCatalogRemnants().forEach(r=>{
+    r.batches.forEach(b=>reassignBatchLineage(b, r.name, r.target));
+    state.woodPieces = (state.woodPieces||[]).filter(w=>w.name!==r.name);
+    applied.push(`Catalog cleanup: "${r.name}" was proven to be a rename remnant of "${r.target}" (never once produced under that name, and sitting as a wrong label on batch${r.batches.length>1?'es':''} ${r.batches.join(', ')}) — records corrected and the stale catalog entry removed`);
+  });
+
   const namePlan = planBatchNameFixes();
   const structural = collectStructuralFixes();
   const socketNames = collectSocketTypeNameCandidates();
   const materialsAll = collectMaterialsStockDiscrepancies();
   const materialsFix = materialsAll.filter(d=>!d.unfixable);
 
-  const applied = [];
   namePlan.fixes.forEach(f=>{
     reassignBatchLineage(f.batchNo, f.from, f.to);
     applied.push(`Batch ${f.batchNo}: renamed "${f.from}" back to "${f.to}"`);
@@ -5671,15 +5681,71 @@ function investigateBatchNames(){
 // the catalog (a real product whose name happens to contain another's is legitimate, not a
 // remnant), then the pairing is deterministic, not a guess, and is safe to apply
 // automatically. Anything less unique still goes to a person.
+// Names are compared in a normalized form — lowercase, all spaces and punctuation stripped —
+// so invisible differences (a double space, a trailing space, a phone keyboard's special
+// space character, quote marks) can never block a genuine match. "Smart Commando Broom " and
+// "smart commando broom" both normalize to the same string.
+function normalizeNameForMatch(n){
+  return String(n||'').toLowerCase().replace(/[^a-z0-9\u0600-\u06FF]+/g,'');
+}
 function resolveStrayByNameEvidence(stray, candidates){
-  const catalog = new Set((state.woodPieces||[]).map(w=>String(w.name||'').trim().toLowerCase()));
-  const s = String(stray||'').trim().toLowerCase();
+  const catalog = new Set((state.woodPieces||[]).map(w=>normalizeNameForMatch(w.name)));
+  const s = normalizeNameForMatch(stray);
   if(!s || catalog.has(s)) return null;
   const matches = (candidates||[]).filter(c=>{
-    const cl = String(c||'').trim().toLowerCase();
+    const cl = normalizeNameForMatch(c);
     return cl && cl!==s && (s.includes(cl) || cl.includes(s));
   });
   return matches.length===1 ? matches[0] : null;
+}
+
+// ==================== CATALOG REMNANT DETECTION ====================
+// The one situation where the name-evidence rule deliberately holds back is a stray that
+// exists in the product CATALOG — because a real product must never be auto-merged as a typo.
+// But "is it a real product?" is itself checkable, so the system checks instead of asking:
+// a catalog entry is a proven rename REMNANT — not a real product — when ALL THREE hold:
+//   1. Its name contains exactly one OTHER catalog product's name (the rename fingerprint);
+//   2. NOT ONE production-time ledger note, ever, across all history, used this name —
+//      a real product that was ever actually made would have left evidence;
+//   3. It appears on batch records whose own production-time evidence names the contained
+//      product — i.e. it is actively sitting as a wrong label on the other product's batches.
+// A genuinely planned-for-the-future product fails test 3 (it wouldn't be on old batches'
+// records), so it is never touched. All three tests are deterministic — no guessing.
+function collectCatalogRemnants(){
+  const products = (state.woodPieces||[]);
+  const remnants = [];
+  products.forEach(p=>{
+    const pn = normalizeNameForMatch(p.name);
+    if(!pn) return;
+    const containedIn = products.filter(q=>{
+      const qn = normalizeNameForMatch(q.name);
+      return q!==p && qn && qn!==pn && pn.includes(qn);
+    });
+    if(containedIn.length!==1) return;                                   // test 1
+    const target = containedIn[0];
+    const everEvidenced = (state.ledger||[]).some(e=>{
+      if(!e || !e.note) return false;
+      for(const pat of BATCH_NOTE_PATTERNS){
+        const m = e.note.match(pat);
+        if(m && normalizeNameForMatch(m[1])===pn) return true;
+      }
+      return false;
+    });
+    if(everEvidenced) return;                                            // test 2
+    const appearsOnBatches = [...new Set([
+      ...(state.production||[]).filter(r=>r && !r.voided && normalizeNameForMatch(r.woodPieceName)===pn).map(r=>r.batchNo),
+      ...(state.finishedInventory||[]).filter(r=>r && normalizeNameForMatch(r.productName)===pn).map(r=>r.batchNo),
+      ...(state.finishedBrushes||[]).filter(r=>r && normalizeNameForMatch(r.productName)===pn).map(r=>r.sourceBatch||r.batchNo),
+      ...(state.readyForSale||[]).filter(r=>r && normalizeNameForMatch(r.productName)===pn).map(r=>r.batchNo),
+    ])].filter(Boolean);
+    const causing = appearsOnBatches.filter(b=>{
+      const ev = Object.keys(getBatchNoteEvidence(b));
+      return ev.some(n=>normalizeNameForMatch(n)===normalizeNameForMatch(target.name));
+    });
+    if(causing.length===0) return;                                       // test 3
+    remnants.push({name:p.name, target:target.name, batches:causing});
+  });
+  return remnants;
 }
 
 function planBatchNameFixes(){
