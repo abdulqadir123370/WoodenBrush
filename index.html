@@ -3522,7 +3522,7 @@ function renderSales(){
         </div>
       </div>
         <div style="font-size:11px;color:#888;${isVoidedSale?'text-decoration:line-through;':''}">${s.kgSold} KG @ Rs.${s.pricePerKg}/KG</div>
-      ${s.weighSlipUrl?`<a href="${s.weighSlipUrl}" target="_blank" rel="noopener" style="font-size:11px;color:#3498db;font-weight:700;text-decoration:none;">📷 View Weight Slip</a>${s.manualOverride?` <span style="color:#c0392b;font-weight:700;">(entered manually by ${s.manualOverrideBy||'Admin'} — slip was unreadable${s.weighSlipReadKg!=null?`, read as ${s.weighSlipReadKg} KG`:''})</span>`:(s.weighSlipReadKg!=null && Math.abs(s.weighSlipReadKg-s.kgSold)>0.05?` <span style="color:#e67e22;">(slip read ${s.weighSlipReadKg} KG)</span>`:'')}`:(s.manualOverride?`<span style="color:#c0392b;font-weight:700;">📷 No photo saved — entered manually by ${s.manualOverrideBy||'Admin'} (legacy record)</span>`:'')}
+      ${s.weighSlipUrl?`<a href="${s.weighSlipUrl}" ${String(s.weighSlipUrl).startsWith('data:')?`download="weight-slip-${String(s.id).replace(/[^0-9]/g,'')}.jpg"`:`target="_blank" rel="noopener"`} style="font-size:11px;color:#3498db;font-weight:700;text-decoration:none;">📷 View Weight Slip</a>${s.manualOverride?` <span style="color:#c0392b;font-weight:700;">(entered manually by ${s.manualOverrideBy||'Admin'} — slip was unreadable${s.weighSlipReadKg!=null?`, read as ${s.weighSlipReadKg} KG`:''})</span>`:(s.weighSlipReadKg!=null && Math.abs(s.weighSlipReadKg-s.kgSold)>0.05?` <span style="color:#e67e22;">(slip read ${s.weighSlipReadKg} KG)</span>`:'')}`:(s.manualOverride?`<span style="color:#c0392b;font-weight:700;">📷 No photo saved — entered manually by ${s.manualOverrideBy||'Admin'} (legacy record)</span>`:'')}
       ${s.flagged&&!isVoidedSale?`<div style="font-size:11px;color:#3498db;margin-top:6px;background:#e8f4fd;border-radius:6px;padding:6px 8px;">🚩 Flagged by ${s.flaggedBy} on ${s.flaggedDate} ${s.flaggedTime||''}<br/><span style="font-style:italic;">"${s.flagNote}"</span></div>`:''}
       ${isVoidedSale?`<div style="font-size:11px;color:#e74c3c;margin-top:6px;">Voided by ${s.voidedBy} on ${s.voidedDate}<br/><span style="font-style:italic;">"${s.voidedReason}"</span></div>`:''}
       ${isOwner && collectedByAccountant>0 && !isVoidedSale?`
@@ -3726,23 +3726,64 @@ async function readSlipAndAutofill(file){
   }
 }
 
+// Compress a photo down to database-friendly size (phone camera shots are 2-8MB; compressed
+// to ~1100px JPEG they land around 100-300KB with the slip text still perfectly readable).
+function compressImageFile(file, maxDim, quality){
+  return new Promise((resolve, reject)=>{
+    const img = new Image();
+    const objUrl = URL.createObjectURL(file);
+    img.onload = ()=>{
+      try{
+        const scale = Math.min(1, (maxDim||1100) / Math.max(img.naturalWidth||1, img.naturalHeight||1));
+        const c = document.createElement('canvas');
+        c.width = Math.max(1, Math.round((img.naturalWidth||1)*scale));
+        c.height = Math.max(1, Math.round((img.naturalHeight||1)*scale));
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        resolve(c.toDataURL('image/jpeg', quality||0.72));
+      }catch(e){ reject(e); }
+      finally{ URL.revokeObjectURL(objUrl); }
+    };
+    img.onerror = ()=>{ URL.revokeObjectURL(objUrl); reject(new Error('image unreadable')); };
+    img.src = objUrl;
+  });
+}
+
+// Cloud Storage requires Firebase's PAID (Blaze) plan — this project is on the free plan, so
+// the Storage bucket doesn't exist and every upload fails. Photos are therefore saved INSIDE
+// the database record itself (compressed), which works on the free plan. If Storage is ever
+// enabled later, it's tried first automatically and simply takes over — no code change needed.
+let storageUploadFailStreak = 0; // after 2 consecutive failures, stop hammering a bucket that isn't there (this session)
+
 async function uploadSlipToStorage(file){
-  if(!fbStorage){
-    if(state.saleModal) state.saleModal.slipUploadFailed = true;
-    return null;
-  }
+  let compressed = null;
   try{
-    const path = `weight-slips/${Date.now()}_${Math.random().toString(36).slice(2,8)}.jpg`;
-    const ref = fbStorage.ref(path);
-    await ref.put(file);
-    const url = await ref.getDownloadURL();
-    if(state.saleModal){ state.saleModal.slipUrl = url; state.saleModal.slipUploadFailed = false; }
-    return url;
+    compressed = await compressImageFile(file, 1100, 0.72);
+    if(compressed.length > 900000) compressed = await compressImageFile(file, 850, 0.55); // protect the 1MB record limit
   }catch(e){
-    console.error('Slip upload failed:', e);
+    console.error('Slip photo could not be read/compressed:', e);
     if(state.saleModal) state.saleModal.slipUploadFailed = true;
     return null;
   }
+  if(fbStorage && storageUploadFailStreak < 2){
+    try{
+      const path = `weight-slips/${Date.now()}_${Math.random().toString(36).slice(2,8)}.jpg`;
+      const ref = fbStorage.ref(path);
+      await ref.putString(compressed, 'data_url');
+      const url = await ref.getDownloadURL();
+      storageUploadFailStreak = 0;
+      if(state.saleModal){ state.saleModal.slipUrl = url; state.saleModal.slipUploadFailed = false; }
+      return url;
+    }catch(e){
+      storageUploadFailStreak++;
+      console.warn('Cloud Storage unavailable (free plan) — saving the photo inside the record instead.');
+    }
+  }
+  if(compressed.length > 950000){
+    if(state.saleModal) state.saleModal.slipUploadFailed = true;
+    return null; // even hard compression couldn't make it fit — genuinely can't save this one
+  }
+  if(state.saleModal){ state.saleModal.slipUrl = compressed; state.saleModal.slipUploadFailed = false; }
+  return compressed;
 }
 
 function updateSaleTypeAvailable(){
@@ -5027,8 +5068,8 @@ async function captureTabScreenshot(tabKey){
     holder.style.cssText = 'position:absolute;left:-10000px;top:0;width:1000px;background:#f5efe6;padding:12px;';
     holder.innerHTML = `<div style="font:700 14px Arial;padding:6px 10px;background:#5c3d1e;color:#fff;border-radius:6px;margin-bottom:8px;">📷 ${tabDisplayLabel(tabKey)} — live data at ${new Date().toLocaleString()}</div>` + fn();
     document.body.appendChild(holder);
-    const canvas = await html2canvas(holder, {scale:0.8, backgroundColor:'#f5efe6', logging:false, height:Math.min(holder.scrollHeight+30, 1800), windowWidth:1024});
-    return canvas.toDataURL('image/jpeg', 0.7);
+    const canvas = await html2canvas(holder, {scale:0.75, backgroundColor:'#f5efe6', logging:false, height:Math.min(holder.scrollHeight+30, 1600), windowWidth:1024});
+    return canvas.toDataURL('image/jpeg', 0.62);
   }catch(e){
     console.error('Tab screenshot failed:', e);
     return null;
@@ -5038,13 +5079,18 @@ async function captureTabScreenshot(tabKey){
 }
 
 async function uploadFindingScreenshot(dataUrl, findingId){
-  if(!fbStorage || !dataUrl) return null;
+  if(!fbStorage || !dataUrl || storageUploadFailStreak >= 2) return null;
   try{
     const path = `findings/${String(findingId).replace(/[^0-9]/g,'')}.jpg`;
     const ref = fbStorage.ref(path);
     await ref.putString(dataUrl, 'data_url');
+    storageUploadFailStreak = 0;
     return await ref.getDownloadURL();
-  }catch(e){ console.error('Finding screenshot upload failed (summary card still attached):', e); return null; }
+  }catch(e){
+    storageUploadFailStreak++;
+    console.warn('Cloud Storage unavailable (free plan) — keeping the screen image inside the record instead.');
+    return null;
+  }
 }
 
 async function attachUIScreenshot(finding){
@@ -5054,7 +5100,7 @@ async function attachUIScreenshot(finding){
   const f = (state.systemFindings||[]).find(x=>x.id===finding.id);
   if(!f) return;
   if(url) f.uiProofUrl = url;
-  else if(shot.length < 400000) f.uiProofUrl = shot; // inline fallback only when small enough for the record
+  else if(shot.length < 700000) f.uiProofUrl = shot; // embedded in the record — the free-plan path (finding docs stay well under the 1MB limit)
   saveAll();
   if(typeof renderAutoFixResults==='function') renderAutoFixResults();
 }
