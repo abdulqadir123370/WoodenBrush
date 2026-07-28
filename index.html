@@ -2122,7 +2122,9 @@ function recordBrushProcessing(){
         size:scrapSizeVal, quantity:scrap, batch:scrapKey, dateCreated:today
       }];
     }
-    addLedgerEntry('scrap', `${stock.productName} (Kharab Maal)`, stock.batchNo, scrap, 'IN', `Rejected in Brush Dept — usable for smaller products`, String(scrapSizeVal));
+    // Use the SAME batch key the scrap stock record uses, otherwise the ledger and Scrap
+    // Inventory show the same pieces under two different batch names and can't be reconciled.
+    addLedgerEntry('scrap', `${stock.productName} (Kharab Maal)`, scrapKey, scrap, 'IN', `Rejected in Brush Dept — usable for smaller products`, String(scrapSizeVal));
   }
 
   // Keere Wala → wastage (piece count + KG + Bhusa/Patti/Gitta split)
@@ -2199,6 +2201,10 @@ function markReworkCompleted(id){
     }];
   }
   state.reworkStock = rework.map(r=>r.id===id?{...r,status:'completed',completedDate:new Date().toISOString().slice(0,10)}:r);
+  // Returning rework to stock is a real stock increase and must appear in the ledger — without
+  // this the Dashboard shows pieces the Ledger has no record of (264 pcs drifted this way).
+  addLedgerEntry('finished', item.productName, item.batchNo, item.qty, 'IN',
+    `Rework completed (${item.category||'rework'}) — returned to Wood Finishing stock`);
   saveAll();
   re();
 }
@@ -2576,9 +2582,13 @@ function initApp(){
   // Clean up: move any scrap inventory at-or-below the smallest defined piece size into wastage
 // (these are dead-end pieces that can never be used in production)
 function cleanupDeadEndScrap(){
+  // A scrap piece is only a dead end if it is SMALLER than every product — a piece exactly
+  // equal to the smallest product's size can still be made into that product, so it is
+  // perfectly usable. The old '<=' comparison wrongly condemned usable stock: on 2026-07-23
+  // it silently moved 815 pcs of 11" scrap (exactly Commando Broom's size) into wastage.
   const minSize = (state.woodPieces||[]).length>0 ? Math.min(...(state.woodPieces||[]).map(w=>w.size)) : 0;
   if(minSize<=0) return;
-  const stuck = (state.scrapInventory||[]).filter(s=>s.size<=minSize);
+  const stuck = (state.scrapInventory||[]).filter(s=>s.size<minSize);
   if(stuck.length===0) return;
   stuck.forEach(s=>{
     // Derive root batch number to check whether the parent batch is open or closed
@@ -2598,7 +2608,20 @@ function cleanupDeadEndScrap(){
       needsWeight: true
     }];
   });
-  state.scrapInventory = (state.scrapInventory||[]).filter(s=>s.size>minSize);
+  // Removing stock without a ledger entry is what made the earlier loss invisible and left the
+  // ledger permanently disagreeing with actual stock. Record every move.
+  stuck.forEach(s=>{
+    const rootBatchNo = s.batch.split('-Rejected-')[0].split('-Salvage-')[0].split('-Scrap-')[0];
+    addLedgerEntry('scrap', `${s.size}" pieces (dead-end)`, rootBatchNo, s.quantity, 'OUT',
+      `Moved to wastage — smaller than every product size (${minSize}"), cannot be used in production`, String(s.size));
+  });
+  state.scrapInventory = (state.scrapInventory||[]).filter(s=>s.size>=minSize);
+  // Leave a visible trace instead of doing this silently.
+  state.autoFixLog = [{
+    timestamp: new Date().toISOString(), appliedCount: stuck.length,
+    applied: stuck.map(s=>`Dead-end scrap moved to wastage: ${s.quantity} pcs of ${s.size}" from ${s.batch} (smaller than the smallest product, ${minSize}")`),
+    needsJudgment: [], newFindings: 0,
+  }, ...(state.autoFixLog||[])].slice(0, 20);
   saveAll();
 }
 cleanupDeadEndScrap();
