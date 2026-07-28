@@ -980,6 +980,12 @@ function switchTab(name,el){
   el.classList.add('active');
   document.querySelectorAll('[id^="tab-"]').forEach(t=>t.classList.add('hidden'));
   document.getElementById('tab-'+name).classList.remove('hidden');
+  // Opening Admin always shows a JUST-RUN check, never a cached result from up to 2 hours
+  // ago. The whole point of Auto-Fix is not needing to remember a button exists — looking at
+  // the tab IS the trigger. Wrapped defensively so a check failure can never block navigation.
+  if(name==='Admin' && typeof runAutoFixCycle==='function'){
+    try{ runAutoFixCycle(); }catch(e){ console.error('Auto-fix cycle failed on tab open:', e); }
+  }
   renderTab(name);
 }
 
@@ -5657,6 +5663,25 @@ function investigateBatchNames(){
 // left alone. If exactly ONE current name and ONE evidence name remain after that, they must
 // correspond — so the fix is unambiguous and safe to apply automatically. Anything less
 // clear-cut is listed for manual review instead of guessed at.
+// Deciding a stray's true identity WITHOUT human memory, using evidence in the name itself:
+// renames in this app historically leave strays that CONTAIN the real product's name (the
+// real case: "Commando Broom" was renamed to "Smart Commando Broom" — the original name sits
+// intact inside the stray). If the stray's name matches exactly ONE candidate this way — in
+// either direction, to also catch truncations — AND the stray is not itself a real product in
+// the catalog (a real product whose name happens to contain another's is legitimate, not a
+// remnant), then the pairing is deterministic, not a guess, and is safe to apply
+// automatically. Anything less unique still goes to a person.
+function resolveStrayByNameEvidence(stray, candidates){
+  const catalog = new Set((state.woodPieces||[]).map(w=>String(w.name||'').trim().toLowerCase()));
+  const s = String(stray||'').trim().toLowerCase();
+  if(!s || catalog.has(s)) return null;
+  const matches = (candidates||[]).filter(c=>{
+    const cl = String(c||'').trim().toLowerCase();
+    return cl && cl!==s && (s.includes(cl) || cl.includes(s));
+  });
+  return matches.length===1 ? matches[0] : null;
+}
+
 function planBatchNameFixes(){
   const results = investigateBatchNames();
   const fixes = [];   // {batchNo, from, to, noteCount}
@@ -5680,8 +5705,19 @@ function planBatchNameFixes(){
       if(strays.length===1){
         fixes.push({batchNo:r.batchNo, from:strays[0], to:correctName, noteCount:r.evidence[correctName]||0});
       } else if(strays.length>1){
-        manual.push({batchNo:r.batchNo, strays, candidates:[correctName],
-          reason:`Multiple different names (${strays.map(n=>`"${n}"`).join(', ')}) have no production-time record, while only "${correctName}" does — could be several mislabels of the same product, or one mislabel plus one genuinely different product. Won't guess which.`});
+        // Multiple strays: each one whose NAME itself identifies the target (contains the
+        // real product's name and isn't a catalog product) resolves deterministically; only
+        // genuinely nameless-evidence strays go to a person.
+        const leftover = [];
+        strays.forEach(stray=>{
+          const byName = resolveStrayByNameEvidence(stray, [correctName]);
+          if(byName){ fixes.push({batchNo:r.batchNo, from:stray, to:byName, noteCount:r.evidence[byName]||0, via:'name match'}); }
+          else leftover.push(stray);
+        });
+        if(leftover.length){
+          manual.push({batchNo:r.batchNo, strays:leftover, candidates:[correctName],
+            reason:`Name${leftover.length>1?'s':''} ${leftover.map(n=>`"${n}"`).join(', ')} ${leftover.length>1?'have':'has'} no production-time record and no naming link to "${correctName}" — could be a mislabel of it, or a genuinely different product. Won't guess which.`});
+        }
       }
       return;
     }
@@ -5743,14 +5779,36 @@ function planBatchNameFixes(){
       });
       resolved.forEach(x=>fixes.push({batchNo:r.batchNo, from:x.stray, to:x.to, noteCount:r.evidence[x.to]||0, via:x.via}));
       if(unresolved.length){
-        manual.push({batchNo:r.batchNo, strays:unresolved, candidates:evidence,
-          reason:`Stray name${unresolved.length>1?'s':''} ${unresolved.map(n=>`"${n}"`).join(', ')} (no production-time record) couldn't be matched to one recorded product unambiguously — review manually.`});
+        // Sub-batch context couldn't decide — but the stray's own NAME might (see
+        // resolveStrayByNameEvidence). Only strays failing both tests go to a person.
+        const leftover = [];
+        unresolved.forEach(stray=>{
+          const byName = resolveStrayByNameEvidence(stray, evidence);
+          if(byName){ fixes.push({batchNo:r.batchNo, from:stray, to:byName, noteCount:r.evidence[byName]||0, via:'name match'}); }
+          else leftover.push(stray);
+        });
+        if(leftover.length){
+          manual.push({batchNo:r.batchNo, strays:leftover, candidates:evidence,
+            reason:`Stray name${leftover.length>1?'s':''} ${leftover.map(n=>`"${n}"`).join(', ')} (no production-time record) couldn't be matched to one recorded product unambiguously — review manually.`});
+        }
       }
       return;
     }
 
-    manual.push({batchNo:r.batchNo, strays:currentLeft, candidates:evidenceLeft,
-      reason:`Current: ${current.join(', ')} vs recorded: ${evidence.join(', ')} — more than one possible pairing, won't guess.`});
+    {
+      // Last branch: multiple possible pairings on paper — but a stray whose NAME contains
+      // exactly one evidenced product resolves deterministically anyway.
+      const leftover = [];
+      currentLeft.forEach(stray=>{
+        const byName = resolveStrayByNameEvidence(stray, evidence);
+        if(byName){ fixes.push({batchNo:r.batchNo, from:stray, to:byName, noteCount:r.evidence[byName]||0, via:'name match'}); }
+        else leftover.push(stray);
+      });
+      if(leftover.length){
+        manual.push({batchNo:r.batchNo, strays:leftover, candidates:evidence,
+          reason:`Current: ${current.join(', ')} vs recorded: ${evidence.join(', ')} — more than one possible pairing, won't guess.`});
+      }
+    }
   });
   return {fixes, manual};
 }
