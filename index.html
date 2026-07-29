@@ -1597,26 +1597,27 @@ function recordProduction(){
   const wp=(state.woodPieces||[]).find(w=>w.id===wpId);
   if(!wp) return;
 
+  // ==================== PHASE 1: CHECK EVERYTHING — NO STATE MUTATION YET ====================
+  // Previously, input stock was deducted immediately, before the quality-control fields below
+  // were even read. If a LATER check failed (most commonly: rejected pieces present but no
+  // wastage weight entered) the function returned early — but the stock deduction had already
+  // happened in memory. On its own that's recoverable (nothing is saved until saveAll() at the
+  // very end) — but it left a corrupted, uncommitted state sitting in memory that a refresh,
+  // a retry, or any unrelated action calling saveAll() in between could turn into permanent,
+  // untraceable data loss: input consumed, nothing produced to account for it. This is very
+  // likely what happened on 2026-07-29 to 109 pcs of WB001 scrap. Every check now happens
+  // FIRST; state is only ever touched once every single validation has already passed.
+
+  let stock;
   if(openBatch.isScrap){
-    const stock=(state.scrapInventory||[]).filter(s=>s.batch===sourceTag).reduce((s,x)=>s+x.quantity,0);
+    stock=(state.scrapInventory||[]).filter(s=>s.batch===sourceTag).reduce((s,x)=>s+x.quantity,0);
     if(stock<planksUsed){showProdMsg(`⚠️ Not enough scrap in ${openBatch.batchNo}! Have ${stock}, need ${planksUsed}. This batch may already be consumed — try closing it and check Inventory tab.`,false);return;}
-    let toDeduct=planksUsed;
-    state.scrapInventory=(state.scrapInventory||[]).map(item=>{
-      if(item.batch!==sourceTag||toDeduct<=0) return item;
-      const d=Math.min(item.quantity,toDeduct); toDeduct-=d;
-      return {...item,quantity:item.quantity-d};
-    }).filter(item=>item.quantity>0);
   } else {
-    // Only check and deduct from the specific batch that was opened for production
     const specificBatch=(state.materials[size]?.batches||[]).find(b=>b.batchNo===openBatch.batchNo);
-    const stock=specificBatch?specificBatch.qty:0;
+    stock=specificBatch?specificBatch.qty:0;
     if(stock<=0){showProdMsg(`⚠️ Batch ${openBatch.batchNo} is fully consumed! Close this batch.`,false);return;}
     if(stock<planksUsed){showProdMsg(`⚠️ Not enough in ${openBatch.batchNo}! Have ${stock} planks, need ${planksUsed}`,false);return;}
     if(!state.materials[size]||!state.materials[size].batches){showProdMsg("⚠️ Material not found!",false);return;}
-    state.materials[size].batches=state.materials[size].batches.map(b=>{
-      if(b.batchNo!==openBatch.batchNo) return b;
-      return {...b,qty:b.qty-planksUsed};
-    }).filter(b=>b.qty>0);
   }
 
   const ppp=Math.floor(effSize/pieceSize);
@@ -1624,13 +1625,6 @@ function recordProduction(){
   const rem=effSize-ppp*pieceSize;
   const minSize=(state.woodPieces||[]).length>0?Math.min(...(state.woodPieces||[]).map(w=>w.size)):Infinity;
   const canUse=rem>=minSize;
-
-  if(rem>0&&canUse&&!openBatch.isScrap){
-    const scrapKey=`${openBatch.batchNo}-Scrap-${wp.name}`;
-    const idx=(state.scrapInventory||[]).findIndex(e=>e.size===rem&&e.batch===scrapKey);
-    if(idx>=0){state.scrapInventory[idx].quantity+=planksUsed;}
-    else{state.scrapInventory=[...(state.scrapInventory||[]),{size:rem,quantity:planksUsed,batch:scrapKey,dateCreated:prodDate?.value||new Date().toISOString().slice(0,10)}];}
-  }
 
   // Read quality control fields
   const actualPiecesEl = document.getElementById('actualPieces');
@@ -1646,49 +1640,83 @@ function recordProduction(){
   const wastageQtyFromReject = Math.max(0, rejectedPieces - salvageQty);
   const wastageKgFromReject = +wastageKgFromRejectEl?.value||0;
 
+  const salvageSize = pieceSize; // original size of the piece that was rejected
+  const rootBatchNo = getRootBatchNo(openBatch.batchNo);
+  const minPieceSizeOverall = (state.woodPieces||[]).length>0 ? Math.min(...(state.woodPieces||[]).map(w=>w.size)) : 0;
+  const isSmallestSize = pieceSize <= minPieceSizeOverall;
+
   // Validate
   if(actualPieces > pieces){
     showProdMsg(`⚠️ Actual pieces (${actualPieces}) cannot exceed theoretical (${pieces})`,false);
+    return;
+  }
+  // Defense in depth: every theoretical piece must land SOMEWHERE — as a good piece or as a
+  // rejected one. The rejected-pieces field auto-calculates from this same pair normally, so
+  // this should never actually fire in ordinary use; it exists to catch any edge case (a stale
+  // auto-calculated value, a field that didn't update) that could otherwise let pieces go
+  // completely unaccounted for, invisible to every part of the system at once.
+  if(actualPieces + rejectedPieces !== pieces){
+    showProdMsg(`⚠️ ${pieces} pieces expected but only ${actualPieces + rejectedPieces} accounted for (${actualPieces} good + ${rejectedPieces} rejected). Refresh and re-enter — nothing has been saved.`,false);
     return;
   }
   if(salvageQty > rejectedPieces){
     showProdMsg(`⚠️ Scrap pieces (${salvageQty}) cannot exceed rejected (${rejectedPieces})`,false);
     return;
   }
+  if(salvageQty>0 && isSmallestSize){
+    // Cannot scrap from smallest size — redirect to wastage automatically
+    showProdMsg(`⚠️ ${wp.name} is the smallest product size — rejected pieces cannot be salvaged. Please use Wastage instead.`,false);
+    return;
+  }
   if(wastageQtyFromReject>0 && !wastageKgFromReject){
     showProdMsg('⚠️ Enter weight (KG) for wastage pieces',false);
     return;
   }
+  let typeSplit = null, splitSum = 0;
+  if(wastageKgFromReject>0){
+    typeSplit = getWasteTypeSplit('rejectWasteTypeSplit');
+    splitSum = WASTE_TYPES.reduce((s,t)=>s+(typeSplit[t]||0),0);
+    if(Math.abs(splitSum - wastageKgFromReject) > 0.05){
+      showProdMsg(`⚠️ Wastage type split (${splitSum.toFixed(1)} KG) doesn't match weight entered (${wastageKgFromReject.toFixed(1)} KG). Please adjust the split.`,false);
+      return;
+    }
+  }
+
+  // ==================== PHASE 2: EVERY CHECK PASSED — NOW MUTATE, ALL TOGETHER ====================
+
+  if(openBatch.isScrap){
+    let toDeduct=planksUsed;
+    state.scrapInventory=(state.scrapInventory||[]).map(item=>{
+      if(item.batch!==sourceTag||toDeduct<=0) return item;
+      const d=Math.min(item.quantity,toDeduct); toDeduct-=d;
+      return {...item,quantity:item.quantity-d};
+    }).filter(item=>item.quantity>0);
+  } else {
+    state.materials[size].batches=state.materials[size].batches.map(b=>{
+      if(b.batchNo!==openBatch.batchNo) return b;
+      return {...b,qty:b.qty-planksUsed};
+    }).filter(b=>b.qty>0);
+  }
+
+  if(rem>0&&canUse&&!openBatch.isScrap){
+    const scrapKey=`${openBatch.batchNo}-Scrap-${wp.name}`;
+    const idx=(state.scrapInventory||[]).findIndex(e=>e.size===rem&&e.batch===scrapKey);
+    if(idx>=0){state.scrapInventory[idx].quantity+=planksUsed;}
+    else{state.scrapInventory=[...(state.scrapInventory||[]),{size:rem,quantity:planksUsed,batch:scrapKey,dateCreated:prodDate?.value||new Date().toISOString().slice(0,10)}];}
+  }
 
   // Add rejected pieces to scrap inventory — stored using the ORIGINAL piece size
   // (e.g. "Rejected 11" pieces" — usable for any product smaller than 11")
-  const salvageSize = pieceSize; // original size of the piece that was rejected
-  // openBatch.batchNo is always the clean root now (e.g. "B011")
-  const rootBatchNo = getRootBatchNo(openBatch.batchNo);
-  // Check if this is the smallest defined piece size — if so, scrap is a dead end, force wastage instead
-  const minPieceSizeOverall = (state.woodPieces||[]).length>0 ? Math.min(...(state.woodPieces||[]).map(w=>w.size)) : 0;
-  const isSmallestSize = pieceSize <= minPieceSizeOverall;
-
-  if(salvageQty>0 && !isSmallestSize){
+  if(salvageQty>0){
     const scrapKey = `${rootBatchNo}-Rejected-${wp.name}`;
     const idx=(state.scrapInventory||[]).findIndex(e=>e.size===salvageSize&&e.batch===scrapKey);
     if(idx>=0){state.scrapInventory[idx].quantity+=salvageQty;}
     else{state.scrapInventory=[...(state.scrapInventory||[]),{size:salvageSize,quantity:salvageQty,batch:scrapKey,dateCreated:prodDate?.value||new Date().toISOString().slice(0,10),isRejectedStock:true}];}
     addLedgerEntry('scrap',`Rejected ${salvageSize}" pieces`,scrapKey,salvageQty,'IN',`Rejected ${wp.name} (${rejectionReason}) — usable for products < ${salvageSize}"`,String(salvageSize));
-  } else if(salvageQty>0 && isSmallestSize){
-    // Cannot scrap from smallest size — redirect to wastage automatically
-    showProdMsg(`⚠️ ${wp.name} is the smallest product size — rejected pieces cannot be salvaged. Please use Wastage instead.`,false);
-    return;
   }
 
   // Add wastage KG from rejected pieces to open batch wastage log
   if(wastageKgFromReject>0){
-    const typeSplit = getWasteTypeSplit('rejectWasteTypeSplit');
-    const splitSum = WASTE_TYPES.reduce((s,t)=>s+(typeSplit[t]||0),0);
-    if(Math.abs(splitSum - wastageKgFromReject) > 0.05){
-      showProdMsg(`⚠️ Wastage type split (${splitSum.toFixed(1)} KG) doesn't match weight entered (${wastageKgFromReject.toFixed(1)} KG). Please adjust the split.`,false);
-      return;
-    }
     if(!state.openBatches[size].runWastageKg) state.openBatches[size].runWastageKg=0;
     state.openBatches[size].runWastageKg += wastageKgFromReject;
     // Also record immediately in wastage state so it shows in Wastage tab
@@ -5257,24 +5285,36 @@ function runSystemWatch(explainedBatches){
   const prev = snapshots[0] || null;
   const curr = captureDataSnapshot();
 
+  // A previous snapshot with NO quantities recorded at all is not a trustworthy "before"
+  // picture for the quantities comparison specifically — it means the app captured it before
+  // stock data had actually finished loading (e.g. during one of today's connection
+  // interruptions), not that stock was genuinely all zero. Comparing real data against an
+  // empty baseline produces a "0 -> everything" cascade across the whole business at once —
+  // exactly the false-alarm pattern seen live on 2026-07-28. This affects ONLY the quantities
+  // check below — socket-type-disappearance and fresh-entry review don't depend on quantities
+  // being populated, so they still run normally off the same real previous snapshot.
+  const quantitiesComparable = !!(prev && Object.keys(prev.quantities||{}).length>0);
+
   if(prev){
     const sinceId = prev.ts, untilId = curr.ts + 1;
 
     // 1a. Numbers that changed with no recorded activity — the silent-wipe class.
-    const allKeys = new Set([...Object.keys(prev.quantities||{}), ...Object.keys(curr.quantities||{})]);
-    allKeys.forEach(key=>{
-      const before = (prev.quantities||{})[key] ?? 0;
-      const after = (curr.quantities||{})[key] ?? 0;
-      if(before===after) return;
-      const kp = key.split('|');
-      const keyBatch = kp[0]==='plank' ? kp[2] : kp[1];
-      if(explained.has(keyBatch)) return; // changed by this cycle's own corrections — not suspicious
-      if(anyRecordedActivity(key, sinceId, untilId)) return; // explained — normal work happened
-      findings.push(addSystemFinding('unexplained-change', key,
-        `${describeSnapshotKey(key)} changed from ${before} to ${after} with NO recorded transaction explaining it`,
-        `At ${new Date(prev.ts).toLocaleString()} this showed ${before} pcs. At ${new Date(curr.ts).toLocaleString()} it shows ${after} pcs. No production run, purchase, sale, wastage, void, or any other record in that window touches this batch — so nothing in the books accounts for the change. This is the same pattern as the July stock-wipe incident and needs a person to look.`,
-        tabForSnapshotKey(key)));
-    });
+    if(quantitiesComparable){
+      const allKeys = new Set([...Object.keys(prev.quantities||{}), ...Object.keys(curr.quantities||{})]);
+      allKeys.forEach(key=>{
+        const before = (prev.quantities||{})[key] ?? 0;
+        const after = (curr.quantities||{})[key] ?? 0;
+        if(before===after) return;
+        const kp = key.split('|');
+        const keyBatch = kp[0]==='plank' ? kp[2] : kp[1];
+        if(explained.has(keyBatch)) return; // changed by this cycle's own corrections — not suspicious
+        if(anyRecordedActivity(key, sinceId, untilId)) return; // explained — normal work happened
+        findings.push(addSystemFinding('unexplained-change', key,
+          `${describeSnapshotKey(key)} changed from ${before} to ${after} with NO recorded transaction explaining it`,
+          `At ${new Date(prev.ts).toLocaleString()} this showed ${before} pcs. At ${new Date(curr.ts).toLocaleString()} it shows ${after} pcs. No production run, purchase, sale, wastage, void, or any other record in that window touches this batch — so nothing in the books accounts for the change. This is the same pattern as the July stock-wipe incident and needs a person to look.`,
+          tabForSnapshotKey(key)));
+      });
+    }
 
     // 1b. Socket type names that DISAPPEARED from the master list (additions are normal).
     (prev.socketTypes||[]).forEach(name=>{
@@ -5324,7 +5364,37 @@ function runSystemWatch(explainedBatches){
 
   // Store the new snapshot; keep 7 days of 2-hourly history (84), bounded.
   state.dataSnapshots = [curr, ...snapshots].slice(0, 84);
-  return { findings, baseline: !prev };
+  return { findings, baseline: !quantitiesComparable };
+}
+
+// A batch of open findings that all share the same "changed from 0" signature within a tight
+// time window is the fingerprint of ONE bad baseline snapshot, not many separate real events —
+// exactly what happened live on 2026-07-28. Grouped so it can be cleared in one action instead
+// of one click per line, without touching a broader "clear everything" button that could hide
+// a real, unrelated finding sitting in the same inbox.
+function findBadBaselineCluster(){
+  const open = (state.systemFindings||[]).filter(f=>f.status==='open' && f.kind==='unexplained-change' && /changed from 0 to/.test(f.title));
+  if(open.length<3) return null;
+  const counts = {};
+  open.forEach(f=>{ const bucket=Math.round(f.ts/30000); counts[bucket]=(counts[bucket]||[]).concat(f); });
+  let best = null;
+  Object.values(counts).forEach(group=>{ if(!best || group.length>best.length) best = group; });
+  return (best && best.length>=3) ? best : null;
+}
+function resolveBadBaselineCluster(){
+  if(!isAdminOrOwner()) return;
+  const cluster = findBadBaselineCluster();
+  if(!cluster || !cluster.length) return;
+  const ok = confirm(`Mark all ${cluster.length} of these as handled?\n\nThey all show "changed from 0" at the exact same moment (${new Date(cluster[0].ts).toLocaleString()}) — the signature of one bad baseline snapshot, not ${cluster.length} separate real events. This bug is fixed; it can't happen again.`);
+  if(!ok) return;
+  const ids = new Set(cluster.map(f=>f.id));
+  state.systemFindings = (state.systemFindings||[]).map(f=>{
+    if(!ids.has(f.id)) return f;
+    return {...f, status:'resolved', resolvedBy:currentUser?.name||'Admin', resolvedAt:Date.now(),
+      resolutionNote:'Bulk-cleared: part of a same-moment "changed from 0" cluster caused by a bad baseline snapshot — now fixed at the source.'};
+  });
+  saveAll();
+  re();
 }
 
 function renderFindingsInboxHTML(){
@@ -5334,6 +5404,14 @@ function renderFindingsInboxHTML(){
     return `<div style="font-size:12px;color:#888;">No findings — the watch has nothing waiting for you.</div>`;
   }
   let html = '';
+  const cluster = findBadBaselineCluster();
+  if(cluster){
+    html += `<div style="background:#eaf4fb;border:1px solid #2980b9;border-radius:8px;padding:10px;margin-bottom:10px;">
+      <div style="font-size:12px;font-weight:700;color:#2980b9;">📎 ${cluster.length} of these look like one event, not ${cluster.length} separate ones</div>
+      <div style="font-size:11px;color:#555;margin:4px 0;">All showing "changed from 0" at the same moment (${new Date(cluster[0].ts).toLocaleString()}) — a bad baseline snapshot, now fixed so it can't recur.</div>
+      <button class="btn" style="background:#2980b9;color:#fff;font-size:11px;padding:4px 10px;" onclick="resolveBadBaselineCluster()">✓ Mark all ${cluster.length} as handled</button>
+    </div>`;
+  }
   open.forEach(f=>{
     html += `<div style="background:#fdecea;border:1px solid #e74c3c;border-radius:8px;padding:10px;margin-bottom:8px;">
       <div style="font-size:12px;font-weight:700;color:#c0392b;">${f.title}</div>
@@ -6439,6 +6517,106 @@ function renderAuthenticatedApp(){
   if(typeof startAutoFixCycle==='function') startAutoFixCycle();
 }
 
+// ==================== PRODUCTION CORRECTION (general-purpose, reusable) ====================
+// For pieces confirmed physically present on the floor but never properly recorded — most
+// often because a submission got blocked partway (e.g. a missing wastage weight) and the
+// person moved on rather than completing it. Deliberately requires the SAME facts the
+// original form would have required — a real weight for anything going to Wastage — since
+// this tool exists to correct the record, not to bypass the discipline that blocked it the
+// first time. Admin/Owner only, one entry at a time, every use fully ledgered.
+function openProductionCorrectionModal(){
+  if(!isAdminOrOwner()) return;
+  state.prodCorrection = {batchNo:'', productId:'', qty:'', dest:'scrap', kg:''};
+  fillProductionCorrectionModal();
+  document.getElementById('prodCorrectionModal')?.classList.remove('hidden');
+}
+function closeProductionCorrectionModal(){
+  state.prodCorrection = null;
+  document.getElementById('prodCorrectionModal')?.classList.add('hidden');
+}
+// Fills the STATIC modal shell's body directly (same pattern as openSaleModal) — the modal
+// itself lives once in the page HTML and is only ever shown/hidden, never rebuilt as part of
+// a re-rendered panel, so an unrelated Admin refresh (Auto-Fix, System Watch, etc.) firing
+// while this is open can never disrupt or reset it mid-entry.
+function fillProductionCorrectionModal(){
+  const pc = state.prodCorrection;
+  if(!pc) return;
+  const wp = state.woodPieces||[];
+  const body = document.getElementById('pcBody');
+  if(!body) return;
+  body.innerHTML = `
+    <div class="label">Batch Number</div>
+    <input type="text" id="pcBatchNo" value="${pc.batchNo}" placeholder="e.g. WB001" oninput="state.prodCorrection.batchNo=this.value"/>
+    <div class="label">Product</div>
+    <select id="pcProduct" onchange="state.prodCorrection.productId=this.value">
+      <option value="">Select...</option>
+      ${wp.map(w=>`<option value="${w.id}" ${String(pc.productId)===String(w.id)?'selected':''}>${w.name} (${w.size}")</option>`).join('')}
+    </select>
+    <div class="label">Quantity (pcs)</div>
+    <input type="number" id="pcQty" min="1" value="${pc.qty}" oninput="state.prodCorrection.qty=this.value"/>
+    <div class="label">Date pieces were originally produced</div>
+    <input type="date" id="pcDate" value="${new Date().toISOString().slice(0,10)}"/>
+    <div class="label" style="margin-top:8px;">These pieces are —</div>
+    <div style="display:flex;gap:8px;margin-bottom:10px;">
+      <button type="button" class="btn" style="flex:1;background:${pc.dest==='scrap'?'#8e44ad':'#e8e0d5'};color:${pc.dest==='scrap'?'#fff':'#333'};" onclick="state.prodCorrection.dest='scrap';fillProductionCorrectionModal();">♻️ Reusable scrap</button>
+      <button type="button" class="btn" style="flex:1;background:${pc.dest==='wastage'?'#c0392b':'#e8e0d5'};color:${pc.dest==='wastage'?'#fff':'#333'};" onclick="state.prodCorrection.dest='wastage';fillProductionCorrectionModal();">🗑️ True wastage</button>
+    </div>
+    ${pc.dest==='wastage'?`
+      <div class="label">Weight (KG) — required, same as always</div>
+      <input type="number" id="pcKg" step="0.1" min="0.1" value="${pc.kg}" oninput="state.prodCorrection.kg=this.value;renderWasteTypeSplit('pcSplit','pcKg');"/>
+      <div id="pcSplit"></div>
+    `:`<div style="font-size:11px;color:#666;background:#f9f5f0;border-radius:8px;padding:8px;margin-bottom:8px;">Will be added to Scrap Inventory as "${getRootBatchNo(pc.batchNo||'')||'[batch]'}-Rejected-${wp.find(w=>String(w.id)===String(pc.productId))?.name||'[product]'}" — usable for smaller products later.</div>`}
+  `;
+}
+
+function confirmProductionCorrection(){
+  if(!isAdminOrOwner()) return;
+  const pc = state.prodCorrection;
+  if(!pc) return;
+  const err = document.getElementById('pcErr');
+  const showErr = (m)=>{ if(err){err.textContent=m;err.classList.remove('hidden');} };
+  const batchNo = (pc.batchNo||'').trim();
+  const wp = (state.woodPieces||[]).find(w=>String(w.id)===String(pc.productId));
+  const qty = +pc.qty||0;
+  if(!batchNo){ showErr('⚠️ Enter a batch number'); return; }
+  if(!wp){ showErr('⚠️ Select a product'); return; }
+  if(!qty || qty<=0){ showErr('⚠️ Enter a quantity'); return; }
+  const date = document.getElementById('pcDate')?.value;
+  if(!date){ showErr('⚠️ Enter a date'); return; }
+  let typeSplit = null, kg = 0;
+  if(pc.dest==='wastage'){
+    kg = +pc.kg||0;
+    if(!kg || kg<=0){ showErr('⚠️ Enter the weight (KG) — this is exactly what was missing the first time; it cannot be skipped now either.'); return; }
+    typeSplit = getWasteTypeSplit('pcSplit');
+    const splitSum = WASTE_TYPES.reduce((s,t)=>s+(typeSplit[t]||0),0);
+    if(Math.abs(splitSum-kg)>0.05){ showErr(`⚠️ Wastage type split (${splitSum.toFixed(1)} KG) doesn't match weight entered (${kg.toFixed(1)} KG).`); return; }
+  }
+  const ok = confirm(`Add ${qty} pcs of ${wp.name} (batch ${batchNo}) as ${pc.dest==='scrap'?'reusable scrap':`wastage (${kg} KG)`}?\n\nOnly proceed if this has been PHYSICALLY confirmed on the factory floor.`);
+  if(!ok) return;
+
+  const rootBatchNo = getRootBatchNo(batchNo);
+  if(pc.dest==='scrap'){
+    const scrapKey = `${rootBatchNo}-Rejected-${wp.name}`;
+    const idx = (state.scrapInventory||[]).findIndex(s=>s.size===wp.size && s.batch===scrapKey);
+    if(idx>=0) state.scrapInventory[idx].quantity += qty;
+    else state.scrapInventory = [...(state.scrapInventory||[]), {size:wp.size, quantity:qty, batch:scrapKey, dateCreated:pc.date, isRejectedStock:true}];
+    addLedgerEntry('scrap', `Rejected ${wp.size}" pieces`, scrapKey, qty, 'IN',
+      `Correction: ${qty} pcs of ${wp.name} confirmed physically present on the floor — a submission for this batch was blocked and never completed`, String(wp.size));
+  } else {
+    state.wastage = [...(state.wastage||[]), {
+      id: Date.now()+Math.random(), time: new Date().toTimeString().slice(0,5), voided:false,
+      date: date, batchNo: rootBatchNo, plankSizeName: wp.name, woodPieceName: wp.name,
+      rejectedPieces: qty, wastageKg: kg, typeSplit,
+      reason: 'Correction — confirmed on floor after a blocked production submission',
+      type: 'QualityControl', status: 'open',
+    }];
+  }
+  state.prodCorrection = null;
+  document.getElementById('prodCorrectionModal')?.classList.add('hidden');
+  saveAll();
+  re();
+}
+
 function renderAdminPanel(){
   const users = state.users || DEFAULT_USERS;
   const allTabs = ["Dashboard","Wood Finishing","Brush Dept","Socket Dept","Inventory","Wastage","Materials","BOM","Ledger","Sales"];
@@ -6474,6 +6652,12 @@ function renderAdminPanel(){
     </div>
 
     ${renderScrapRestorationCardHTML()}
+
+    <div class="card" style="border:2px solid #d35400;">
+      <div class="label" style="color:#d35400;">🛠️ Production Correction</div>
+      <div style="font-size:11px;color:#888;margin-bottom:10px;">For pieces confirmed physically present that were never properly recorded — e.g. a submission that got blocked partway. Same rules apply as normal: a real weight is still required for anything going to Wastage.</div>
+      <button class="btn" style="background:#d35400;color:#fff;width:100%;" onclick="openProductionCorrectionModal()">+ Add a correction</button>
+    </div>
 
     <div class="card" style="border:2px solid #c0392b;">
       <div class="label" style="color:#c0392b;">📬 System Watch — Findings Inbox</div>
@@ -7130,6 +7314,19 @@ loadFromFirestore();
     <div style="display:flex;gap:10px;margin-top:12px;">
       <button class="btn btn-green" style="flex:1;" onclick="confirmSale()">💰 Record Sale</button>
       <button class="btn btn-gray" style="flex:1;" onclick="document.getElementById('saleModal').classList.add('hidden')">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<div id="prodCorrectionModal" class="modal-overlay hidden">
+  <div class="modal">
+    <div style="font-size:16px;font-weight:700;margin-bottom:4px;">🛠️ Production Correction</div>
+    <div style="font-size:11px;color:#888;margin-bottom:12px;">Only use this for pieces you have PHYSICALLY confirmed are on the floor. This is for fixing a specific past incident (e.g. a blocked submission) — not a substitute for recording production normally.</div>
+    <div id="pcBody"></div>
+    <div id="pcErr" class="msg err hidden"></div>
+    <div style="display:flex;gap:8px;margin-top:10px;">
+      <button class="btn btn-gray" style="flex:1;" onclick="closeProductionCorrectionModal()">Cancel</button>
+      <button class="btn" style="flex:1;background:#d35400;color:#fff;" onclick="confirmProductionCorrection()">✓ Confirmed on floor — add</button>
     </div>
   </div>
 </div>
