@@ -6684,25 +6684,12 @@ function renderAdminPanel(){
       <div id="resyncResult" style="margin-top:8px;font-size:12px;"></div>
     </div>
 
-    <div class="card" style="border:2px solid #16a085;background:#f0fdfa;">
-      <div class="label" style="color:#16a085;">🤖 Auto-Fix</div>
-      <div style="font-size:11px;color:#888;margin-bottom:12px;">Runs on its own — once when the app loads, then every 2 hours while it's open. Checks stock levels, batch names vs. original records, and account setup, and fixes what's safe to fix without asking. Anything that genuinely can't be inferred (no single correct answer to guess between) stays listed below instead of being touched.</div>
-      <button class="btn" style="background:#16a085;width:100%;" onclick="document.getElementById('autoFixResults').innerHTML='<div style=\\'font-size:12px;color:#888;\\'>Checking now...</div>';setTimeout(()=>{runAutoFixCycle();renderAutoFixResults();},50);">🔄 Check Now</button>
-      <div id="autoFixResults" style="margin-top:12px;">${renderAutoFixResultsHTML()}</div>
-    </div>
-
     ${renderScrapRestorationCardHTML()}
 
     <div class="card" style="border:2px solid #d35400;">
       <div class="label" style="color:#d35400;">🛠️ Production Correction</div>
       <div style="font-size:11px;color:#888;margin-bottom:10px;">For pieces confirmed physically present that were never properly recorded — e.g. a submission that got blocked partway. Same rules apply as normal: a real weight is still required for anything going to Wastage.</div>
       <button class="btn" style="background:#d35400;color:#fff;width:100%;" onclick="openProductionCorrectionModal()">+ Add a correction</button>
-    </div>
-
-    <div class="card" style="border:2px solid #c0392b;">
-      <div class="label" style="color:#c0392b;">📬 System Watch — Findings Inbox</div>
-      <div style="font-size:11px;color:#888;margin-bottom:10px;">The watch compares every stock number against its last snapshot and reviews every fresh entry, every 2 hours — across ALL tabs and data, whether anyone opens them or not. Anything suspicious waits here permanently (with a downloadable proof image) until someone marks it handled. The watch never touches, voids, or flags any entry itself.</div>
-      ${renderFindingsInboxHTML()}
     </div>
 
   `;
@@ -6715,6 +6702,27 @@ function renderAdminPanel(){
 
   `;
   }
+
+  // Auto-Fix + System Watch Findings Inbox — visible to BOTH Admin and Owner (2026-07-30
+  // request). The resolution actions (Mark handled, bulk-clear, ambiguous-name picker) were
+  // never owner-gated internally — only the rendering was — and every action permanently
+  // stamps who performed it. Migration, Force Resync, Scrap Restoration, and Production
+  // Correction stay Owner-only above.
+  html += `
+    <div class="card" style="border:2px solid #16a085;background:#f0fdfa;">
+      <div class="label" style="color:#16a085;">🤖 Auto-Fix</div>
+      <div style="font-size:11px;color:#888;margin-bottom:12px;">Runs on its own — once when the app loads, then every 2 hours while it's open. Checks stock levels, batch names vs. original records, and account setup, and fixes what's safe to fix without asking. Anything that genuinely can't be inferred (no single correct answer to guess between) stays listed below instead of being touched.</div>
+      <button class="btn" style="background:#16a085;width:100%;" onclick="document.getElementById('autoFixResults').innerHTML='<div style=\\'font-size:12px;color:#888;\\'>Checking now...</div>';setTimeout(()=>{runAutoFixCycle();renderAutoFixResults();},50);">🔄 Check Now</button>
+      <div id="autoFixResults" style="margin-top:12px;">${renderAutoFixResultsHTML()}</div>
+    </div>
+
+    <div class="card" style="border:2px solid #c0392b;">
+      <div class="label" style="color:#c0392b;">📬 System Watch — Findings Inbox</div>
+      <div style="font-size:11px;color:#888;margin-bottom:10px;">The watch compares every stock number against its last snapshot and reviews every fresh entry, every 2 hours — across ALL tabs and data, whether anyone opens them or not. Anything suspicious waits here permanently (with a downloadable proof image) until someone marks it handled. The watch never touches, voids, or flags any entry itself.</div>
+      ${renderFindingsInboxHTML()}
+    </div>
+
+  `;
 
   html += `<div class="card" style="border:2px solid #5c3d1e;">
     <div class="label">👥 User Management</div>
