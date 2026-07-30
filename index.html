@@ -941,6 +941,18 @@ function isAdminOrOwner(){
   return currentUser && (currentUser.role==='admin' || currentUser.role==='owner');
 }
 
+// ==================== BACK-DATE LOCK ====================
+// Only Admin/Owner may enter a date other than today on data-entry forms. Everyone else's
+// date pickers render disabled (locked to today), AND — since UI can be bypassed — the value
+// is force-clamped to today again at read time before anything is saved.
+function dateLockAttrs(){
+  return isAdminOrOwner() ? '' : 'disabled title="Locked to today — only Admin/Owner can back-date"';
+}
+function resolveEntryDate(raw){
+  if(!isAdminOrOwner()) return new Date().toISOString().slice(0,10);
+  return raw;
+}
+
 function getDeptPerm(dept){
   if(!currentUser) return {canVoid:false, maxVoids:0, canFlag:false};
   const p = (currentUser.voidPermissions||{})[dept];
@@ -1019,8 +1031,8 @@ function renderDashboard(){
   // Voided & flagged entries — always visible to Admin/Owner here, regardless of which
   // department tab the entry originally came from or whether its batch is still open.
   if(isAdminOrOwner()){
-    const flaggedNow = (state.production||[]).filter(p=>p.flagged && !p.voided && isWithin24Hours(p.date,p.time));
-    const flaggedExpired = (state.production||[]).filter(p=>p.flagged && !p.voided && !isWithin24Hours(p.date,p.time));
+    const flaggedNow = (state.production||[]).filter(p=>p.flagged && !p.voided && isRecWithin24Hours(p));
+    const flaggedExpired = (state.production||[]).filter(p=>p.flagged && !p.voided && !isRecWithin24Hours(p));
     const voidedAll = [...(state.production||[])].filter(p=>p.voided).sort((a,b)=>(b.voidedDate||'').localeCompare(a.voidedDate||''));
 
     if(flaggedNow.length>0){
@@ -1274,7 +1286,7 @@ function renderProduction(){
         <div><div class="label">Number of Planks</div>
           <input type="number" min="1" placeholder="e.g. 50" id="planksInput" oninput="calcProduction()"/>
         </div>
-        <div><div class="label">Date</div><input type="date" id="prodDate" value="${new Date().toISOString().slice(0,10)}"/></div>
+        <div><div class="label">Date</div><input type="date" id="prodDate" value="${new Date().toISOString().slice(0,10)}" ${dateLockAttrs()}/></div>
         <div><div class="label">Notes</div><input type="text" placeholder="e.g. morning shift" id="prodNotes"/></div>
       </div>
       <div id="calcBox" class="hidden calc-box"></div>
@@ -1313,7 +1325,7 @@ function renderProduction(){
   // Persistent runs list — always visible regardless of whether the batch is still open
   // or has since been closed, so Void/Flag remain reachable at any time.
   const allSizeRuns = [...(state.production||[])]
-    .filter(p=>p.department==='wood_finishing' && isWithin24Hours(p.date,p.time))
+    .filter(p=>p.department==='wood_finishing' && isRecWithin24Hours(p))
     .sort((a,b)=>(b.date||'').localeCompare(a.date||'')||(b.id||0)-(a.id||0))
     .slice(0,20);
   if(allSizeRuns.length>0){
@@ -1596,6 +1608,8 @@ function recordProduction(){
   }
   const wp=(state.woodPieces||[]).find(w=>w.id===wpId);
   if(!wp) return;
+  // Back-date lock: non-Admin/Owner always records today, whatever the (disabled) input holds.
+  const entryDate = resolveEntryDate(prodDate?.value) || new Date().toISOString().slice(0,10);
 
   // ==================== PHASE 1: CHECK EVERYTHING — NO STATE MUTATION YET ====================
   // Previously, input stock was deducted immediately, before the quality-control fields below
@@ -1702,7 +1716,7 @@ function recordProduction(){
     const scrapKey=`${openBatch.batchNo}-Scrap-${wp.name}`;
     const idx=(state.scrapInventory||[]).findIndex(e=>e.size===rem&&e.batch===scrapKey);
     if(idx>=0){state.scrapInventory[idx].quantity+=planksUsed;}
-    else{state.scrapInventory=[...(state.scrapInventory||[]),{size:rem,quantity:planksUsed,batch:scrapKey,dateCreated:prodDate?.value||new Date().toISOString().slice(0,10)}];}
+    else{state.scrapInventory=[...(state.scrapInventory||[]),{size:rem,quantity:planksUsed,batch:scrapKey,dateCreated:entryDate}];}
   }
 
   // Add rejected pieces to scrap inventory — stored using the ORIGINAL piece size
@@ -1711,7 +1725,7 @@ function recordProduction(){
     const scrapKey = `${rootBatchNo}-Rejected-${wp.name}`;
     const idx=(state.scrapInventory||[]).findIndex(e=>e.size===salvageSize&&e.batch===scrapKey);
     if(idx>=0){state.scrapInventory[idx].quantity+=salvageQty;}
-    else{state.scrapInventory=[...(state.scrapInventory||[]),{size:salvageSize,quantity:salvageQty,batch:scrapKey,dateCreated:prodDate?.value||new Date().toISOString().slice(0,10),isRejectedStock:true}];}
+    else{state.scrapInventory=[...(state.scrapInventory||[]),{size:salvageSize,quantity:salvageQty,batch:scrapKey,dateCreated:entryDate,isRejectedStock:true}];}
     addLedgerEntry('scrap',`Rejected ${salvageSize}" pieces`,scrapKey,salvageQty,'IN',`Rejected ${wp.name} (${rejectionReason}) — usable for products < ${salvageSize}"`,String(salvageSize));
   }
 
@@ -1722,7 +1736,7 @@ function recordProduction(){
     // Also record immediately in wastage state so it shows in Wastage tab
     state.wastage=[...(state.wastage||[]),{
       id: Date.now()+Math.random(), time: new Date().toTimeString().slice(0,5), voided:false,
-      date:prodDate?.value||new Date().toISOString().slice(0,10),
+      date:entryDate,
       batchNo:openBatch.batchNo,
       plankSizeName:state.materials[size]?.name||`${size}" Planks`,
       woodPieceName:wp.name,
@@ -1740,7 +1754,7 @@ function recordProduction(){
 
   const run={
     id: runId,
-    date:prodDate?.value||new Date().toISOString().slice(0,10),
+    date:entryDate,
     time:new Date().toTimeString().slice(0,5),
     woodPieceName:wp.name, planksUsed,
     theoreticalPieces:pieces, piecesProduced:actualPieces,
@@ -1762,7 +1776,7 @@ function recordProduction(){
     else{
       state.finishedInventory=[...(state.finishedInventory||[]),{
         id:Date.now()+Math.random(), productName:wp.name, size:pieceSize,
-        batchNo:openBatch.batchNo, qty:actualPieces, dateAdded:prodDate?.value||new Date().toISOString().slice(0,10)
+        batchNo:openBatch.batchNo, qty:actualPieces, dateAdded:entryDate
       }];
     }
   }
@@ -2023,7 +2037,7 @@ function renderBrushDept(){
   }
 
   // Recent Brush Processing (last 24 hours) — flag then void, same mechanism as every other dept
-  const recentBrushLog = (state.brushProcessingLog||[]).filter(r=>isWithin24Hours(r.date, r.time)).sort((a,b)=>b.id-a.id);
+  const recentBrushLog = (state.brushProcessingLog||[]).filter(r=>isRecWithin24Hours(r)).sort((a,b)=>b.id-a.id);
   if(recentBrushLog.length>0){
     const canFlagHereBrush = canFlagInDept('Brush Dept');
     html += `<div class="card"><div class="label">📋 Recent Brush Processing (last 24 hours)</div>
@@ -2339,7 +2353,7 @@ function renderSocketDept(){
   }
 
   // Recent Socket Processing (last 24 hours) — flag then void, same mechanism as every other dept
-  const recentSocketLog = (state.socketProcessingLog||[]).filter(r=>isWithin24Hours(r.date, r.time)).sort((a,b)=>b.id-a.id);
+  const recentSocketLog = (state.socketProcessingLog||[]).filter(r=>isRecWithin24Hours(r)).sort((a,b)=>b.id-a.id);
   if(recentSocketLog.length>0){
     const canFlagHereSocket = canFlagInDept('Socket Dept');
     html += `<div class="card"><div class="label">📋 Recent Socket Processing (last 24 hours)</div>
@@ -2896,7 +2910,7 @@ function renderWastage(){
       <div style="font-size:12px;color:#888;margin-bottom:10px;">This will fold into the batch's total once its Wood Finishing batch is closed. Entries older than 24 hours can no longer be voided or flagged by anyone.</div>
       ${pendingBrushWastage.map(w=>{
         const isVoidedW = !!w.voided;
-        const withinWindow = isWithin24Hours(w.date, w.time);
+        const withinWindow = isRecWithin24Hours(w);
         const canVoidHereWastage = isAdminOrOwner() ? !!w.flagged : canVoidInDept('Wastage');
         return `
         <div style="padding:8px;background:${isVoidedW?'#f5f5f5':'#fff3cd'};border-radius:6px;margin-bottom:6px;border-left:3px solid ${isVoidedW?'#aaa':'#e67e22'};${isVoidedW?'opacity:0.6;':''}">
@@ -3012,7 +3026,7 @@ function renderWastage(){
             <div style="color:#aaa;font-size:10px;margin-bottom:6px;">Voiding a record here removes it from the live Wastage tab totals, but this batch's own KG summary above was fixed when the batch closed and won't recalculate.</div>
             ${batchQcEntries.map(w=>{
               const isVoidedW2 = !!w.voided;
-              const withinWindow2 = isWithin24Hours(w.date, w.time);
+              const withinWindow2 = isRecWithin24Hours(w);
               const canVoidHereWastage2 = isAdminOrOwner() ? !!w.flagged : canVoidInDept('Wastage');
               return `
               <div style="padding:4px 0;border-bottom:1px solid #f0e8de;${isVoidedW2?'opacity:0.55;':''}">
@@ -3118,7 +3132,7 @@ function renderMaterials(){
     <input type="text" placeholder="e.g. Ali Timber Traders" id="purchVendor" value="${state.newPurchVendor||''}" oninput="state.newPurchVendor=this.value" style="margin-bottom:10px;"/>
 
     <div class="label">Purchase Date</div>
-    <input type="date" id="purchDate" value="${state.newPurchDate||new Date().toISOString().slice(0,10)}" oninput="state.newPurchDate=this.value" style="margin-bottom:12px;"/>
+    <input type="date" id="purchDate" value="${isAdminOrOwner()?(state.newPurchDate||new Date().toISOString().slice(0,10)):new Date().toISOString().slice(0,10)}" ${dateLockAttrs()} oninput="state.newPurchDate=this.value" style="margin-bottom:12px;"/>
 
     <div style="font-size:11px;font-weight:700;color:#7a5230;text-transform:uppercase;margin-bottom:6px;">Sizes in this Lot (leave blank to skip)</div>
     ${PLANK_SIZES.map(s=>`
@@ -3198,7 +3212,7 @@ function renderMaterials(){
       <div><div class="label">Quantity</div>
         <input type="number" min="0" placeholder="0" id="socketQty" value="${state.newSocketQty||''}" oninput="state.newSocketQty=this.value"/></div>
       <div><div class="label">Date</div>
-        <input type="date" id="socketDate" value="${state.newSocketDate||new Date().toISOString().slice(0,10)}" oninput="state.newSocketDate=this.value"/></div>
+        <input type="date" id="socketDate" value="${isAdminOrOwner()?(state.newSocketDate||new Date().toISOString().slice(0,10)):new Date().toISOString().slice(0,10)}" ${dateLockAttrs()} oninput="state.newSocketDate=this.value"/></div>
     </div>
     <button class="btn" style="background:#9b59b6;width:100%;margin-top:8px;" onclick="addSocketStock()">Add Socket Stock</button>
     <div id="socketMsg" class="msg"></div>
@@ -3217,7 +3231,7 @@ function renderMaterials(){
       <div><div class="label">Quantity</div>
         <input type="number" min="0" placeholder="0" id="screwQty" value="${state.newScrewQty||''}" oninput="state.newScrewQty=this.value"/></div>
       <div style="grid-column:1/-1;"><div class="label">Date</div>
-        <input type="date" id="screwDate" value="${state.newScrewDate||new Date().toISOString().slice(0,10)}" oninput="state.newScrewDate=this.value"/></div>
+        <input type="date" id="screwDate" value="${isAdminOrOwner()?(state.newScrewDate||new Date().toISOString().slice(0,10)):new Date().toISOString().slice(0,10)}" ${dateLockAttrs()} oninput="state.newScrewDate=this.value"/></div>
     </div>
     <button class="btn" style="background:#7f8c8d;width:100%;margin-top:8px;" onclick="addScrewStock()">Add Screw Stock</button>
     <div id="screwMsg" class="msg"></div>
@@ -3559,7 +3573,7 @@ function renderSales(){
     // nothing to hand over to owner if buyer hasn't paid the accountant yet (Unpaid). Also hidden
     // once a sale is voided — nothing further should happen against a reversed transaction.
     const showCashBtn = isOwner && !isVoidedSale && (s.payment==='Paid'||s.payment==='Partial') && owedToOwner>0.001;
-    const withinWindowSale = isWithin24Hours(s.date, s.time);
+    const withinWindowSale = isRecWithin24Hours(s);
     const canVoidHereSales = isAdminOrOwner() ? !!s.flagged : canVoidInDept('Sales');
     html+=`<div style="padding:10px 0;border-bottom:1px solid #f0e8de;${isVoidedSale?'opacity:0.55;':''}">
       <div class="row" style="margin-bottom:4px;">
@@ -3663,7 +3677,7 @@ function openSaleModal(){
     <div class="label">Price per KG (Rs.)</div>
     <input type="number" id="salePrice" step="0.01" min="0" placeholder="e.g. 25.50"/>
     <div class="label">Sale Date</div>
-    <input type="date" id="saleDate" value="${new Date().toISOString().slice(0,10)}"/>
+    <input type="date" id="saleDate" value="${new Date().toISOString().slice(0,10)}" ${dateLockAttrs()}/>
     <div style="background:#e8f5e9;border-radius:6px;padding:8px;font-size:11px;color:#27ae60;font-weight:700;">✅ Payment collected in full at time of sale</div>`;
   document.getElementById('saleModal').classList.remove('hidden');
   updateSaleTypeAvailable();
@@ -3859,7 +3873,7 @@ async function confirmSale(){
   const buyer=document.getElementById('saleBuyer')?.value?.trim();
   const kg=+document.getElementById('saleKg')?.value;
   const price=+document.getElementById('salePrice')?.value;
-  const date=document.getElementById('saleDate')?.value;
+  const date=resolveEntryDate(document.getElementById('saleDate')?.value) || new Date().toISOString().slice(0,10);
   const err=document.getElementById('saleErr');
   const available = modal.stock.available[wasteType]||0;
   if(!wasteType){err.textContent="⚠️ Select a wastage type";err.classList.remove('hidden');return;}
@@ -3957,7 +3971,7 @@ function confirmCashReceived(){
   const receivedByOwner = sale.ownerReceivedAmount||0;
   const owedToOwner = Math.max(0, collectedByAccountant - receivedByOwner);
   const amt = +document.getElementById('cashReceivedAmt')?.value||0;
-  const date = document.getElementById('cashReceivedDate')?.value;
+  const date = resolveEntryDate(document.getElementById('cashReceivedDate')?.value);
   const err = document.getElementById('cashReceivedErr');
   if(!amt||amt<=0){err.textContent="⚠️ Enter an amount";err.classList.remove('hidden');return;}
   if(amt>owedToOwner+0.01){err.textContent=`⚠️ Cannot exceed amount owed to you: Rs.${owedToOwner.toFixed(0)}`;err.classList.remove('hidden');return;}
@@ -3983,6 +3997,32 @@ function isWithin24Hours(dateStr, timeStr){
   if(isNaN(entryDT.getTime())) return false;
   const hoursElapsed = (Date.now() - entryDT.getTime()) / (1000*60*60);
   return hoursElapsed >= 0 && hoursElapsed < 24;
+}
+
+// ==================== 24H WINDOW = CREATION TIME, NOT CLAIMED DATE ====================
+// Real incident (2026-07-30): a run was entered with YESTERDAY'S date selected. Because the
+// void/flag window was measured from the entry's CLAIMED date+time, the entry fell outside
+// the 24-hour window the instant it was saved — invisible in the flag list, un-voidable by
+// anyone. Back-dating was a loophole that let any entry skip review entirely.
+// Record ids are Date.now()+Math.random(), so the id itself permanently embeds the moment
+// the entry was ACTUALLY created — which is what accountability should run on. The claimed
+// date stays what the user picked (it's real business data); only the review window ignores it.
+function entryCreatedMs(rec){
+  if(rec && typeof rec.id==='number' && isFinite(rec.id) && rec.id>1e12 && rec.id<4e12){
+    return Math.floor(rec.id);
+  }
+  // Legacy/imported records without an epoch-style id: fall back to claimed date+time.
+  if(rec && rec.date){
+    const d = new Date(rec.date + 'T' + (rec.time||'00:00') + ':00');
+    if(!isNaN(d.getTime())) return d.getTime();
+  }
+  return null;
+}
+function isRecWithin24Hours(rec){
+  const t = entryCreatedMs(rec);
+  if(t===null) return false;
+  const h = (Date.now() - t) / (1000*60*60);
+  return h >= 0 && h < 24;
 }
 
 function findRunEverywhere(runId){
@@ -4620,7 +4660,7 @@ function applyFlagToKind(kind, runId, note){
 function openVoidModal(runId, kind){
   kind = kind || 'wood';
   const run0 = findVoidableEntry(kind, runId);
-  if(!run0 || !isWithin24Hours(run0.date, run0.time)){
+  if(!run0 || !isRecWithin24Hours(run0)){
     alert("⏰ This entry is more than 24 hours old and can no longer be voided by anyone, including Admin/Owner. This is a permanent rule with no exceptions.");
     return;
   }
@@ -4679,7 +4719,7 @@ function previewVoid(){
   if(!target) return;
   const kind = target.kind || 'wood';
   const run0 = findVoidableEntry(kind, target.runId);
-  if(!run0 || !isWithin24Hours(run0.date, run0.time)){
+  if(!run0 || !isRecWithin24Hours(run0)){
     document.getElementById('voidModal').classList.add('hidden');
     alert("⏰ This entry has just passed the 24-hour window and can no longer be voided.");
     return;
@@ -4723,7 +4763,7 @@ function confirmVoidFinal(){
   const { target, reason } = pending;
   const kind = target.kind || 'wood';
   const run0 = findVoidableEntry(kind, target.runId);
-  if(!run0 || !isWithin24Hours(run0.date, run0.time)){
+  if(!run0 || !isRecWithin24Hours(run0)){
     document.getElementById('voidPreviewModal').classList.add('hidden');
     alert("⏰ This entry has just passed the 24-hour window and can no longer be voided.");
     state.pendingVoid = null;
@@ -4747,7 +4787,7 @@ function confirmVoidFinal(){
 function openFlagModal(runId, kind){
   kind = kind || 'wood';
   const run0 = findVoidableEntry(kind, runId);
-  if(!run0 || !isWithin24Hours(run0.date, run0.time)){
+  if(!run0 || !isRecWithin24Hours(run0)){
     alert("⏰ This entry is more than 24 hours old and can no longer be flagged.");
     return;
   }
@@ -5637,7 +5677,7 @@ function addPurchaseBatch(){
   setTimeout(()=>{isSubmittingPurchase=false;}, 1000);
 
   const vendor = (document.getElementById('purchVendor')?.value || state.newPurchVendor || '').trim();
-  const date = document.getElementById('purchDate')?.value || state.newPurchDate || new Date().toISOString().slice(0,10);
+  const date = resolveEntryDate(document.getElementById('purchDate')?.value || state.newPurchDate) || new Date().toISOString().slice(0,10);
   const msg = document.getElementById('matMsg');
 
   if(!vendor){ if(msg){msg.textContent="⚠️ Enter vendor/supplier name";msg.className="msg err";} return; }
@@ -6348,7 +6388,7 @@ function addSocketStock(){
   const msg = document.getElementById('socketMsg');
   const socketType = (typeEl?.value||state.newSocketType||'').trim();
   const qty = +(qtyEl?.value||state.newSocketQty||0);
-  const date = dateEl?.value || state.newSocketDate || new Date().toISOString().slice(0,10);
+  const date = resolveEntryDate(dateEl?.value || state.newSocketDate) || new Date().toISOString().slice(0,10);
   if(!socketType){ if(msg){msg.textContent="⚠️ Enter socket type";msg.className="msg err";} return; }
   if(!qty||qty<=0){ if(msg){msg.textContent="⚠️ Enter quantity";msg.className="msg err";} return; }
   const batchNo = getNextBatchNo('SOB');
@@ -6369,7 +6409,7 @@ function addScrewStock(){
   const msg = document.getElementById('screwMsg');
   const vendor = (vendorEl?.value||state.newScrewVendor||'').trim();
   const qty = +(qtyEl?.value||state.newScrewQty||0);
-  const date = dateEl?.value || state.newScrewDate || new Date().toISOString().slice(0,10);
+  const date = resolveEntryDate(dateEl?.value || state.newScrewDate) || new Date().toISOString().slice(0,10);
   if(!vendor){ if(msg){msg.textContent="⚠️ Enter vendor name";msg.className="msg err";} return; }
   if(!qty||qty<=0){ if(msg){msg.textContent="⚠️ Enter quantity";msg.className="msg err";} return; }
   const batchNo = getNextBatchNo('SCB');
@@ -7340,7 +7380,7 @@ loadFromFirestore();
     <div class="label">Amount Received (Rs.)</div>
     <input type="number" id="cashReceivedAmt" step="0.01" min="0" placeholder="e.g. 500"/>
     <div class="label">Date</div>
-    <input type="date" id="cashReceivedDate" value=""/>
+    <input type="date" id="cashReceivedDate" value="" ${dateLockAttrs()}/>
     <div id="cashReceivedErr" class="msg err hidden"></div>
     <div style="display:flex;gap:10px;margin-top:12px;">
       <button class="btn btn-green" style="flex:1;" onclick="confirmCashReceived()">✅ Confirm</button>
