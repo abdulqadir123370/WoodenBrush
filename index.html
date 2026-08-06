@@ -7457,6 +7457,45 @@ function syncLedgerFromExistingData(){
 
   if((state.ledger||[]).length > 0) saveAll();
 }
+// ==================== ESC KEY CLOSES POPUPS ====================
+// Esc is a STRICT MIRROR of each popup's own Cancel/✕ button — it invokes the exact same
+// action that button does and nothing else, so it can never take a path a mouse user
+// couldn't already take, and can never save, skip, or alter any entry. Popups are checked
+// topmost-first (stacking order) and only ONE closes per press.
+// The review "Saving in..." popup is deliberately NOT Esc-closable: it manages a just-saved
+// entry's undo window on its own timer. While it's up, Esc does NOTHING at all — it must
+// not fall through and close a popup underneath it either.
+// Login and loading screens are also never Esc-closable.
+const ESC_CLOSABLE_POPUPS = [
+  { id:'adminModal',          close: ()=>{ document.getElementById('adminModal').style.display='none'; } },
+  { id:'flagModal',           close: ()=>{ document.getElementById('flagModal').classList.add('hidden'); } },
+  { id:'voidPreviewModal',    close: ()=>{ cancelVoidPreview(); } },
+  { id:'voidModal',           close: ()=>{ document.getElementById('voidModal').classList.add('hidden'); } },
+  { id:'batchTraceModal',     close: ()=>{ document.getElementById('batchTraceModal').classList.add('hidden'); } },
+  { id:'viewEntryModal',      close: ()=>{ document.getElementById('viewEntryModal').classList.add('hidden'); } },
+  { id:'cashReceivedModal',   close: ()=>{ document.getElementById('cashReceivedModal').classList.add('hidden'); } },
+  { id:'prodCorrectionModal', close: ()=>{ closeProductionCorrectionModal(); } },
+  { id:'saleModal',           close: ()=>{ document.getElementById('saleModal').classList.add('hidden'); } },
+  { id:'closeModal',          close: ()=>{ document.getElementById('closeModal').classList.add('hidden'); } },
+];
+function isPopupVisible(id){
+  const el = document.getElementById(id);
+  if(!el) return false;
+  if(id==='adminModal') return el.style.display!=='' && el.style.display!=='none';
+  return !el.classList.contains('hidden');
+}
+document.addEventListener('keydown', function(e){
+  if(e.key!=='Escape' || e.isComposing) return;
+  if(isPopupVisible('reviewPopup')) return; // countdown popup owns its own lifecycle — Esc is inert
+  for(const p of ESC_CLOSABLE_POPUPS){
+    if(isPopupVisible(p.id)){
+      e.preventDefault();
+      try{ p.close(); }catch(err){ console.error('Esc close failed for '+p.id+':', err); }
+      return; // exactly one popup per press
+    }
+  }
+});
+
 // Start app — load from Firestore first (real-time sync across devices)
 loadFromFirestore();
 </script>
