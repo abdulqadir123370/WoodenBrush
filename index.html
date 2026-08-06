@@ -242,6 +242,7 @@ const SK = {
   voidLog:"wbt_void_log",
   batchGenealogy:"wbt_batch_genealogy", brushProcessingLog:"wbt_brush_processing_log",
   socketProcessingLog:"wbt_socket_processing_log",
+  wastagePrices:"wbt_wastage_prices",     // Fixed per-KG sale prices per waste type — Admin/Owner set them in the Wastage tab; sale entry can't change them
   dataSnapshots:"wbt_data_snapshots",     // System Watch: timestamped record of every stock number, for detecting unexplained changes
   systemFindings:"wbt_system_findings"    // System Watch: permanent findings inbox with proof images, waits for the owner however long
 };
@@ -853,6 +854,7 @@ let state = {
   readyForSale: ld(SK.readyForSale, []),
   voidLog: ld(SK.voidLog, []),
   batchGenealogy: ld(SK.batchGenealogy, {}),
+  wastagePrices: ld(SK.wastagePrices, []),
   brushProcessingLog: ld(SK.brushProcessingLog, []),
   socketProcessingLog: ld(SK.socketProcessingLog, []),
   saleModal: null,
@@ -887,6 +889,7 @@ function saveAll(){
   sv(SK.readyForSale,state.readyForSale);
   sv(SK.voidLog,state.voidLog);
   sv(SK.batchGenealogy,state.batchGenealogy);
+  sv(SK.wastagePrices,state.wastagePrices);
   sv(SK.brushProcessingLog,state.brushProcessingLog);
   sv(SK.dataSnapshots,state.dataSnapshots);
   sv(SK.systemFindings,state.systemFindings);
@@ -2808,7 +2811,8 @@ function renderWastage(){
   const pendingBrushWastage = (state.wastage||[]).filter(w=>w.type==='BrushDeptWastage' && !closedBatchNos.has(w.batchNo));
   const pendingBrushWastageKg = pendingBrushWastage.filter(w=>!w.voided).reduce((s,w)=>s+(w.wastageKg||0),0);
 
-  let html=`<div class="card" style="background:#fff8f0;border:2px solid #e67e22;">
+  let html=renderWastagePriceCardHTML();
+  html+=`<div class="card" style="background:#fff8f0;border:2px solid #e67e22;">
     <div class="label">🗑️ Wastage by Type</div>
     <div class="grid3" style="margin-bottom:14px;">
       ${WASTE_TYPES.map(t=>`
@@ -3586,7 +3590,7 @@ function renderSales(){
           <div style="font-size:10px;color:${isVoidedSale?'#e74c3c':payColor};font-weight:700;">${isVoidedSale?'🚫 VOIDED':`${payIcon} ${s.payment}`}</div>
         </div>
       </div>
-        <div style="font-size:11px;color:#888;${isVoidedSale?'text-decoration:line-through;':''}">${s.kgSold} KG @ Rs.${s.pricePerKg}/KG</div>
+        <div style="font-size:11px;color:#888;${isVoidedSale?'text-decoration:line-through;':''}">${s.kgSold} KG @ Rs.${s.pricePerKg}/KG${s.weighSlipDate?` · slip dated ${s.weighSlipDate}`:''}</div>
       ${s.weighSlipUrl?`<a href="${s.weighSlipUrl}" ${String(s.weighSlipUrl).startsWith('data:')?`download="weight-slip-${String(s.id).replace(/[^0-9]/g,'')}.jpg"`:`target="_blank" rel="noopener"`} style="font-size:11px;color:#3498db;font-weight:700;text-decoration:none;">📷 View Weight Slip</a>${s.manualOverride?` <span style="color:#c0392b;font-weight:700;">(entered manually by ${s.manualOverrideBy||'Admin'} — slip was unreadable${s.weighSlipReadKg!=null?`, read as ${s.weighSlipReadKg} KG`:''})</span>`:(s.weighSlipReadKg!=null && Math.abs(s.weighSlipReadKg-s.kgSold)>0.05?` <span style="color:#e67e22;">(slip read ${s.weighSlipReadKg} KG)</span>`:'')}`:(s.manualOverride?`<span style="color:#c0392b;font-weight:700;">📷 No photo saved — entered manually by ${s.manualOverrideBy||'Admin'} (legacy record)</span>`:'')}
       ${s.flagged&&!isVoidedSale?`<div style="font-size:11px;color:#3498db;margin-top:6px;background:#e8f4fd;border-radius:6px;padding:6px 8px;">🚩 Flagged by ${s.flaggedBy} on ${s.flaggedDate} ${s.flaggedTime||''}<br/><span style="font-style:italic;">"${s.flagNote}"</span></div>`:''}
       ${isVoidedSale?`<div style="font-size:11px;color:#e74c3c;margin-top:6px;">Voided by ${s.voidedBy} on ${s.voidedDate}<br/><span style="font-style:italic;">"${s.voidedReason}"</span></div>`:''}
@@ -3648,9 +3652,87 @@ function getWasteTypeStock(){
   return {produced, sold, available};
 }
 
+// ==================== FIXED WASTAGE PRICES ====================
+// One fixed price per KG per waste type, set ONLY by Admin/Owner from the Wastage tab.
+// The sale form displays it read-only — nobody (including Admin) can change the price
+// mid-entry. Every sale stores its own pricePerKg at the moment of sale, so changing a
+// price later affects FUTURE sales only; past entries keep the price they were sold at.
+function getWastagePriceRec(type){
+  return (state.wastagePrices||[]).find(p=>p && p.wasteType===type && !p.voided);
+}
+function getWastagePrice(type){
+  const r = getWastagePriceRec(type);
+  return (r && +r.pricePerKg>0) ? +r.pricePerKg : null;
+}
+function saveWastagePrices(){
+  if(!isAdminOrOwner()){ alert('Only Admin/Owner can change wastage prices.'); return; }
+  const now = new Date().toISOString();
+  const by = currentUser?.name || 'Admin';
+  const changes = [];
+  WASTE_TYPES.forEach(t=>{
+    const el = document.getElementById('wpPrice_'+t);
+    if(!el) return;
+    const raw = el.value;
+    if(raw==='' || raw===null) return;            // untouched/empty = no change
+    const val = +raw;
+    if(!(val>0)){ changes.push({t, err:true}); return; }
+    const rec = getWastagePriceRec(t);
+    const oldVal = rec ? +rec.pricePerKg : null;
+    if(rec && Math.abs(oldVal - val) < 0.001) return; // unchanged
+    if(rec){
+      rec.history = [...(rec.history||[]), {pricePerKg: oldVal, setBy: rec.updatedBy||'?', at: rec.updatedAt||null}];
+      rec.pricePerKg = val; rec.updatedBy = by; rec.updatedAt = now;
+    } else {
+      state.wastagePrices = [...(state.wastagePrices||[]), {
+        id: Date.now()+Math.random(), wasteType: t, pricePerKg: val,
+        updatedBy: by, updatedAt: now, history: []
+      }];
+    }
+    changes.push({t, oldVal, val});
+  });
+  const msgEl = document.getElementById('wpPriceMsg');
+  const bad = changes.filter(c=>c.err);
+  const good = changes.filter(c=>!c.err);
+  if(bad.length){ if(msgEl){msgEl.textContent='⚠️ Price must be greater than 0 for: '+bad.map(c=>c.t).join(', '); msgEl.className='msg err';} return; }
+  if(good.length===0){ if(msgEl){msgEl.textContent='No changes to save.'; msgEl.className='msg';} return; }
+  saveAll();
+  if(msgEl){
+    msgEl.textContent = '✅ Saved: ' + good.map(c=>c.t+' '+(c.oldVal!=null?('Rs.'+c.oldVal+' → '):'')+'Rs.'+c.val).join(' · ') + ' — future sales only; past entries keep their original price.';
+    msgEl.className='msg ok';
+  }
+  setTimeout(re, 1500);
+}
+function renderWastagePriceCardHTML(){
+  const isAdmin = isAdminOrOwner();
+  let rows = WASTE_TYPES.map(t=>{
+    const rec = getWastagePriceRec(t);
+    const price = getWastagePrice(t);
+    const stamp = rec && rec.updatedAt ? `<div style="font-size:10px;color:#aaa;">set by ${rec.updatedBy||'?'} · ${String(rec.updatedAt).slice(0,10)}${(rec.history||[]).length?` · changed ${(rec.history||[]).length+1}×`:''}</div>` : '';
+    if(isAdmin){
+      return `<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+        <div style="flex:1;"><b style="font-size:13px;">${t}</b>${stamp}</div>
+        <div style="width:130px;"><input type="number" id="wpPrice_${t}" step="0.01" min="0.01" value="${price!=null?price:''}" placeholder="not set" style="margin-bottom:0;"/></div>
+        <div style="font-size:11px;color:#888;">Rs./KG</div>
+      </div>`;
+    }
+    return `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+      <div><b style="font-size:13px;">${t}</b>${stamp}</div>
+      <div style="font-weight:700;color:${price!=null?'#27ae60':'#e74c3c'};">${price!=null?('Rs.'+price+' / KG'):'not set'}</div>
+    </div>`;
+  }).join('');
+  return `<div class="card" style="border:2px solid #27ae60;">
+    <div class="label" style="color:#27ae60;">💰 Wastage Sale Prices (fixed per KG)</div>
+    <div style="font-size:11px;color:#888;margin-bottom:10px;">${isAdmin
+      ? 'Only Admin/Owner can change these, and only here — the price field on the sale form is locked for everyone. Changing a price affects FUTURE sales only; every past sale permanently keeps the price it was actually sold at.'
+      : 'Set by Admin/Owner. The sale form uses these automatically — the price cannot be changed while recording a sale.'}</div>
+    ${rows}
+    ${isAdmin?`<button class="btn btn-green btn-full" onclick="saveWastagePrices()">💾 Save Prices</button><div id="wpPriceMsg" class="msg"></div>`:''}
+  </div>`;
+}
+
 function openSaleModal(){
   const stock = getWasteTypeStock();
-  state.saleModal = {stock, slipFile:null, slipUrl:null, slipReadKg:null, slipUploadPromise:null, slipUploadFailed:false, readStatus:'none', manualOverrideUsed:false};
+  state.saleModal = {stock, slipFile:null, slipUrl:null, slipReadKg:null, slipDate:null, slipUploadPromise:null, slipUploadFailed:false, readStatus:'none', manualOverrideUsed:false};
   document.getElementById('saleModalTitle').textContent = `💰 Sell Wastage`;
   document.getElementById('saleModalSub').textContent = `Choose a wastage type and enter sale details`;
   document.getElementById('saleErr').classList.add('hidden');
@@ -3674,8 +3756,9 @@ function openSaleModal(){
       <div style="font-size:11px;color:#a0522d;margin-bottom:6px;">⚠️ This slip couldn't be confidently read. As ${isAdmin?'Admin/Owner':'a regular user'}, ${isAdmin?'you may enter the weight manually — this gets recorded as an admin override, permanently, on this sale.':'you cannot enter this manually. Please retake a clearer photo, or ask an Admin/Owner to complete this sale.'}</div>
       ${isAdmin?`<button type="button" class="btn" style="background:#e67e22;font-size:12px;" onclick="enableManualKgOverride()">🔓 Enter KG manually (Admin override)</button>`:''}
     </div>
-    <div class="label">Price per KG (Rs.)</div>
-    <input type="number" id="salePrice" step="0.01" min="0" placeholder="e.g. 25.50"/>
+    <div class="label">Price per KG (Rs.) <span style="color:#888;font-weight:400;text-transform:none;">— fixed, set by Admin in Wastage tab</span></div>
+    <input type="number" id="salePrice" readonly style="background:#f0f0f0;color:#555;" placeholder="No price set for this type"/>
+    <div id="salePriceNote" style="font-size:11px;margin:2px 0 8px;"></div>
     <div class="label">Sale Date</div>
     <input type="date" id="saleDate" value="${new Date().toISOString().slice(0,10)}" ${dateLockAttrs()}/>
     <div style="background:#e8f5e9;border-radius:6px;padding:8px;font-size:11px;color:#27ae60;font-weight:700;">✅ Payment collected in full at time of sale</div>`;
@@ -3778,8 +3861,21 @@ async function readSlipAndAutofill(file){
     }
     state.saleModal.readStatus = 'confirmed';
     state.saleModal.slipReadKg = data.netWeightKg;
+    // Date printed on the slip (if the reader service returns one). Stored on the sale as
+    // evidence of when the weighing actually happened. Only a high-confidence, sane-looking
+    // date is used; it auto-fills the (unlocked) date field for Admin/Owner — for everyone
+    // else the entry date stays locked to today, but the slip's own date is still saved.
+    let slipDateNote = '';
+    if(data.slipDate && /^\d{4}-\d{2}-\d{2}$/.test(String(data.slipDate)) && !isNaN(new Date(data.slipDate).getTime())){
+      state.saleModal.slipDate = String(data.slipDate);
+      slipDateNote = ` · slip dated ${state.saleModal.slipDate}`;
+      if(data.slipDateConfidence==='high' && isAdminOrOwner()){
+        const dEl = document.getElementById('saleDate');
+        if(dEl && !dEl.disabled){ dEl.value = state.saleModal.slipDate; slipDateNote += ' (date field auto-filled)'; }
+      }
+    }
     if(kgInput){ kgInput.value = data.netWeightKg; kgInput.readOnly = true; kgInput.style.background=''; kgInput.style.color=''; }
-    if(statusEl) statusEl.innerHTML = `<span style="color:#27ae60;font-weight:700;">✅ Read ${data.netWeightKg} KG from slip (high confidence).</span>`;
+    if(statusEl) statusEl.innerHTML = `<span style="color:#27ae60;font-weight:700;">✅ Read ${data.netWeightKg} KG from slip (high confidence)${slipDateNote}.</span>`;
     const box = document.getElementById('saleAdminOverrideBox');
     if(box) box.style.display = 'none';
   }catch(e){
@@ -3859,6 +3955,15 @@ function updateSaleTypeAvailable(){
   if(note) note.textContent = `Available to sell: ${stock.available[type].toFixed(1)} KG`;
   const kgInput = document.getElementById('saleKg');
   if(kgInput) kgInput.max = stock.available[type];
+  // Fixed price display — read-only, sourced from the Admin-set catalog, never editable here.
+  const priceInput = document.getElementById('salePrice');
+  const priceNote = document.getElementById('salePriceNote');
+  const fixedPrice = getWastagePrice(type);
+  if(priceInput) priceInput.value = fixedPrice!=null ? fixedPrice : '';
+  if(priceNote){
+    if(fixedPrice!=null){ priceNote.innerHTML = `<span style="color:#27ae60;">Rs.${fixedPrice} / KG (fixed)</span>`; }
+    else { priceNote.innerHTML = `<span style="color:#e74c3c;font-weight:700;">⚠️ No price set for ${type} — an Admin/Owner must set it in the Wastage tab before this sale can be recorded.</span>`; }
+  }
 }
 
 let isSubmittingSale = false;
@@ -3872,7 +3977,9 @@ async function confirmSale(){
   const wasteType=document.getElementById('saleWasteType')?.value;
   const buyer=document.getElementById('saleBuyer')?.value?.trim();
   const kg=+document.getElementById('saleKg')?.value;
-  const price=+document.getElementById('salePrice')?.value;
+  // Price is NEVER read from the form — the field is display-only. The fixed Admin-set
+  // catalog price is the single source, so nothing typed or injected can alter it.
+  const price = getWastagePrice(document.getElementById('saleWasteType')?.value);
   const date=resolveEntryDate(document.getElementById('saleDate')?.value) || new Date().toISOString().slice(0,10);
   const err=document.getElementById('saleErr');
   const available = modal.stock.available[wasteType]||0;
@@ -3889,7 +3996,7 @@ async function confirmSale(){
   }
   if(!kg||kg<=0){err.textContent="⚠️ Enter KG to sell";err.classList.remove('hidden');return;}
   if(kg>available+0.001){err.textContent=`⚠️ Max available for ${wasteType} is ${available.toFixed(1)} KG`;err.classList.remove('hidden');return;}
-  if(!price||price<=0){err.textContent="⚠️ Enter price per KG";err.classList.remove('hidden');return;}
+  if(!price||price<=0){err.textContent=`⚠️ No fixed price set for ${wasteType} — an Admin/Owner must set it in the Wastage tab first.`;err.classList.remove('hidden');return;}
   if(!date){err.textContent="⚠️ Enter sale date";err.classList.remove('hidden');return;}
 
   // Every slip photo must genuinely be saved — wait properly for the upload rather than
@@ -3922,6 +4029,7 @@ async function confirmSale(){
     payment:'Paid', date, time: new Date().toTimeString().slice(0,5), datetime:new Date().toISOString(),
     voided:false,
     weighSlipUrl: modal.slipUrl, weighSlipReadKg: modal.slipReadKg ?? null,
+    weighSlipDate: modal.slipDate ?? null,
     manualOverride: !!modal.manualOverrideUsed,
     manualOverrideBy: modal.manualOverrideUsed ? (currentUser?.name||'Admin') : null,
   }];
