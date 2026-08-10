@@ -76,6 +76,11 @@ input,select{width:100%;padding:8px 10px;border:1px solid #d4b896;border-radius:
 .modal{background:#fff;border-radius:12px;padding:24px;max-width:400px;width:100%;max-height:90vh;overflow-y:auto;}
 .reset-bar{padding:12px 16px;display:flex;justify-content:space-between;align-items:center;color:#fff;}
 .wastage-card-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;font-size:11px;background:#f9f5f0;border-radius:6px;padding:10px;}
+/* OFFLINE ENTRY LOCK — while the device has no live connection, all action buttons are
+   disabled (viewing/navigation stays). Enforced by body.offline-lock, driven by JS below. */
+body.offline-lock .btn,
+body.offline-lock .select-batch-btn,
+body.offline-lock .size-btn{pointer-events:none;opacity:0.45;}
 .hidden{display:none;}
 .aaa{color:#aaa;}
 .green{color:#27ae60;}
@@ -112,7 +117,7 @@ input,select{width:100%;padding:8px 10px;border:1px solid #d4b896;border-radius:
 </div>
 
 <div id="offlineWarning" class="hidden" style="background:#fef9e7;color:#9a7d0a;padding:10px 14px;font-size:12px;font-weight:600;text-align:center;border-bottom:2px solid #f1c40f;">
-  📶 Couldn't reach the server — you're working from this device's saved copy. Your entries are safely queued on this device and will sync automatically when the connection returns.
+  📶 Couldn't reach the server — showing this device's last saved copy for VIEWING ONLY. Entries are disabled while offline and unlock automatically when the connection returns.
 </div>
 
 <!-- Admin Modal -->
@@ -231,7 +236,7 @@ input,select{width:100%;padding:8px 10px;border:1px solid #d4b896;border-radius:
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1786351272887;
+const APP_BUILD = 1786359013427;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -329,11 +334,12 @@ try{
   }
   fbDb = firebase.firestore();
   if(firebase.storage) fbStorage = firebase.storage();
-  // Offline persistence: writes made without connection are durably queued (survives reload)
-  // and auto-sent on reconnect. Reads come instantly from local cache while offline.
-  fbDb.enablePersistence({synchronizeTabs:true}).catch(err=>{
-    console.warn('Firestore persistence unavailable (private mode or old browser):', err && err.code);
-  });
+  // OFFLINE POLICY (Owner decision, 10/8/2026): this app is ONLINE-ENTRY-ONLY. Firestore's
+  // cross-reload offline write queue is deliberately NOT enabled — it was the mechanism by
+  // which a long-offline device could replay stale queued writes over newer data on
+  // reconnect (last-write-wins). With no durable queue, and with the entry lock below that
+  // disables all entry while the connection is down, that entire failure class is gone.
+  // Viewing still works offline from the device's saved copy; entering does not.
 }catch(e){ console.error('Firebase init failed:', e); }
 
 let syncTimeout = null;
@@ -472,6 +478,7 @@ function doFirestoreSync(){
       const failed = results.filter(r=>r.status==='rejected');
       if(failed.length===0){
         syncStatus='saved'; syncConsecutiveFailures=0; lastSyncError=null;
+        if(typeof setOfflineLock==='function') setOfflineLock(false); // a real commit proves the connection
         updateSyncIndicator();
         setTimeout(()=>{syncStatus='idle';updateSyncIndicator();},2000);
         return;
@@ -480,6 +487,7 @@ function doFirestoreSync(){
       syncConsecutiveFailures++;
       lastSyncError = failed[0].reason;
       updateSyncIndicator();
+      if(typeof refreshOfflineLock==='function') refreshOfflineLock(true);
       scheduleSyncRetry();
       throw lastSyncError;
     });
@@ -818,6 +826,49 @@ async function migrateLegacyDataNow(){
   await metaRef.set({migrated:true, at:new Date().toISOString(), by: currentUser?.loginName||'unknown', b:APP_BUILD});
   alert('✅ Migration complete. Please tell everyone else to refresh the app now.');
 }
+
+// ==================== OFFLINE ENTRY LOCK ====================
+// The other half of the online-entry-only policy: the moment the device loses its live
+// connection, every entry/action button greys out and a banner says viewing-only; the moment
+// the server is reachable again, everything unlocks by itself. Because nothing can be
+// ENTERED offline, nothing can ever be queued, replayed, or clobbered — the last-write-wins
+// residual is eliminated at the source instead of being cleaned up after.
+let offlineLockOn = false;
+let lastProbeTs = 0;
+function setOfflineLock(on){
+  if(on===offlineLockOn) return;
+  offlineLockOn = on;
+  document.body.classList.toggle('offline-lock', on);
+  let bar = document.getElementById('offlineLockBar');
+  if(on){
+    if(!bar){
+      bar = document.createElement('div');
+      bar.id = 'offlineLockBar';
+      bar.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:#7f8c8d;color:#fff;padding:9px 14px;font-size:12px;font-weight:700;text-align:center;z-index:995;';
+      bar.textContent = '📵 No live connection — VIEWING ONLY. Entries are disabled until the connection returns (they unlock automatically). Nothing entered on this device can be lost or overwrite anyone else\u2019s work.';
+      document.body.appendChild(bar);
+    }
+  } else if(bar){ bar.remove(); }
+}
+async function probeServerReachable(){
+  if(!fbDb) return false;
+  try{
+    await fbDb.collection(META_COLLECTION).doc('config').get({source:'server'});
+    return true;
+  }catch(e){ return false; }
+}
+async function refreshOfflineLock(force){
+  if(navigator.onLine===false){ setOfflineLock(true); return; }
+  // Online per the browser — verify the server actually answers, throttled to 30s unless forced.
+  if(!force && Date.now()-lastProbeTs < 30000) return;
+  lastProbeTs = Date.now();
+  const ok = await probeServerReachable();
+  setOfflineLock(!ok);
+}
+window.addEventListener('offline', ()=>setOfflineLock(true));
+window.addEventListener('online', ()=>refreshOfflineLock(true));
+setInterval(()=>{ if(offlineLockOn || navigator.onLine===false) refreshOfflineLock(true); }, 20000);
+setTimeout(()=>refreshOfflineLock(true), 6000);
 
 // Shown when we couldn't reach Firestore on startup. With offline persistence enabled,
 // anything done in this state is still durably queued on the device and will sync
