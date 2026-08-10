@@ -229,6 +229,10 @@ input,select{width:100%;padding:8px 10px;border:1px solid #d4b896;border-radius:
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 
 <script>
+// Bumped automatically on every delivery — the auto-updater compares this against the copy
+// currently on GitHub Pages and swaps itself out when a newer one exists.
+const APP_BUILD = 1786348536626;
+
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
   production:"wbt_production", scrapInventory:"wbt_scrap_inventory",
@@ -421,7 +425,7 @@ function doFirestoreSync(){
       const shadow = syncShadow[stateKey] || {};
       Object.entries(recs).forEach(([docId, rec])=>{
         const j = JSON.stringify(rec);
-        if(shadow[docId] !== j) ops.push({t:'set', col, docId, data:{v:j, updatedAt:now}, stateKey, j});
+        if(shadow[docId] !== j) ops.push({t:'set', col, docId, data:{v:j, updatedAt:now, b:APP_BUILD}, stateKey, j});
       });
       Object.keys(shadow).forEach(docId=>{
         if(!(docId in recs)) ops.push({t:'del', col, docId, stateKey});
@@ -697,11 +701,55 @@ function loadFromFirestore(){
   if(!fbDb){ startApp(false); return; }
 
   firebase.auth().signInAnonymously().then(()=>{
+    attachMinBuildListener();
     attachFirestoreListeners(()=>{ cloudDataConfirmed = true; startApp(false); });
   }).catch(err=>{
     console.error('Firebase anonymous sign-in failed:', err);
     startApp(true);
   });
+}
+
+
+// ==================== REMOTE MINIMUM-BUILD KILL SWITCH ====================
+// The Owner can force every connected device onto the latest build WITHOUT visiting any of
+// them: in the Firebase console, create/edit document  wbt_meta/config  with a numeric field
+//   minBuild: <build number>
+// Every device running this code sees the change in real time (it's a live listener). Any
+// device whose APP_BUILD is below minBuild instantly gets a full-screen wall that blocks all
+// use, flushes any pending sync so nothing is lost, and pulls the new version itself. Devices
+// already on/above minBuild are completely unaffected. Clearing the field lifts the wall.
+// (This lever only exists in builds that contain this code — it cannot reach builds older
+// than itself. For those, the one-time WhatsApp "close and reopen the tracker" round is the
+// only bridge; from this build onward, the lever works forever.)
+function attachMinBuildListener(){
+  if(!fbDb) return;
+  try{
+    fbDb.collection(META_COLLECTION).doc('config').onSnapshot(doc=>{
+      const minBuild = doc.exists ? +((doc.data()||{}).minBuild||0) : 0;
+      if(minBuild && APP_BUILD < minBuild){ showMinBuildWall(minBuild); }
+      else { hideMinBuildWall(); }
+    }, err=>{ /* ignore — the wall is an extra safety, never a point of failure */ });
+  }catch(e){}
+}
+function showMinBuildWall(minBuild){
+  if(document.getElementById('minBuildWall')) return;
+  try{ flushPendingSync(); }catch(e){}
+  const d = document.createElement('div');
+  d.id = 'minBuildWall';
+  d.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:#5c3d1e;z-index:2000;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#fff;text-align:center;padding:24px;';
+  d.innerHTML = `
+    <div style="font-size:44px;margin-bottom:14px;">🔄</div>
+    <div style="font-size:19px;font-weight:700;margin-bottom:8px;">This copy of the app is outdated</div>
+    <div style="font-size:13px;opacity:0.85;max-width:340px;margin-bottom:22px;">The Owner requires a newer version before any more entries can be made on this device. Nothing you saved is lost — tap below and the latest version loads by itself.</div>
+    <button onclick="location.replace(location.pathname + '?v=' + Date.now())" style="background:#27ae60;color:#fff;border:none;border-radius:10px;padding:14px 26px;font-size:16px;font-weight:700;cursor:pointer;">⬇️ Update now</button>
+    <div style="font-size:11px;opacity:0.6;margin-top:18px;">This device: build ${APP_BUILD}</div>`;
+  document.body.appendChild(d);
+  // Also try to swap automatically after a short moment if nobody taps.
+  setTimeout(()=>{ if(document.getElementById('minBuildWall')) location.replace(location.pathname + '?v=' + Date.now()); }, 20000);
+}
+function hideMinBuildWall(){
+  const d = document.getElementById('minBuildWall');
+  if(d) d.remove();
 }
 
 // ---- Manual, one-time migration from the old whole-list format ----
@@ -755,14 +803,14 @@ async function migrateLegacyDataNow(){
     let batch = fbDb.batch(); let n=0;
     for(const [docId, rec] of entries){
       if(docId===null || docId===undefined) continue;
-      batch.set(fbDb.collection(col).doc(String(docId)), {v:JSON.stringify(rec), updatedAt:new Date().toISOString()});
+      batch.set(fbDb.collection(col).doc(String(docId)), {v:JSON.stringify(rec), updatedAt:new Date().toISOString(), b:APP_BUILD});
       n++;
       if(n>=400){ await batch.commit(); batch = fbDb.batch(); n=0; }
     }
     if(n>0) await batch.commit();
   }
 
-  await metaRef.set({migrated:true, at:new Date().toISOString(), by: currentUser?.loginName||'unknown'});
+  await metaRef.set({migrated:true, at:new Date().toISOString(), by: currentUser?.loginName||'unknown', b:APP_BUILD});
   alert('✅ Migration complete. Please tell everyone else to refresh the app now.');
 }
 
@@ -7496,6 +7544,76 @@ document.addEventListener('keydown', function(e){
   }
 });
 
+// ==================== AUTO-UPDATE (kills the stale-cache problem for good) ====================
+// Every running copy periodically fetches the live index.html from GitHub Pages with the HTTP
+// cache fully bypassed, reads its APP_BUILD, and — if the server has a newer build — swaps
+// itself out by navigating to index.html?v=<newBuild>. The unique URL defeats every cache
+// layer, so a device can be stale for at most one check interval, then self-heals. Nobody
+// ever needs to clear site data or hard-refresh again.
+// SAFETY: the swap NEVER happens mid-work. It waits until: no popup is open, sync is idle with
+// nothing queued, no form field is focused with content, and the user has been inactive for a
+// while. A reload in that state loses nothing — all data lives in Firestore/localStorage.
+const _pageLoadTs = Date.now();
+let _lastUserActivity = Date.now();
+let _pendingLiveBuild = null;
+let _updateBannerShown = false;
+['keydown','pointerdown','input'].forEach(ev=>{
+  document.addEventListener(ev, ()=>{ _lastUserActivity = Date.now(); }, {capture:true, passive:true});
+});
+function anyPopupOpen(){
+  const overlays = document.querySelectorAll('.modal-overlay');
+  for(const o of overlays){ if(!o.classList.contains('hidden')) return true; }
+  const am = document.getElementById('adminModal');
+  if(am && am.style.display!=='' && am.style.display!=='none') return true;
+  return false;
+}
+function safeToSwapNow(){
+  if(anyPopupOpen()) return false;
+  if(syncStatus==='saving' || syncStatus==='error' || syncTimeout) return false;
+  const ae = document.activeElement;
+  if(ae && /^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName) && ae.value) return false;
+  // Fresh page, untouched: swap immediately. Otherwise require 45s of inactivity.
+  const untouchedFreshLoad = (Date.now()-_pageLoadTs < 30000) && (_lastUserActivity <= _pageLoadTs+1500);
+  if(untouchedFreshLoad) return true;
+  return (Date.now()-_lastUserActivity) >= 45000;
+}
+function showUpdateBanner(){
+  if(_updateBannerShown) return;
+  _updateBannerShown = true;
+  const d = document.createElement('div');
+  d.id = 'updateBanner';
+  d.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:#16a085;color:#fff;padding:8px 14px;font-size:12px;font-weight:600;text-align:center;z-index:997;';
+  d.textContent = '🔄 A new version is ready — it will apply by itself the moment you\'re not in the middle of something. No action needed.';
+  document.body.appendChild(d);
+}
+function trySwapToLiveBuild(){
+  if(_pendingLiveBuild===null) return;
+  // Loop protection: never redirect twice to the same target build in one session.
+  try{ if(sessionStorage.getItem('wbt_swapped_to')===String(_pendingLiveBuild)) return; }catch(e){}
+  if(!safeToSwapNow()){ showUpdateBanner(); setTimeout(trySwapToLiveBuild, 20000); return; }
+  try{ sessionStorage.setItem('wbt_swapped_to', String(_pendingLiveBuild)); }catch(e){}
+  location.replace(location.pathname + '?v=' + _pendingLiveBuild);
+}
+async function checkForNewBuild(){
+  try{
+    const url = new URL('index.html', location.origin + location.pathname);
+    const resp = await fetch(url.href, {cache:'no-store'});
+    if(!resp.ok) return;
+    const text = await resp.text();
+    const m = text.match(/const APP_BUILD = (\d+);/);
+    if(!m) return;
+    const live = +m[1];
+    if(live > APP_BUILD){
+      console.log('Auto-update: server has build', live, '— this device runs', APP_BUILD);
+      _pendingLiveBuild = live;
+      trySwapToLiveBuild();
+    }
+  }catch(e){ /* offline or file:// copy — try again next interval */ }
+}
+setTimeout(checkForNewBuild, 8000);
+setInterval(checkForNewBuild, 10*60*1000);
+document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='visible') checkForNewBuild(); });
+
 // Start app — load from Firestore first (real-time sync across devices)
 loadFromFirestore();
 </script>
@@ -7668,17 +7786,23 @@ if ('serviceWorker' in navigator) {
     // break after the password-hashing update: some devices kept running old login code
     // against the new data format. Network-first always tries to get the latest version first
     // and only falls back to the cached copy if there's genuinely no connection.
-    const CACHE = 'brush-tracker-v2';
+    // v3: fetch(e.request) alone still consults the browser's ordinary HTTP cache — which is
+    // exactly how "network-first" devices kept serving a stale index.html anyway. cache:'no-cache'
+    // forces revalidation with GitHub on every load (cheap: unchanged files answer 304), and the
+    // saved copy is used only when there's genuinely no connection. Non-GET requests (Firestore
+    // writes etc.) are left completely alone.
+    const CACHE = 'brush-tracker-v3';
     self.addEventListener('install', e => { self.skipWaiting(); });
     self.addEventListener('activate', e => {
       e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))));
       self.clients.claim();
     });
     self.addEventListener('fetch', e => {
+      if(e.request.method !== 'GET') return;
       e.respondWith(
-        fetch(e.request).then(res => {
+        fetch(e.request, {cache:'no-cache'}).then(res => {
           const copy = res.clone();
-          caches.open(CACHE).then(c => c.put(e.request, copy));
+          caches.open(CACHE).then(c => c.put(e.request, copy)).catch(()=>{});
           return res;
         }).catch(() => caches.match(e.request).then(r => r || caches.match('/')))
       );
