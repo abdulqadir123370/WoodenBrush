@@ -231,7 +231,7 @@ input,select{width:100%;padding:8px 10px;border:1px solid #d4b896;border-radius:
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1786349383507;
+const APP_BUILD = 1786351272887;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -248,6 +248,7 @@ const SK = {
   socketProcessingLog:"wbt_socket_processing_log",
   wastagePrices:"wbt_wastage_prices",     // Fixed per-KG sale prices per waste type — Admin/Owner set them in the Wastage tab; sale entry can't change them
   checkAcks:"wbt_check_acks",             // "Reviewed — known history" acknowledgments for Auto-Fix items; keyed by exact message text so any change in the number brings the item back
+  correctionsLog:"wbt_corrections_log",   // Permanent record of every applied ghost-stock correction (8/7-8/8 stale-device incident and future ones)
   dataSnapshots:"wbt_data_snapshots",     // System Watch: timestamped record of every stock number, for detecting unexplained changes
   systemFindings:"wbt_system_findings"    // System Watch: permanent findings inbox with proof images, waits for the owner however long
 };
@@ -908,6 +909,7 @@ let state = {
   batchGenealogy: ld(SK.batchGenealogy, {}),
   wastagePrices: ld(SK.wastagePrices, []),
   checkAcks: ld(SK.checkAcks, []),
+  correctionsLog: ld(SK.correctionsLog, []),
   brushProcessingLog: ld(SK.brushProcessingLog, []),
   socketProcessingLog: ld(SK.socketProcessingLog, []),
   saleModal: null,
@@ -944,6 +946,7 @@ function saveAll(){
   sv(SK.batchGenealogy,state.batchGenealogy);
   sv(SK.wastagePrices,state.wastagePrices);
   sv(SK.checkAcks,state.checkAcks);
+  sv(SK.correctionsLog,state.correctionsLog);
   sv(SK.brushProcessingLog,state.brushProcessingLog);
   sv(SK.dataSnapshots,state.dataSnapshots);
   sv(SK.systemFindings,state.systemFindings);
@@ -5199,6 +5202,198 @@ function restoreDeadEndScrapMistake(wastageId){
   re();
 }
 
+// ==================== GHOST STOCK CORRECTIONS (8/7–8/8 stale-device incident) ====================
+// Evidence-based fixes for the exact corruption verified in the 2026-08-10 JSON audit. Stale
+// devices (pre-reopen-round builds) pushed old stock records over current ones. Every fix
+// below: (1) re-verifies the LIVE number still equals the audited value and refuses to run
+// otherwise, (2) applies only on explicit Owner confirmation, (3) writes CORRECTION ledger
+// entries wherever the ledger itself needs repair, (4) records itself permanently in
+// wbt_corrections_log, (5) deletes nothing — the erroneous socket entry (if confirmed) is
+// VOIDED with a reason, never removed. Each fix disappears from the card once applied.
+// Batches whose numbers the ghost corrections just changed — handed to the next System Watch
+// cycle as explained, exactly like Auto-Fix's own corrections, so the corrections don't get
+// flagged as fresh unexplained changes by the very watchdog that caught the originals.
+let ghostCorrectionExplained = new Set();
+
+function ghostFixDone(kind){
+  return (state.correctionsLog||[]).some(c=>c && c.kind===kind);
+}
+function logGhostFix(kind, details, before, after){
+  state.correctionsLog = [...(state.correctionsLog||[]), {
+    id: Date.now()+Math.random(), kind, details, before, after,
+    by: currentUser?.name||'Owner', at: new Date().toISOString()
+  }];
+}
+function corrLedger(type, material, batchNo, qty, direction, note, size){
+  addLedgerEntry(type, material, batchNo, qty, direction, 'CORRECTION: '+note, size||'');
+}
+function applyGhostFix(kind, auto){
+  const say = m => { if(!auto) alert(m); };
+  const ok  = m => auto ? true : confirm(m);
+  if(!currentUser || currentUser.role!=='owner'){ say('Owner only.'); return false; }
+  if(ghostFixDone(kind)){ say('Already applied.'); return false; }
+
+  if(kind==='wb003_jumbo'){
+    const rec = (state.finishedInventory||[]).find(f=>f.batchNo==='WB003' && f.productName==='Smart Commando Jumbo Broom');
+    if(!rec || rec.qty!==2964){ say('Refused: live value ('+(rec?rec.qty:'missing')+') no longer matches the audited 2964. Re-export JSON for a fresh audit.'); return false; }
+    if(!ok('WB003 Smart Commando Jumbo Broom: 2964 → 0\n\nAll 2964 produced pieces were already sent to Brush Dept (2868 on 8/6 + 96 on 8/7 — both ledgered). The 2964 re-appeared on 8/8 with no transaction: a stale device pushed its old copy of this record. The ledger is already balanced; only this stock number is wrong.\n\nApply?')) return false;
+    rec.qty = 0;
+    ghostCorrectionExplained.add('WB003');
+    logGhostFix(kind, 'WB003 Jumbo finishedInventory ghost re-appearance removed (ledger already balanced: 2964 IN / 2964 OUT)', 2964, 0);
+    saveAll(); re(); say('✅ Applied. WB003 Jumbo Wood Finishing stock is now 0.');
+    return true;
+  }
+
+  if(kind==='wb001_commando'){
+    const rec = (state.finishedInventory||[]).find(f=>f.batchNo==='WB001' && f.productName==='Commando Broom');
+    if(!rec || rec.qty!==441){ say('Refused: live value ('+(rec?rec.qty:'missing')+') no longer matches the audited 441. Re-export JSON for a fresh audit.'); return false; }
+    if(!ok('WB001 Commando Broom: 441 → 334, plus one ledger backfill of 107 IN\n\nLedger balance is 227. The real 107 rework completions (73+7+27, done 27/7 on an old build) were never ledgered — they are legitimately inside the stock once: 227+107=334. On 8/8 a stale device applied the SAME 107 a second time: 334→441. This fix removes the duplicate 107 from stock AND writes the missing 107 IN to the ledger, so stock and ledger both equal 334.\n\nApply?')) return false;
+    rec.qty = 334;
+    ghostCorrectionExplained.add('WB001');
+    corrLedger('finished','Commando Broom','WB001',107,'IN','backfill of rework completions 27/7 (73 Regmal + 7 Color + 27 Regmal) recorded on an old build without ledger entries; the separate duplicate +107 ghost of 8/8 was removed from stock in the same correction');
+    logGhostFix(kind, 'WB001 Commando duplicate rework re-application removed from stock; legit 107 rework backfilled into ledger', 441, 334);
+    saveAll(); re(); say('✅ Applied. WB001 Commando: stock 334, ledger balance 334.');
+    return true;
+  }
+
+  if(kind==='fb009_ghost1900'){
+    const rec = (state.readyForSale||[]).find(r=>r.batchNo==='FB009' && r.productName==='Commando Broom');
+    if(!rec || rec.qty!==7242){ say('Refused: live value ('+(rec?rec.qty:'missing')+') no longer matches the audited 7242. Re-export JSON for a fresh audit.'); return false; }
+    if(!ok('FB009 Commando Broom Ready-for-Sale: 7242 → 5342\n\nLedger IN total for FB009 is exactly 5342 (1660+1900+1100+318+364). The extra 1900 appeared on 7/8 at 09:38 with no transaction — a stale device re-applied the 8/6 19:51 movement. This restores the stock to exactly what the ledger supports. (The separate 1660 question is handled in the next section.)\n\nApply?')) return false;
+    rec.qty = 5342;
+    ghostCorrectionExplained.add('FB009');
+    logGhostFix(kind, 'FB009 ghost +1900 (stale-device re-application of the 8/6 19:51 socket run) removed; stock now equals ledger IN total', 7242, 5342);
+    saveAll(); re(); say('✅ Applied. FB009 is now 5342 — matching its ledger exactly.');
+    return true;
+  }
+  return false;
+}
+
+function applyBB005Reconciliation(){
+  if(!currentUser || currentUser.role!=='owner'){ alert('Owner only.'); return; }
+  if(ghostFixDone('bb005_1660')){ alert('Already applied.'); return; }
+  if(!ghostFixDone('fb009_ghost1900')){ alert('Apply the FB009 7242→5342 fix first — this step builds on it.'); return; }
+  const counted = +document.getElementById('fb009FloorCount')?.value;
+  if(!counted || counted<=0){ alert('Enter the physical FB009 floor count first.'); return; }
+  const rec = (state.readyForSale||[]).find(r=>r.batchNo==='FB009' && r.productName==='Commando Broom');
+  if(!rec || rec.qty!==5342){ alert('Refused: FB009 live value ('+(rec?rec.qty:'missing')+') is not the expected 5342.'); return; }
+  const nearA = Math.abs(counted-3682) <= 60;   // floor says ~3682 → the 19:50 "1660" socket entry was erroneous
+  const nearB = Math.abs(counted-5342) <= 60;   // floor says ~5342 → brushing was under-recorded by 1660
+  if(!nearA && !nearB){
+    alert('The count '+counted+' matches neither expected scenario (≈3682 or ≈5342). Recount carefully, and if it is genuinely a different number, export a fresh JSON — this needs a new audit, not a forced fix.');
+    return;
+  }
+  if(nearA){
+    if(!confirm('Floor count '+counted+' ≈ 3682 — confirms the 8/6 19:50 socket entry of 1660 was ERRONEOUS (brushed total 3682 exactly equals socket total without it).\n\nThis will:\n• VOID that socket entry (kept forever, marked with reason)\n• FB009: 5342 → 3682 (−1660) with CORRECTION ledger OUT\n• BB005: +1660 CORRECTION IN (reverses the phantom consumption)\n• BB005: +826 CORRECTION IN (the real 7/8 brushing output that an old build never ledgered)\n• Sockets SOB001: +1660 back  • Screws SCB002: +6640 back (with ledger INs)\n\nApply?')) return;
+    if(!applyBB005PathA('floor-confirmed '+counted+' pcs')){ alert('Refused: could not find the un-voided 8/6 1660 socket entry.'); return; }
+    alert('✅ Applied. FB009 = 3682, BB005 balanced at 0, sockets and screws restored.');
+  } else {
+    if(!confirm('Floor count '+counted+' ≈ 5342 — confirms all socket entries were REAL and brushing was under-recorded.\n\nThis will backfill BB005 with:\n• +826 CORRECTION IN (real 7/8 brushing, never ledgered)\n• +1660 CORRECTION IN (brushing output that was never recorded at all)\nFB009 stays 5342. No stock changes.\n\nApply?')) return;
+    corrLedger('finished','Commando Broom','BB005',826,'IN','backfill of real 7/8 10:15 brushing output (826 from WB005) recorded on an old build without a ledger entry');
+    corrLedger('finished','Commando Broom','BB005',1660,'IN','backfill (floor-confirmed '+counted+' pcs in FB009): brushing output consumed by socket entries but never recorded as brushed');
+    logGhostFix('bb005_1660','Path B (floor '+counted+'): socket entries confirmed real; BB005 +826 and +1660 brushing backfilled into ledger', 5342, 5342);
+    saveAll(); re(); alert('✅ Applied. BB005 ledger reconciled; FB009 remains 5342.');
+  }
+}
+
+// Path A core — shared by the manual card (with a floor count) and the owner-authorized
+// automatic run. Confirmation source is recorded verbatim in the void reason.
+function applyBB005PathA(confirmationNote){
+  const rec = (state.readyForSale||[]).find(r=>r.batchNo==='FB009' && r.productName==='Commando Broom');
+  if(!rec || rec.qty!==5342) return false;
+  const sp = (state.socketProcessingLog||[]).find(s=>!s.voided && s.outputBatchNo==='FB009' && s.qty===1660 && s.date==='2026-08-06');
+  if(!sp) return false;
+  sp.voided = true; sp.voidedBy = currentUser?.name||'Owner'; sp.voidedDate = new Date().toISOString().slice(0,10);
+  sp.voidedReason = 'CORRECTION ('+confirmationNote+'): erroneous entry — BB005 brushed total 3682 exactly equals socket consumption excluding this 1660; sockets/screws it deducted are restored';
+  rec.qty = 3682;
+  corrLedger('finished','Commando Broom (Ready for Sale)','FB009',1660,'OUT','reversal of erroneous 8/6 19:50 socket entry ('+confirmationNote+')');
+  corrLedger('finished','Commando Broom','BB005',1660,'IN','reversal of erroneous 8/6 19:50 socket consumption');
+  corrLedger('finished','Commando Broom','BB005',826,'IN','backfill of real 7/8 10:15 brushing output (826 from WB005) recorded on an old build without a ledger entry');
+  const sob=(state.socketInventory||[]).find(s=>s.batchNo==='SOB001'); if(sob) sob.qty += 1660;
+  corrLedger('socket','4 Screws Socket','SOB001',1660,'IN','restored — deducted by the voided erroneous 8/6 socket entry');
+  const scb=(state.screwInventory||[]).find(s=>s.batchNo==='SCB002'); if(scb) scb.qty += 6640;
+  corrLedger('screw','Screws','SCB002',6640,'IN','restored — deducted by the voided erroneous 8/6 socket entry');
+  ['FB009','BB005','SOB001','SCB002'].forEach(b=>ghostCorrectionExplained.add(b));
+  logGhostFix('bb005_1660','Path A ('+confirmationNote+'): 1660 socket entry voided; FB009 5342→3682; BB005 +1660 reversal +826 backfill; SOB001 +1660; SCB002 +6640', 5342, 3682);
+  saveAll(); re();
+  return true;
+}
+
+// ==================== AUTOMATIC APPLICATION (Owner-authorized, 10/8/2026) ====================
+// The Owner reviewed the 10/8 JSON audit and instructed: physical stock is correct, the
+// module's ghosts are to be corrected automatically. Brush Dept (Safiullah) confirmed the
+// brushed total of 3682 on 10/8, which resolves the 1660 question to Path A. This runs once,
+// on an Owner login, only after live cloud data is confirmed, and each step still re-verifies
+// its exact audited pre-value — if anything has drifted, that step is skipped and left for
+// the manual card instead of guessing. Everything is logged and ledgered identically to a
+// manual application; the authorization is recorded in each entry.
+function autoApplyGhostCorrections(attempt){
+  attempt = attempt||0;
+  if(!currentUser || currentUser.role!=='owner') return;
+  const allDone = ['wb003_jumbo','wb001_commando','fb009_ghost1900','bb005_1660'].every(k=>ghostFixDone(k));
+  if(allDone) return;
+  if(typeof cloudDataConfirmed!=='undefined' && !cloudDataConfirmed){
+    if(attempt<12) setTimeout(()=>autoApplyGhostCorrections(attempt+1), 10000); // wait for live data, up to 2 min
+    return;
+  }
+  const appliedNow = [];
+  if(applyGhostFix('wb003_jumbo', true)) appliedNow.push('WB003 Jumbo 2964→0');
+  if(applyGhostFix('wb001_commando', true)) appliedNow.push('WB001 Commando 441→334 (+107 ledger backfill)');
+  if(applyGhostFix('fb009_ghost1900', true)) appliedNow.push('FB009 7242→5342');
+  if(!ghostFixDone('bb005_1660') && ghostFixDone('fb009_ghost1900')){
+    if(applyBB005PathA('authorized by Owner 10/8; Brush Dept (Safiullah) confirmed brushed total 3682')){
+      appliedNow.push('FB009 5342→3682, BB005 reconciled, sockets/screws restored');
+    }
+  }
+  if(appliedNow.length>0){
+    console.log('Ghost corrections auto-applied:', appliedNow);
+    const d = document.createElement('div');
+    d.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:#8e44ad;color:#fff;padding:10px 14px;font-size:12px;font-weight:600;text-align:center;z-index:996;';
+    d.innerHTML = '🧹 ' + appliedNow.length + ' ghost stock correction' + (appliedNow.length>1?'s':'') + ' applied automatically (Owner-authorized): ' + appliedNow.join(' · ') + ' — full record in Admin panel. <span style="text-decoration:underline;cursor:pointer;" onclick="this.parentNode.remove()">dismiss</span>';
+    document.body.appendChild(d);
+    setTimeout(()=>{ try{ d.remove(); }catch(e){} }, 30000);
+    // Snapshot the corrected state right away so no other device's watch cycle sees an
+    // unexplained diff in the gap before the regular 2-hour cycle.
+    try{ runAutoFixCycle(); }catch(e){}
+  }
+}
+
+function renderGhostCorrectionsCardHTML(){
+  const fixes = [
+    {kind:'wb003_jumbo', title:'WB003 Smart Commando Jumbo — 2964 → 0', desc:'All 2964 were already brushed (2868 + 96, both ledgered). A stale device re-pushed the old stock record on 8/8. Ledger already balanced.'},
+    {kind:'wb001_commando', title:'WB001 Commando — 441 → 334 (+ ledger backfill 107)', desc:'The real 107 rework is in the stock once (227 ledger + 107 unledgered = 334). A stale device applied the same 107 again on 8/8. Also writes the missing 107 IN to the ledger.'},
+    {kind:'fb009_ghost1900', title:'FB009 Commando Ready-for-Sale — 7242 → 5342', desc:'Ledger IN total is exactly 5342. The extra 1900 appeared 7/8 09:38 with no transaction (stale-device re-application of the 8/6 19:51 run).'},
+  ];
+  const pending = fixes.filter(f=>!ghostFixDone(f.kind));
+  const bbDone = ghostFixDone('bb005_1660');
+  const applied = (state.correctionsLog||[]);
+  if(pending.length===0 && bbDone && applied.length===0) return '';
+  let html = `<div class="card" style="border:2px solid #8e44ad;">
+    <div class="label" style="color:#8e44ad;">🧹 Ghost Stock Corrections (8/7–8/8 stale-device incident)</div>
+    <div style="font-size:11px;color:#888;margin-bottom:10px;">Verified against the 10/8 JSON audit. These apply AUTOMATICALLY on an Owner login (Owner-authorized 10/8). Anything listed below is still pending only because its live number no longer matches the audited value — it needs a fresh look, not a forced fix. Every application writes CORRECTION ledger entries and records itself permanently; nothing is deleted.</div>`;
+  pending.forEach(f=>{
+    html += `<div style="background:#f7f0fb;border-radius:8px;padding:10px;margin-bottom:8px;">
+      <div style="font-size:12px;font-weight:700;">${f.title}</div>
+      <div style="font-size:11px;color:#666;margin:4px 0 8px;">${f.desc}</div>
+      <button class="btn" style="background:#8e44ad;" onclick="applyGhostFix('${f.kind}')">Apply (with confirmation)</button>
+    </div>`;
+  });
+  if(!bbDone){
+    html += `<div style="background:#fff8ec;border-radius:8px;padding:10px;margin-bottom:8px;border:1px solid #e67e22;">
+      <div style="font-size:12px;font-weight:700;color:#e67e22;">BB005 / FB009 — the 1660 question (needs the floor count)</div>
+      <div style="font-size:11px;color:#666;margin:4px 0 8px;">BB005 brushed 3682 (2856 + 826) but socket entries consumed 5342 — exactly 1660 more, matching the 8/6 19:50 entry. Either that entry was erroneous (then real FB009 ≈ 3682) or brushing was under-recorded (then FB009 ≈ 5342). Count the physical FB009 Commando Broom pieces and enter the number — the matching correction is applied, the other rejected. Requires the FB009 7242→5342 fix first.</div>
+      <div class="label">Physical FB009 count</div>
+      <input type="text" inputmode="numeric" id="fb009FloorCount" placeholder="e.g. 3682" style="max-width:160px;"/>
+      <button class="btn" style="background:#e67e22;" onclick="applyBB005Reconciliation()">Reconcile from floor count</button>
+    </div>`;
+  }
+  if(applied.length>0){
+    html += `<div style="font-size:11px;color:#888;">Applied: ${applied.map(c=>`<div style="margin-top:3px;">✅ ${c.details} <span style="color:#aaa;">(${c.by}, ${String(c.at).slice(0,10)})</span></div>`).join('')}</div>`;
+  }
+  html += `</div>`;
+  return html;
+}
+
 function renderScrapRestorationCardHTML(){
   const mistakes = collectDeadEndScrapMistakes();
   if(mistakes.length===0) return '';
@@ -5735,6 +5930,11 @@ function runAutoFixCycle(){
       [...(lin.brushLevelBatches||[]), ...(lin.fbBatchNos||[])].forEach(x=>correctedBatches.add(x));
     }catch(e){}
   });
+  // Ghost corrections applied since the last cycle (auto or via the card) are explained too.
+  if(typeof ghostCorrectionExplained!=='undefined'){
+    ghostCorrectionExplained.forEach(b=>correctedBatches.add(b));
+    ghostCorrectionExplained.clear();
+  }
   let watchResult = {findings:[], baseline:false};
   try{ watchResult = runSystemWatch(correctedBatches); }catch(e){ console.error('System watch failed:', e); }
 
@@ -6751,6 +6951,8 @@ function logout(reason){
 
 function renderAuthenticatedApp(){
   if(!currentUser) return;
+  // One-time owner-authorized ghost corrections (10/8 incident) — see autoApplyGhostCorrections.
+  if(currentUser.role==='owner') setTimeout(()=>{ try{ autoApplyGhostCorrections(); }catch(e){ console.error('Auto ghost corrections failed:', e); } }, 3000);
   // Filter tabs based on role
   const allowedTabs = currentUser.tabs || [];
   const isAdmin = currentUser.role === 'admin' || currentUser.role === 'owner';
@@ -6910,6 +7112,7 @@ function renderAdminPanel(){
       <div id="resyncResult" style="margin-top:8px;font-size:12px;"></div>
     </div>
 
+    ${renderGhostCorrectionsCardHTML()}
     ${renderScrapRestorationCardHTML()}
 
     <div class="card" style="border:2px solid #d35400;">
