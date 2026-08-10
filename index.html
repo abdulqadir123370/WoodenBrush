@@ -231,7 +231,7 @@ input,select{width:100%;padding:8px 10px;border:1px solid #d4b896;border-radius:
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1786348536626;
+const APP_BUILD = 1786349383507;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -247,6 +247,7 @@ const SK = {
   batchGenealogy:"wbt_batch_genealogy", brushProcessingLog:"wbt_brush_processing_log",
   socketProcessingLog:"wbt_socket_processing_log",
   wastagePrices:"wbt_wastage_prices",     // Fixed per-KG sale prices per waste type — Admin/Owner set them in the Wastage tab; sale entry can't change them
+  checkAcks:"wbt_check_acks",             // "Reviewed — known history" acknowledgments for Auto-Fix items; keyed by exact message text so any change in the number brings the item back
   dataSnapshots:"wbt_data_snapshots",     // System Watch: timestamped record of every stock number, for detecting unexplained changes
   systemFindings:"wbt_system_findings"    // System Watch: permanent findings inbox with proof images, waits for the owner however long
 };
@@ -593,9 +594,12 @@ function updateHealthBadge(){
     el.style.color = '#7f8c8d';
     return;
   }
-  const errors = issues.filter(i=>i.severity==='error').length;
+  // Items a human has already reviewed (Auto-Fix "known history" acks) don't count against
+  // the badge — the ack key is the exact message text, so a changed number re-counts itself.
+  const liveIssues = issues.filter(i=>!isIssueAcked(`${i.category}: ${i.message}`));
+  const errors = liveIssues.filter(i=>i.severity==='error').length;
   const openFindings = (state.systemFindings||[]).filter(f=>f.status==='open').length;
-  const warnings = issues.filter(i=>i.severity==='warning').length + openFindings;
+  const warnings = liveIssues.filter(i=>i.severity==='warning').length + openFindings;
   const stamp = new Date().toTimeString().slice(0,5);
   const isAdmin = currentUser.role==='admin' || currentUser.role==='owner';
   const goToCheck = isAdmin ? ` <span style="text-decoration:underline;cursor:pointer;" onclick="document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));switchTab('Admin',document.getElementById('adminTab'));setTimeout(()=>{document.getElementById('adminTab')?.scrollIntoView();},50);">— view details</span>` : '';
@@ -903,6 +907,7 @@ let state = {
   voidLog: ld(SK.voidLog, []),
   batchGenealogy: ld(SK.batchGenealogy, {}),
   wastagePrices: ld(SK.wastagePrices, []),
+  checkAcks: ld(SK.checkAcks, []),
   brushProcessingLog: ld(SK.brushProcessingLog, []),
   socketProcessingLog: ld(SK.socketProcessingLog, []),
   saleModal: null,
@@ -938,6 +943,7 @@ function saveAll(){
   sv(SK.voidLog,state.voidLog);
   sv(SK.batchGenealogy,state.batchGenealogy);
   sv(SK.wastagePrices,state.wastagePrices);
+  sv(SK.checkAcks,state.checkAcks);
   sv(SK.brushProcessingLog,state.brushProcessingLog);
   sv(SK.dataSnapshots,state.dataSnapshots);
   sv(SK.systemFindings,state.systemFindings);
@@ -5774,6 +5780,45 @@ function startAutoFixCycle(){
   autoFixCycleTimer = setInterval(()=>{ try{ runAutoFixCycle(); renderAutoFixResults(); }catch(e){ console.error('Auto-fix cycle failed:', e); } }, 2*60*60*1000); // every 2 hours
 }
 
+// ==================== "REVIEWED — KNOWN HISTORY" FOR AUTO-FIX ITEMS ====================
+// Auto-Fix items describe the ledger's HISTORY, so a legitimate-but-unledgered past movement
+// (owner stock corrections, old-build entries, the phantom 798) shows up forever like a fresh
+// problem — which reads as "errors" to the team even when today's stock is perfectly correct.
+// This lets Admin/Owner acknowledge an item once a human has actually reviewed it. The
+// acknowledgment is keyed to the item's EXACT message text — which embeds the batch and the
+// number — so the moment the underlying number changes at all (−798 becomes anything else),
+// the key no longer matches and the item comes straight back. The check itself never sleeps;
+// only the already-reviewed, unchanged message is hidden. Acks are stamped (who/when), synced
+// to all devices, and reversible — nothing is deleted, revoking just marks the ack revoked.
+function isIssueAcked(text){
+  return (state.checkAcks||[]).some(a=>a && !a.revoked && a.key===text);
+}
+function ackCheckIssue(encodedText){
+  if(!isAdminOrOwner()) return;
+  const text = decodeURIComponent(encodedText);
+  if(isIssueAcked(text)) return;
+  state.checkAcks = [...(state.checkAcks||[]), {
+    id: Date.now()+Math.random(), key: text,
+    by: currentUser?.name||'?', at: new Date().toISOString()
+  }];
+  saveAll();
+  renderAutoFixResults();
+  if(typeof scheduleHealthBadgeUpdate==='function') scheduleHealthBadgeUpdate();
+}
+function revokeCheckAck(ackId){
+  if(!isAdminOrOwner()) return;
+  const a = (state.checkAcks||[]).find(x=>x && x.id===ackId);
+  if(!a) return;
+  a.revoked = true; a.revokedBy = currentUser?.name||'?'; a.revokedAt = new Date().toISOString();
+  saveAll();
+  renderAutoFixResults();
+  if(typeof scheduleHealthBadgeUpdate==='function') scheduleHealthBadgeUpdate();
+}
+function toggleAckedChecks(){
+  state.showAckedChecks = !state.showAckedChecks;
+  renderAutoFixResults();
+}
+
 function renderAutoFixResultsHTML(){
   const last = (state.autoFixLog||[])[0];
   if(!last){
@@ -5789,11 +5834,15 @@ function renderAutoFixResultsHTML(){
     </div>`;
     return html;
   }
-  if(last.appliedCount===0 && last.needsJudgment.length===0){
+  const allItems = (last.needsJudgment||[]).map(m=> typeof m==='string' ? {text:m, strays:[], candidates:[]} : m);
+  const activeItems = allItems.filter(it=>!isIssueAcked(it.text));
+  const ackedItems  = allItems.filter(it=> isIssueAcked(it.text));
+  if(last.appliedCount===0 && activeItems.length===0){
     html += `<div style="background:#e8f5e9;border-radius:8px;padding:12px;text-align:center;">
       <div style="font-size:22px;">✅</div>
-      <div style="font-size:13px;font-weight:700;color:#27ae60;">Nothing needed fixing</div>
+      <div style="font-size:13px;font-weight:700;color:#27ae60;">Nothing new — all clear</div>
     </div>`;
+    html += renderAckedChecksHTML(ackedItems);
     return html;
   }
   if(last.appliedCount>0){
@@ -5802,12 +5851,11 @@ function renderAutoFixResultsHTML(){
       ${last.applied.map(a=>`<div style="font-size:11px;margin-bottom:3px;">• ${a}</div>`).join('')}
     </div>`;
   }
-  if(last.needsJudgment.length>0){
+  if(activeItems.length>0){
     const isAdmin = isAdminOrOwner();
     html += `<div style="background:#fff8ec;border-radius:8px;padding:10px;">
-      <div style="font-size:12px;font-weight:700;color:#e67e22;margin-bottom:6px;">⚠️ Needs a person to look (${last.needsJudgment.length}) — can't be safely guessed:</div>
-      ${last.needsJudgment.map(m=>{
-        const item = typeof m==='string' ? {text:m, strays:[], candidates:[]} : m; // tolerate older log entries saved before this structure existed
+      <div style="font-size:12px;font-weight:700;color:#e67e22;margin-bottom:6px;">⚠️ Needs a person to look (${activeItems.length}) — can't be safely guessed:</div>
+      ${activeItems.map(item=>{
         const resolvable = isAdmin && item.strays.length>0 && item.candidates.length>0;
         const picker = resolvable ? item.strays.map(stray=>`
           <div style="margin-top:4px;padding:6px;background:#fff;border-radius:6px;">
@@ -5816,7 +5864,29 @@ function renderAutoFixResultsHTML(){
               ${item.candidates.map(cand=>`<button class="btn" style="background:#8e44ad;color:#fff;font-size:10px;padding:3px 8px;" onclick="resolveAmbiguousBatchName('${item.batchNo}','${stray.replace(/'/g,"\\'")}','${cand.replace(/'/g,"\\'")}')">→ "${cand}"</button>`).join('')}
             </div>
           </div>`).join('') : '';
-        return `<div style="font-size:11px;margin-bottom:3px;">• ${item.text}${picker}</div>`;
+        // Ambiguous-name items get resolved via the picker, not acknowledged away.
+        const ackBtn = (isAdmin && !resolvable)
+          ? `<button class="btn" style="background:#7f8c8d;color:#fff;font-size:10px;padding:2px 8px;margin-left:6px;" title="A human has reviewed this and confirmed it's known history. It stays hidden ONLY while the number is unchanged — any change brings it back immediately." onclick="ackCheckIssue('${encodeURIComponent(item.text).replace(/'/g,'%27')}')">✓ Reviewed — hide until it changes</button>`
+          : '';
+        return `<div style="font-size:11px;margin-bottom:5px;">• ${item.text}${ackBtn}${picker}</div>`;
+      }).join('')}
+    </div>`;
+  }
+  html += renderAckedChecksHTML(ackedItems);
+  return html;
+}
+function renderAckedChecksHTML(ackedItems){
+  if(!ackedItems || ackedItems.length===0) return '';
+  const isAdmin = isAdminOrOwner();
+  let html = `<div style="font-size:11px;color:#888;margin-top:8px;">🗂️ ${ackedItems.length} reviewed item${ackedItems.length>1?'s':''} hidden (known history — the check stays alive; any change brings them back) <span style="text-decoration:underline;cursor:pointer;" onclick="toggleAckedChecks()">${state.showAckedChecks?'hide':'show'}</span></div>`;
+  if(state.showAckedChecks){
+    html += `<div style="background:#f4f4f4;border-radius:8px;padding:8px;margin-top:6px;">
+      ${ackedItems.map(item=>{
+        const ack = (state.checkAcks||[]).find(a=>a && !a.revoked && a.key===item.text);
+        return `<div style="font-size:11px;color:#666;margin-bottom:5px;">• ${item.text}
+          <div style="font-size:10px;color:#aaa;">reviewed by ${ack?ack.by:'?'} on ${ack?String(ack.at).slice(0,10):'?'}
+          ${isAdmin&&ack?`<span style="text-decoration:underline;cursor:pointer;color:#e67e22;" onclick="revokeCheckAck(${JSON.stringify(ack.id)})">↩️ bring back</span>`:''}</div>
+        </div>`;
       }).join('')}
     </div>`;
   }
