@@ -239,7 +239,7 @@ body.offline-lock .size-btn{pointer-events:none;opacity:0.45;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1786452248297;
+const APP_BUILD = 1786453223612;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -5572,6 +5572,67 @@ function autoApplyGhostCorrections(attempt){
 }
 
 
+// ==================== PURCHASE PRICE BACKFILL (Owner-only) ====================
+// For plank purchases that were recorded WITHOUT a price (before the mandatory-price rule
+// shipped 11/8). The Costing tab reads batch cost from the ledger purchase note's
+// "@ Rs.X/pc" — so backfilling the price here retroactively makes those batches costable.
+// This is enrichment of an incomplete record, not an alteration of a figure: the original
+// note is kept and the price appended in the canonical format, stamped with who/when, and
+// logged permanently in the corrections log. The live materials batch record (if any stock
+// remains) gets pricePerPiece too, so future production runs from it stamp correctly.
+function findUnpricedPurchases(){
+  return (state.ledger||[]).filter(e=>
+    e.type==='plank' && e.direction==='IN' &&
+    /^Purchased from /.test(String(e.note||'')) &&
+    !/@ Rs\.[\d.]+\/pc/.test(String(e.note||''))
+  );
+}
+function applyPurchasePriceBackfill(entryId){
+  // Admin AND Owner may backfill (Owner decision 11/8) — but STRICTLY ONE TIME per purchase:
+  // once a price is on the entry, nobody (Admin or Owner) can change it through this tool.
+  // Filling a blank is enrichment; changing a filled price would be altering a financial
+  // record, which this app never allows silently.
+  if(!isAdminOrOwner()){ alert('Admin/Owner only.'); return; }
+  const e = (state.ledger||[]).find(x=>x && x.id===entryId);
+  if(!e){ alert('Entry not found.'); return; }
+  if(/@ Rs\.[\d.]+\/pc/.test(String(e.note||''))){ alert('This purchase already has a price — prices can be set only ONCE and never changed here.'); return; }
+  const input = document.getElementById('bfPrice_'+String(entryId).replace('.','_'));
+  const price = +(input?.value||0);
+  if(!(price>0)){ alert('Enter a price per piece greater than 0.'); return; }
+  if(!confirm(`Backfill Rs.${price}/pc onto this purchase?\n\n${e.date} · ${e.batchNo} · ${e.qty} × ${e.size}" · ${e.vendor||''}\n\nThe Costing tab will use it immediately for this batch. This is recorded permanently with your name.`)) return;
+  e.note = String(e.note) + ` @ Rs.${price}/pc`;
+  e.priceBackfilledBy = currentUser?.name||'Owner';
+  e.priceBackfilledAt = new Date().toISOString();
+  // If any of this batch+size is still in live stock, stamp it for future production runs.
+  const mat = state.materials?.[String(e.size)];
+  const liveBatch = (mat?.batches||[]).find(b=>b.batchNo===e.batchNo);
+  if(liveBatch && !(liveBatch.pricePerPiece>0)) liveBatch.pricePerPiece = price;
+  logGhostFix('price_backfill_'+entryId,
+    `Purchase price backfilled: ${e.batchNo} ${e.qty}×${e.size}" (${e.date}${e.vendor?', '+e.vendor:''}) → Rs.${price}/pc`, null, price);
+  saveAll(); re();
+}
+function renderPriceBackfillCardHTML(){
+  const unpriced = findUnpricedPurchases();
+  if(unpriced.length===0) return '';
+  const rows = unpriced.map(e=>{
+    const safeId = String(e.id).replace('.','_');
+    return `<div style="background:#fff8ec;border-radius:8px;padding:10px;margin-bottom:8px;">
+      <div style="font-size:12px;font-weight:700;">${e.batchNo} — ${e.qty} × ${e.size}" planks</div>
+      <div style="font-size:11px;color:#888;">${e.date}${e.vendor?` · ${e.vendor}`:''} · ${e.material||''}</div>
+      <div class="grid2" style="align-items:end;margin-top:6px;">
+        <div><div class="label">Price per Piece (Rs.)</div>
+          <input type="number" min="0.01" step="0.01" placeholder="e.g. 40" id="bfPrice_${safeId}" style="margin-bottom:0;"/></div>
+        <button class="btn btn-green" onclick="applyPurchasePriceBackfill(${JSON.stringify(e.id)})">💾 Save Price</button>
+      </div>
+    </div>`;
+  }).join('');
+  return `<div class="card" style="border:2px solid #d35400;">
+    <div class="label" style="color:#d35400;">💵 Backfill Purchase Prices (${unpriced.length} missing)</div>
+    <div style="font-size:11px;color:#888;margin-bottom:10px;">These purchases were recorded without a price, so their batches cannot be costed. Enter the real price paid — it is appended to the original ledger entry (nothing replaced), stamped with your name, logged permanently, and the Costing tab uses it immediately. STRICTLY ONE TIME per purchase: once saved, the price cannot be changed here by anyone — Admin or Owner. New purchases can no longer be saved without a price.</div>
+    ${rows}
+  </div>`;
+}
+
 function renderGhostCorrectionsCardHTML(){
   const fixes = [
     {kind:'wb003_jumbo', title:'WB003 Smart Commando Jumbo — 2964 → 0', desc:'All 2964 were already brushed (2868 + 96, both ledgered). A stale device re-pushed the old stock record on 8/8. Ledger already balanced.'},
@@ -7590,6 +7651,7 @@ function renderAdminPanel(){
   // stamps who performed it. Migration, Force Resync, Scrap Restoration, and Production
   // Correction stay Owner-only above.
   html += `
+    ${renderPriceBackfillCardHTML()}
     <div class="card" style="border:2px solid #16a085;background:#f0fdfa;">
       <div class="label" style="color:#16a085;">🤖 Auto-Fix</div>
       <div style="font-size:11px;color:#888;margin-bottom:12px;">Runs on its own — once when the app loads, then every 2 hours while it's open. Checks stock levels, batch names vs. original records, and account setup, and fixes what's safe to fix without asking. Anything that genuinely can't be inferred (no single correct answer to guess between) stays listed below instead of being touched.</div>
