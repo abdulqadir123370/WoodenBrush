@@ -239,7 +239,7 @@ body.offline-lock .size-btn{pointer-events:none;opacity:0.45;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1786445619634;
+const APP_BUILD = 1786452248297;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -4164,6 +4164,26 @@ function compressImageFile(file, maxDim, quality){
 // enabled later, it's tried first automatically and simply takes over — no code change needed.
 let storageUploadFailStreak = 0; // after 2 consecutive failures, stop hammering a bucket that isn't there (this session)
 
+// The Storage SDK does NOT fail fast against a bucket that doesn't exist (free Spark plan):
+// it silently retries with backoff for up to ~2 minutes before rejecting. That left every
+// fresh session's first sales stuck on "Saving photo — please wait…" for minutes (real
+// incident: Safiullah, 11/8) before the embed fallback finally ran. Two fixes: (1) any
+// Storage attempt is raced against a hard 6-second timeout; (2) once Storage proves absent,
+// that verdict is remembered on the device for 7 days and attempts are skipped entirely —
+// the photo embeds immediately. If Blaze/Storage is ever enabled later, the weekly re-try
+// picks it up on its own within days, with no code change.
+function promiseWithTimeout(p, ms){
+  return Promise.race([p, new Promise((_,rej)=>setTimeout(()=>rej(new Error('storage-timeout')), ms))]);
+}
+const STORAGE_ABSENT_KEY = 'wbt_storage_absent_at';
+function storageKnownAbsent(){
+  try{
+    const ts = +localStorage.getItem(STORAGE_ABSENT_KEY)||0;
+    return ts>0 && (Date.now()-ts) < 7*24*3600*1000;
+  }catch(e){ return false; }
+}
+function markStorageAbsent(){ try{ localStorage.setItem(STORAGE_ABSENT_KEY, String(Date.now())); }catch(e){} }
+
 async function uploadSlipToStorage(file){
   let compressed = null;
   try{
@@ -4174,18 +4194,19 @@ async function uploadSlipToStorage(file){
     if(state.saleModal) state.saleModal.slipUploadFailed = true;
     return null;
   }
-  if(fbStorage && storageUploadFailStreak < 2){
+  if(fbStorage && storageUploadFailStreak < 2 && !storageKnownAbsent()){
     try{
       const path = `weight-slips/${Date.now()}_${Math.random().toString(36).slice(2,8)}.jpg`;
       const ref = fbStorage.ref(path);
-      await ref.putString(compressed, 'data_url');
-      const url = await ref.getDownloadURL();
+      await promiseWithTimeout(ref.putString(compressed, 'data_url'), 6000);
+      const url = await promiseWithTimeout(ref.getDownloadURL(), 6000);
       storageUploadFailStreak = 0;
       if(state.saleModal){ state.saleModal.slipUrl = url; state.saleModal.slipUploadFailed = false; }
       return url;
     }catch(e){
       storageUploadFailStreak++;
-      console.warn('Cloud Storage unavailable (free plan) — saving the photo inside the record instead.');
+      markStorageAbsent();
+      console.warn('Cloud Storage unavailable (free plan) — remembered for 7 days; photos embed directly in the record.');
     }
   }
   if(compressed.length > 950000){
