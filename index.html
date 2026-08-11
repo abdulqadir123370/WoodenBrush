@@ -11,6 +11,7 @@
 <meta name="mobile-web-app-capable" content="yes"/>
 <meta name="theme-color" content="#5c3d1e"/>
 <link rel="manifest" id="manifestLink"/>
+<link rel="apple-touch-icon" id="appleTouchIcon"/>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;font-family:system-ui,sans-serif;}
 body{background:#f5f0eb;color:#2d1f0f;min-height:100vh;}
@@ -182,6 +183,7 @@ body.offline-lock .size-btn{pointer-events:none;opacity:0.45;}
   <button class="tab" onclick="switchTab('BOM',this)">🔩 BOM</button>
   <button class="tab" onclick="switchTab('Ledger',this)">📒 Ledger</button>
   <button class="tab" onclick="switchTab('Sales',this)">💰 Sales</button>
+  <button class="tab" id="costingTab" onclick="switchTab('Costing',this)">📈 Costing</button>
   <button class="tab" id="adminTab" onclick="switchTab('Admin',this)">⚙️ Admin</button>
 </div>
 
@@ -201,6 +203,7 @@ body.offline-lock .size-btn{pointer-events:none;opacity:0.45;}
   <div id="tab-BOM" class="hidden"></div>
   <div id="tab-Ledger" class="hidden"></div>
   <div id="tab-Sales" class="hidden"></div>
+  <div id="tab-Costing" class="hidden"></div>
   <div id="tab-Admin" class="hidden"></div>
 </div>
 
@@ -236,7 +239,7 @@ body.offline-lock .size-btn{pointer-events:none;opacity:0.45;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1786359013427;
+const APP_BUILD = 1786444567656;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -326,6 +329,15 @@ const APP_CHECK_SITE_KEY = ''; // <-- paste your reCAPTCHA v3 site key here
 const WEIGHT_SLIP_READER_URL = 'https://weight-slip-reader-production.up.railway.app/read-slip'; // <-- e.g. https://weight-slip-reader-production.up.railway.app/read-slip
 const WEIGHT_SLIP_READER_SECRET = '3b9e8282984a6db91754ca51497845a854b0c736ebbccd64'; // <-- must match SHARED_SECRET on the Railway service
 
+// A downloaded copy opened from disk (file://...) is an uncontrolled artifact: it can never
+// auto-update, so it ages into a stale build while still pointing at LIVE production data.
+// Policy (Owner, 11/8/2026): downloaded copies must have ZERO impact on the online system.
+// This build refuses to connect at all from file:// — no auth, no listeners, no writes —
+// and shows a wall pointing to the real app instead. (Old downloaded copies predate this
+// code; they are neutralized server-side via the API-key referrer restriction in Google
+// Cloud Console — see the wall text and handoff.)
+const IS_FILE_COPY = (location.protocol === 'file:');
+
 let fbApp = null, fbDb = null, fbStorage = null;
 try{
   fbApp = firebase.initializeApp(FIREBASE_CONFIG);
@@ -406,6 +418,7 @@ let syncRetryTimeout = null;
 let lastSyncError = null;
 
 function syncToFirestore(){
+  if(IS_FILE_COPY) return; // downloaded copies never write, whatever else happens
   if(!fbDb) return;
   clearTimeout(syncTimeout);
   clearTimeout(syncRetryTimeout);
@@ -413,6 +426,7 @@ function syncToFirestore(){
 }
 
 function doFirestoreSync(){
+  if(IS_FILE_COPY) return Promise.resolve();
   if(!fbDb) return Promise.resolve();
   clearTimeout(syncTimeout);
   syncTimeout = null;
@@ -691,7 +705,22 @@ function attachFirestoreListeners(onAllFirstSnapshots){
 // ---- Startup: just attach listeners. No automatic migration — that's a manual, one-time,
 // owner-triggered action (see migrateLegacyDataNow) to avoid any risk of multiple devices
 // racing each other through a migration at the same time. ----
+function showFileCopyWall(){
+  const d = document.createElement('div');
+  d.id = 'fileCopyWall';
+  d.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:#5c3d1e;z-index:3000;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#fff;text-align:center;padding:24px;';
+  d.innerHTML = `
+    <div style="font-size:44px;margin-bottom:14px;">📁</div>
+    <div style="font-size:19px;font-weight:700;margin-bottom:8px;">This is a downloaded copy</div>
+    <div style="font-size:13px;opacity:0.85;max-width:360px;margin-bottom:10px;">Downloaded files can never update themselves, so working in one would quietly become an outdated app writing to the live factory data. This copy will not connect — nothing done here can reach or affect the online system.</div>
+    <div style="font-size:13px;opacity:0.85;max-width:360px;margin-bottom:22px;">Please use the real app instead, and delete this file from Downloads:</div>
+    <a href="https://abdulqadir123370.github.io/WoodenBrush/" style="background:#27ae60;color:#fff;border-radius:10px;padding:14px 26px;font-size:15px;font-weight:700;text-decoration:none;">🌐 Open the live app</a>`;
+  document.body.appendChild(d);
+}
+
 function loadFromFirestore(){
+  // Downloaded-copy wall: no auth, no listeners, no sync — total isolation from live data.
+  if(IS_FILE_COPY){ showFileCopyWall(); return; }
   const loadingEl = document.getElementById('loadingScreen');
   if(loadingEl) loadingEl.style.display='flex';
 
@@ -967,6 +996,8 @@ let state = {
   ledgerFilterFrom: '', ledgerFilterTo: '', ledgerFilterSection: 'all',
   ledgerFilterSize: 'all', ledgerFilterBatch: 'all', ledgerFilterDirection: 'all',
   currentTab: "Dashboard",
+  costingFilterBatch:'all', costingFilterProduct:'all', costingFilterVendor:'all',
+  costingFilterFrom:'', costingFilterTo:'',
   prodSelectedSize: "24",
   prodSelectedBatch: "",
   closingBatch: null,
@@ -1125,6 +1156,7 @@ function renderTab(name){
   else if(name==="BOM") el.innerHTML=renderBOM();
   else if(name==="Ledger") el.innerHTML=renderLedger();
   else if(name==="Sales") el.innerHTML=renderSales();
+  else if(name==="Costing") el.innerHTML=renderCostAnalysis();
   else if(name==="Admin") el.innerHTML=renderAdminPanel();
 }
 
@@ -1734,6 +1766,12 @@ function recordProduction(){
   // FIRST; state is only ever touched once every single validation has already passed.
 
   let stock;
+  // Captured in Phase 1, BEFORE Phase 2's deduction can filter this exact batch record out of
+  // state.materials (which happens once its qty reaches 0). If that capture were deferred to
+  // costing-report time instead, a batch that later sold out would silently lose its price —
+  // the same class of bug the Phase-1/Phase-2 split above already exists to prevent. null =
+  // genuinely unknown (scrap-sourced runs have no separate purchase price — they're a byproduct).
+  let capturedPlankPrice = null;
   if(openBatch.isScrap){
     stock=(state.scrapInventory||[]).filter(s=>s.batch===sourceTag).reduce((s,x)=>s+x.quantity,0);
     if(stock<planksUsed){showProdMsg(`⚠️ Not enough scrap in ${openBatch.batchNo}! Have ${stock}, need ${planksUsed}. This batch may already be consumed — try closing it and check Inventory tab.`,false);return;}
@@ -1743,6 +1781,7 @@ function recordProduction(){
     if(stock<=0){showProdMsg(`⚠️ Batch ${openBatch.batchNo} is fully consumed! Close this batch.`,false);return;}
     if(stock<planksUsed){showProdMsg(`⚠️ Not enough in ${openBatch.batchNo}! Have ${stock} planks, need ${planksUsed}`,false);return;}
     if(!state.materials[size]||!state.materials[size].batches){showProdMsg("⚠️ Material not found!",false);return;}
+    capturedPlankPrice = specificBatch?.pricePerPiece>0 ? specificBatch.pricePerPiece : null;
   }
 
   const ppp=Math.floor(effSize/pieceSize);
@@ -1875,7 +1914,8 @@ function recordProduction(){
     pureWastage,
     remainder:rem, remainderType:canUse?"Scrap":"Wastage",
     notes:prodNotes?.value||"",
-    sourceSize:size, isScrapSourced:!!openBatch.isScrap, sourceBatchTag:sourceTag, sourceEffSize:effSize
+    sourceSize:size, isScrapSourced:!!openBatch.isScrap, sourceBatchTag:sourceTag, sourceEffSize:effSize,
+    plankPricePerPiece: capturedPlankPrice
   };
   state.openBatches[size].runs=[...(state.openBatches[size].runs||[]),run];
   state.production=[...(state.production||[]),{...run,batchNo:openBatch.batchNo,plankSize:effSize,department:"wood_finishing"}];
@@ -5409,6 +5449,7 @@ function autoApplyGhostCorrections(attempt){
   }
 }
 
+
 function renderGhostCorrectionsCardHTML(){
   const fixes = [
     {kind:'wb003_jumbo', title:'WB003 Smart Commando Jumbo — 2964 → 0', desc:'All 2964 were already brushed (2868 + 96, both ledgered). A stale device re-pushed the old stock record on 8/8. Ledger already balanced.'},
@@ -6732,8 +6773,6 @@ function planBatchNameFixes(){
   return {fixes, manual};
 }
 
-
-
 function startEditWoodPiece(id){
   const w = (state.woodPieces||[]).find(x=>x.id===id);
   if(!w) return;
@@ -7008,9 +7047,13 @@ function renderAuthenticatedApp(){
   const allowedTabs = currentUser.tabs || [];
   const isAdmin = currentUser.role === 'admin' || currentUser.role === 'owner';
   document.querySelectorAll('.tab').forEach(t=>{
-    const tabName = t.textContent.replace('📒','').replace('💰','').replace('⚙️','').replace('🪥','').replace('🔌','').replace('🔩','').trim();
+    const tabName = t.textContent.replace('📒','').replace('💰','').replace('📈','').replace('⚙️','').replace('🪥','').replace('🔌','').replace('🔩','').trim();
     if(tabName === 'Admin'){
       t.style.display = isAdmin ? '' : 'none';
+    } else if(tabName === 'Costing'){
+      // Costing exposes purchase prices, per-piece costs, and losses — Owner ONLY, by role,
+      // never via the per-user tabs list (so no edit to a user record can ever grant it).
+      t.style.display = currentUser.role==='owner' ? '' : 'none';
     } else {
       t.style.display = allowedTabs.includes(tabName) ? '' : 'none';
     }
@@ -7134,6 +7177,229 @@ function confirmProductionCorrection(){
   document.getElementById('prodCorrectionModal')?.classList.add('hidden');
   saveAll();
   re();
+}
+
+// ==================== COST ANALYSIS (Owner-only tab) ====================
+// Methodology (Owner-specified, 10/8/2026):
+//   1. Batch total cost = Σ (planks purchased × price per plank), read from the LEDGER's
+//      purchase entries — durable even after the batch record itself is consumed & removed.
+//   2. Base rate = total cost ÷ total purchased inches (qty × plank size, all sizes blended).
+//   3. A good piece of size S costs S × base rate (base cost). Cost attaches ONLY to good
+//      finished pieces — inches that ended in wastage are LOSS, never spread onto survivors
+//      in the base figure.
+//   4. Wastage income (batch's own generated KG × current fixed prices — ATTRIBUTED, since
+//      wastage physically sells pooled by type, never traced per batch) offsets the loss.
+//   5. Effective cost = (total cost − wastage income) ÷ good inches: the true accounting
+//      cost per piece with net loss loaded in. Both figures shown.
+// Scrap of this batch still sitting reusable in inventory is "recoverable (pending)" — not
+// loss yet, not recovered yet. Runs that consumed this batch's scrap count their good pieces
+// as recovered inches (root-batch grouping). Purchases without a recorded price are flagged
+// and excluded — never guessed. Voided runs/wastage excluded throughout.
+function computeCostAnalysis(){
+  const byBatch = {};
+  const B = bno => byBatch[bno] || (byBatch[bno] = {
+    batchNo:bno, purchases:[], totalCost:0, totalInches:0, unpricedPlanks:0,
+    products:{}, goodInches:0, wasteKg:{}, untypedWasteKg:0, pendingScrapInches:0, firstDate:null
+  });
+
+  // --- purchases from ledger ---
+  (state.ledger||[]).forEach(e=>{
+    if(e.type!=='plank' || e.direction!=='IN' || !/^Purchased from /.test(String(e.note||''))) return;
+    const bno = getRootBatchNo(e.batchNo); if(!bno) return;
+    const b = B(bno);
+    const inches = +e.size || 0;
+    const m = String(e.note).match(/@ Rs\.([\d.]+)\/pc/);
+    const price = m ? +m[1] : null;
+    b.purchases.push({date:e.date, size:inches, qty:e.qty, price, vendor:e.vendor||''});
+    if(!b.firstDate || (e.date && e.date < b.firstDate)) b.firstDate = e.date;
+    if(price!=null && price>0){ b.totalCost += e.qty*price; b.totalInches += e.qty*inches; }
+    else { b.unpricedPlanks += e.qty; }
+  });
+
+  // --- production: good pieces (root-batch grouped, so scrap-reuse runs recover inches) ---
+  const sizeOf = name => { const w=(state.woodPieces||[]).find(x=>x.name===name); return w ? +w.size : null; };
+  (state.production||[]).forEach(r=>{
+    if(r.voided || r.department!=='wood_finishing') return;
+    const bno = getRootBatchNo(r.batchNo); if(!bno || !byBatch[bno]) return; // no purchase on record → can't cost; skip silently, batch simply won't appear costed
+    const b = byBatch[bno];
+    const sz = sizeOf(r.woodPieceName);
+    if(!b.products[r.woodPieceName]) b.products[r.woodPieceName] = {pieces:0, size:sz, sizeUnknown:sz==null, scrapSourcedPieces:0};
+    const p = b.products[r.woodPieceName];
+    p.pieces += (r.piecesProduced||0);
+    if(r.isScrapSourced) p.scrapSourcedPieces += (r.piecesProduced||0);
+    if(sz!=null) b.goodInches += (r.piecesProduced||0)*sz;
+  });
+
+  // --- wastage generated per batch ---
+  (state.wastage||[]).forEach(w=>{
+    if(w.voided) return;
+    const bno = getRootBatchNo(w.batchNo);
+    if(!bno || !byBatch[bno]) return;
+    const b = byBatch[bno];
+    const kg = w.wastageKg||0; if(kg<=0) return;
+    if(w.typeSplit && WASTE_TYPES.some(t=>w.typeSplit[t]>0)){
+      WASTE_TYPES.forEach(t=>{ if(w.typeSplit[t]>0) b.wasteKg[t]=(b.wasteKg[t]||0)+w.typeSplit[t]; });
+    } else b.untypedWasteKg += kg;
+  });
+
+  // --- this batch's scrap still reusable in inventory: recoverable, pending ---
+  (state.scrapInventory||[]).forEach(s=>{
+    const bno = getRootBatchNo(s.batch);
+    if(bno && byBatch[bno]) byBatch[bno].pendingScrapInches += (s.quantity||0)*(+s.size||0);
+  });
+
+  return Object.values(byBatch).filter(b=>b.purchases.length>0).map(b=>{
+    const baseRate = b.totalInches>0 ? b.totalCost/b.totalInches : null;
+    let wasteIncome=0, unpricedKg=b.untypedWasteKg, totalWasteKg=b.untypedWasteKg;
+    WASTE_TYPES.forEach(t=>{
+      const kg=b.wasteKg[t]||0; totalWasteKg+=kg;
+      const pr=getWastagePrice(t);
+      if(pr!=null) wasteIncome+=kg*pr; else unpricedKg+=kg;
+    });
+    const lostInches = Math.max(0, b.totalInches - b.goodInches - b.pendingScrapInches);
+    const lossRs = baseRate!=null ? lostInches*baseRate : null;
+    const netCost = b.totalCost - wasteIncome;
+    const effRate = (b.goodInches>0) ? netCost/b.goodInches : null;
+    const products = Object.entries(b.products).map(([name,p])=>({
+      name, ...p,
+      baseCostPc: (baseRate!=null && p.size!=null) ? baseRate*p.size : null,
+      effCostPc:  (effRate!=null && p.size!=null) ? effRate*p.size : null,
+    }));
+    return {
+      batchNo:b.batchNo, firstDate:b.firstDate, purchases:b.purchases,
+      totalCost:b.totalCost, totalInches:b.totalInches, unpricedPlanks:b.unpricedPlanks,
+      baseRate, products, goodInches:b.goodInches,
+      pendingScrapInches:b.pendingScrapInches, lostInches, lossRs,
+      totalWasteKg, wasteKgByType:b.wasteKg, unpricedKg, wasteIncome,
+      netCost, effRate,
+      yieldPct: b.totalInches>0 ? (b.goodInches/b.totalInches*100) : null
+    };
+  }).sort((a,c)=> String(c.firstDate||'').localeCompare(String(a.firstDate||'')) || String(c.batchNo).localeCompare(String(a.batchNo)));
+}
+
+function renderCostAnalysis(){
+  // Role gate INSIDE the renderer too — hiding the tab button is UI, this is the lock.
+  if(!currentUser || currentUser.role!=='owner'){
+    return `<div class="card"><div style="font-size:13px;color:#e74c3c;font-weight:700;">🔒 Owner only</div><div style="font-size:12px;color:#888;">Cost analysis contains purchase prices and margins and is restricted to the Owner account.</div></div>`;
+  }
+  const all = computeCostAnalysis();
+
+  // ---- option lists from the data itself ----
+  const batchOpts = all.map(b=>b.batchNo);
+  const productOpts = [...new Set(all.flatMap(b=>b.products.map(p=>p.name)))].sort();
+  const vendorOpts = [...new Set(all.flatMap(b=>b.purchases.map(p=>p.vendor).filter(Boolean)))].sort();
+
+  // ---- apply filters ----
+  const fB = state.costingFilterBatch||'all', fP = state.costingFilterProduct||'all',
+        fV = state.costingFilterVendor||'all', fFrom = state.costingFilterFrom||'', fTo = state.costingFilterTo||'';
+  let shown = all.filter(b=>
+    (fB==='all' || b.batchNo===fB) &&
+    (fV==='all' || b.purchases.some(p=>p.vendor===fV)) &&
+    (!fFrom || (b.firstDate && b.firstDate>=fFrom)) &&
+    (!fTo   || (b.firstDate && b.firstDate<=fTo)) &&
+    (fP==='all' || b.products.some(p=>p.name===fP))
+  );
+
+  let html = `<div class="card card-wide" style="background:#f5f0eb;">
+    <div class="label">📈 Cost Analysis — Wood Finishing, per batch</div>
+    <div style="font-size:11px;color:#888;margin-bottom:10px;">Method: batch purchase cost ÷ total purchased inches = base rate; a piece costs its inches × rate. Cost attaches only to good finished pieces — inches lost to wastage are LOSS, offset by that batch's wastage value at today's fixed prices (attributed — wastage sells pooled by type, not per batch). Effective cost = (cost − wastage income) ÷ good inches: the true figure with net loss carried by the survivors. Scrap still reusable is pending, neither recovered nor lost. Unpriced purchases are flagged, never guessed.</div>
+    <div class="filter-grid">
+      <div><div class="label">Batch</div>
+        <select onchange="state.costingFilterBatch=this.value;re()">
+          <option value="all" ${fB==='all'?'selected':''}>All batches</option>
+          ${batchOpts.map(x=>`<option value="${x}" ${fB===x?'selected':''}>${x}</option>`).join('')}
+        </select></div>
+      <div><div class="label">Product</div>
+        <select onchange="state.costingFilterProduct=this.value;re()">
+          <option value="all" ${fP==='all'?'selected':''}>All products</option>
+          ${productOpts.map(x=>`<option value="${x}" ${fP===x?'selected':''}>${x}</option>`).join('')}
+        </select></div>
+      <div><div class="label">Vendor</div>
+        <select onchange="state.costingFilterVendor=this.value;re()">
+          <option value="all" ${fV==='all'?'selected':''}>All vendors</option>
+          ${vendorOpts.map(x=>`<option value="${x}" ${fV===x?'selected':''}>${x}</option>`).join('')}
+        </select></div>
+      <div><div class="label">From (batch start)</div>
+        <input type="date" value="${fFrom}" onchange="state.costingFilterFrom=this.value;re()"/></div>
+      <div><div class="label">To</div>
+        <input type="date" value="${fTo}" onchange="state.costingFilterTo=this.value;re()"/></div>
+      <div><button class="btn btn-gray btn-full" onclick="state.costingFilterBatch='all';state.costingFilterProduct='all';state.costingFilterVendor='all';state.costingFilterFrom='';state.costingFilterTo='';re()">✕ Clear filters</button></div>
+    </div>
+  </div>`;
+
+  if(all.length===0){
+    return html + `<div class="card"><div style="font-size:12px;color:#888;">No batches with purchase records found yet. Costing starts from purchases entered with a price per plank.</div></div>`;
+  }
+  if(shown.length===0){
+    return html + `<div class="card"><div style="font-size:12px;color:#888;">No batches match these filters.</div></div>`;
+  }
+
+  // ---- summary across the current selection ----
+  const sum = {cost:0, income:0, net:0, lossRs:0, lostIn:0, goodIn:0, totalIn:0, pcs:0, effTotal:0, effPcs:0};
+  shown.forEach(b=>{
+    sum.cost+=b.totalCost; sum.income+=b.wasteIncome; sum.net+=b.netCost;
+    if(b.lossRs!=null) sum.lossRs+=b.lossRs;
+    sum.lostIn+=b.lostInches; sum.goodIn+=b.goodInches; sum.totalIn+=b.totalInches;
+    b.products.forEach(p=>{
+      if(fP!=='all' && p.name!==fP) return;
+      sum.pcs+=p.pieces;
+      if(p.effCostPc!=null){ sum.effTotal+=p.effCostPc*p.pieces; sum.effPcs+=p.pieces; }
+    });
+  });
+  const avgEff = sum.effPcs>0 ? sum.effTotal/sum.effPcs : null;
+  const yieldPct = sum.totalIn>0 ? sum.goodIn/sum.totalIn*100 : null;
+  html += `<div class="card card-wide" style="border:2px solid #16a085;">
+    <div class="label" style="color:#16a085;">Σ Selection summary — ${shown.length} batch${shown.length>1?'es':''}${fP!=='all'?` · ${fP}`:''}</div>
+    <div class="wastage-card-grid" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));">
+      <div>Purchase cost<br/><b>Rs.${sum.cost.toFixed(0)}</b></div>
+      <div>Wastage income<br/><b style="color:#27ae60;">Rs.${sum.income.toFixed(0)}</b></div>
+      <div>Net cost<br/><b>Rs.${sum.net.toFixed(0)}</b></div>
+      <div>Loss<br/><b style="color:#e74c3c;">${sum.lostIn.toFixed(0)}" = Rs.${sum.lossRs.toFixed(0)}</b></div>
+      <div>Yield<br/><b style="color:${yieldPct>=80?'#27ae60':yieldPct>=60?'#e67e22':'#e74c3c'};">${yieldPct!=null?yieldPct.toFixed(1)+'%':'—'}</b></div>
+      <div>${fP!=='all'?fP:'All products'}: pcs<br/><b>${sum.pcs}</b></div>
+      <div>Avg effective /pc<br/><b>${avgEff!=null?'Rs.'+avgEff.toFixed(2):'—'}</b></div>
+    </div>
+  </div>`;
+
+  shown.forEach(b=>{
+    const prods = b.products.filter(p=>fP==='all'||p.name===fP);
+    const prodRows = prods.map(p=>{
+      if(p.sizeUnknown) return `<tr><td>${p.name}</td><td>${p.pieces}</td><td colspan="3" style="color:#e67e22;">size not in catalog — cannot cost</td></tr>`;
+      return `<tr>
+        <td>${p.name} <span style="color:#aaa;">(${p.size}")</span>${p.scrapSourcedPieces>0?`<div style="font-size:9px;color:#888;">${p.scrapSourcedPieces} of these from reused scrap</div>`:''}</td>
+        <td>${p.pieces}</td>
+        <td>${p.baseCostPc!=null?'Rs.'+p.baseCostPc.toFixed(2):'—'}</td>
+        <td>${p.effCostPc!=null?'Rs.'+p.effCostPc.toFixed(2):'—'}</td>
+        <td>${p.effCostPc!=null?'Rs.'+(p.effCostPc*p.pieces).toFixed(0):'—'}</td>
+      </tr>`;
+    }).join('');
+    const purchLines = b.purchases.map(p=>`${p.qty} × ${p.size}" ${p.price!=null?`@ Rs.${p.price}`:'<span style="color:#e67e22;">(no price recorded)</span>'}${p.vendor?` — ${p.vendor}`:''}`).join('<br/>');
+    const wasteLine = b.totalWasteKg>0
+      ? WASTE_TYPES.filter(t=>b.wasteKgByType[t]>0).map(t=>`${t} ${b.wasteKgByType[t].toFixed(1)}kg`).join(', ') + (b.unpricedKg>0?` + ${b.unpricedKg.toFixed(1)}kg unpriced/untyped`:'')
+      : 'none recorded';
+    html += `<div class="card">
+      <div class="row" style="margin-bottom:6px;">
+        <div style="font-weight:700;font-size:14px;">${b.batchNo} <span style="font-weight:400;font-size:11px;color:#888;">${b.firstDate||''}</span></div>
+        <div style="font-size:12px;font-weight:700;color:${b.yieldPct>=80?'#27ae60':b.yieldPct>=60?'#e67e22':'#e74c3c'};">${b.yieldPct!=null?'Yield '+b.yieldPct.toFixed(1)+'%':''}</div>
+      </div>
+      <div style="font-size:11px;color:#666;margin-bottom:8px;">${purchLines}</div>
+      ${b.unpricedPlanks>0?`<div style="font-size:11px;color:#e67e22;margin-bottom:6px;">⚠️ ${b.unpricedPlanks} planks purchased without a recorded price — excluded from all figures below.</div>`:''}
+      <div class="wastage-card-grid" style="grid-template-columns:1fr 1fr;margin-bottom:8px;">
+        <div>Total cost<br/><b>Rs.${b.totalCost.toFixed(0)}</b> (${b.totalInches.toFixed(0)}")</div>
+        <div>Base rate<br/><b>${b.baseRate!=null?'Rs.'+b.baseRate.toFixed(3)+'/inch':'—'}</b></div>
+        <div>Good output<br/><b>${b.goodInches.toFixed(0)}"</b></div>
+        <div>Scrap pending<br/><b>${b.pendingScrapInches.toFixed(0)}"</b></div>
+        <div>Lost inches<br/><b style="color:#e74c3c;">${b.lostInches.toFixed(0)}"${b.lossRs!=null?' = Rs.'+b.lossRs.toFixed(0):''}</b></div>
+        <div>Wastage: ${wasteLine}<br/>Income <b style="color:#27ae60;">Rs.${b.wasteIncome.toFixed(0)}</b></div>
+      </div>
+      <div style="font-size:12px;margin-bottom:8px;">Net batch cost after wastage income: <b>Rs.${b.netCost.toFixed(0)}</b> · Effective rate: <b>${b.effRate!=null?'Rs.'+b.effRate.toFixed(3)+'/inch':'—'}</b></div>
+      <table style="width:100%;border-collapse:collapse;font-size:11px;">
+        <tr style="text-align:left;color:#7a5230;"><th>Product</th><th>Good pcs</th><th>Base/pc</th><th>Effective/pc</th><th>Eff. total</th></tr>
+        ${prodRows}
+      </table>
+    </div>`;
+  });
+  return html;
 }
 
 function renderAdminPanel(){
@@ -7591,8 +7857,6 @@ function runForceFullResync(){
     if(el) el.innerHTML = `<span style="color:#e74c3c;font-weight:700;">❌ Still couldn't reach the cloud (${err && err.code ? err.code : 'connection error'}). Fix the underlying problem first, then try again.</span>`;
   });
 }
-
-
 
 
 function exportDataJSON(){
@@ -8100,41 +8364,20 @@ const manifest = {
 const manifestBlob = new Blob([JSON.stringify(manifest)], {type: 'application/json'});
 const manifestURL = URL.createObjectURL(manifestBlob);
 document.getElementById('manifestLink').setAttribute('href', manifestURL);
+// iOS ignores the web manifest's icons entirely for "Add to Home Screen" — it only reads
+// apple-touch-icon, which the app previously never provided, so it fell back to a screenshot
+// of whatever was on screen at install time. Reuse the same brush-icon SVG as a data URL.
+document.getElementById('appleTouchIcon').setAttribute('href', manifest.icons[0].src);
 
-// Register service worker inline
+// Register the real service worker file (sw.js, same repo, same folder as index.html).
+// A blob: URL was used previously — the Service Worker spec requires a same-origin script
+// URL, so every blob registration was silently rejected by the browser (caught by an empty
+// catch()). This means the app was never actually offline-installable via SW before; only
+// the ordinary browser HTTP cache was ever doing anything. sw.js MUST be deployed alongside
+// index.html at the same path for this to work — if 404s occur, registration just no-ops
+// safely and the app keeps working online exactly as before.
 if ('serviceWorker' in navigator) {
-  const swCode = `
-    // v2: switched from cache-first to network-first. Cache-first meant a device that loaded
-    // the app once could get permanently stuck on old code forever, even after the server had
-    // a newer version — silently, with no error shown. That's exactly what caused logins to
-    // break after the password-hashing update: some devices kept running old login code
-    // against the new data format. Network-first always tries to get the latest version first
-    // and only falls back to the cached copy if there's genuinely no connection.
-    // v3: fetch(e.request) alone still consults the browser's ordinary HTTP cache — which is
-    // exactly how "network-first" devices kept serving a stale index.html anyway. cache:'no-cache'
-    // forces revalidation with GitHub on every load (cheap: unchanged files answer 304), and the
-    // saved copy is used only when there's genuinely no connection. Non-GET requests (Firestore
-    // writes etc.) are left completely alone.
-    const CACHE = 'brush-tracker-v3';
-    self.addEventListener('install', e => { self.skipWaiting(); });
-    self.addEventListener('activate', e => {
-      e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))));
-      self.clients.claim();
-    });
-    self.addEventListener('fetch', e => {
-      if(e.request.method !== 'GET') return;
-      e.respondWith(
-        fetch(e.request, {cache:'no-cache'}).then(res => {
-          const copy = res.clone();
-          caches.open(CACHE).then(c => c.put(e.request, copy)).catch(()=>{});
-          return res;
-        }).catch(() => caches.match(e.request).then(r => r || caches.match('/')))
-      );
-    });
-  `;
-  const swBlob = new Blob([swCode], {type: 'application/javascript'});
-  const swURL = URL.createObjectURL(swBlob);
-  navigator.serviceWorker.register(swURL).catch(()=>{});
+  navigator.serviceWorker.register('sw.js').catch(()=>{});
 }
 
 // Show install prompt
