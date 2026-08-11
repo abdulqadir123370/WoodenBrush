@@ -239,7 +239,7 @@ body.offline-lock .size-btn{pointer-events:none;opacity:0.45;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1786444567656;
+const APP_BUILD = 1786445619634;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -255,6 +255,7 @@ const SK = {
   batchGenealogy:"wbt_batch_genealogy", brushProcessingLog:"wbt_brush_processing_log",
   socketProcessingLog:"wbt_socket_processing_log",
   wastagePrices:"wbt_wastage_prices",     // Fixed per-KG sale prices per waste type — Admin/Owner set them in the Wastage tab; sale entry can't change them
+  vendors:"wbt_vendors",                  // Approved vendor list — purchases can only select from here; Admin/Owner manage it
   checkAcks:"wbt_check_acks",             // "Reviewed — known history" acknowledgments for Auto-Fix items; keyed by exact message text so any change in the number brings the item back
   correctionsLog:"wbt_corrections_log",   // Permanent record of every applied ghost-stock correction (8/7-8/8 stale-device incident and future ones)
   dataSnapshots:"wbt_data_snapshots",     // System Watch: timestamped record of every stock number, for detecting unexplained changes
@@ -738,13 +739,23 @@ function loadFromFirestore(){
   const timer = setTimeout(()=>{
     console.log('Firestore first-load timeout — starting with local data.');
     startApp(true);
+    // Genuinely unreachable right now → the entry lock should engage immediately, so the
+    // authoritative grey lock bar (not just the yellow note) reflects the state at once.
+    if(typeof refreshOfflineLock==='function') refreshOfflineLock(true);
   }, 10000);
 
   if(!fbDb){ startApp(false); return; }
 
   firebase.auth().signInAnonymously().then(()=>{
     attachMinBuildListener();
-    attachFirestoreListeners(()=>{ cloudDataConfirmed = true; startApp(false); });
+    attachFirestoreListeners(()=>{
+      cloudDataConfirmed = true;
+      // If the 10s startup timeout already showed the offline warning, the connection has
+      // now recovered — clear it and re-check the entry lock so state matches reality.
+      hideStartupOfflineWarning();
+      if(typeof refreshOfflineLock==='function') refreshOfflineLock(true);
+      startApp(false);
+    });
   }).catch(err=>{
     console.error('Firebase anonymous sign-in failed:', err);
     startApp(true);
@@ -864,7 +875,17 @@ async function migrateLegacyDataNow(){
 // residual is eliminated at the source instead of being cleaned up after.
 let offlineLockOn = false;
 let lastProbeTs = 0;
+// The yellow STARTUP banner ("Couldn't reach the server...") fires on a slow first load and
+// previously never cleared, so it kept claiming offline/view-only while the connection had
+// long since recovered (green health badge next to an offline banner — contradictory and
+// alarming). The entry lock below is the single source of truth for offline state; whenever
+// it runs — locking OR unlocking — the legacy startup banner is retired.
+function hideStartupOfflineWarning(){
+  const el = document.getElementById('offlineWarning');
+  if(el) el.classList.add('hidden');
+}
 function setOfflineLock(on){
+  hideStartupOfflineWarning();
   if(on===offlineLockOn) return;
   offlineLockOn = on;
   document.body.classList.toggle('offline-lock', on);
@@ -988,6 +1009,7 @@ let state = {
   voidLog: ld(SK.voidLog, []),
   batchGenealogy: ld(SK.batchGenealogy, {}),
   wastagePrices: ld(SK.wastagePrices, []),
+  vendors: ld(SK.vendors, []),
   checkAcks: ld(SK.checkAcks, []),
   correctionsLog: ld(SK.correctionsLog, []),
   brushProcessingLog: ld(SK.brushProcessingLog, []),
@@ -1027,6 +1049,7 @@ function saveAll(){
   sv(SK.voidLog,state.voidLog);
   sv(SK.batchGenealogy,state.batchGenealogy);
   sv(SK.wastagePrices,state.wastagePrices);
+  sv(SK.vendors,state.vendors);
   sv(SK.checkAcks,state.checkAcks);
   sv(SK.correctionsLog,state.correctionsLog);
   sv(SK.brushProcessingLog,state.brushProcessingLog);
@@ -3276,12 +3299,16 @@ function renderBOM(){
 function renderMaterials(){
   const wp=state.woodPieces||[];
   let html='';
+  html+=renderVendorCardHTML();
   html+=`<div class="card" style="border:2px solid #27ae60;">
     <div class="label">📦 Add Purchase (Vendor Lot)</div>
     <div style="font-size:11px;color:#888;margin-bottom:10px;">One vendor delivery can include multiple plank sizes — they'll all share the same batch number.</div>
 
-    <div class="label">Vendor / Supplier Name</div>
-    <input type="text" placeholder="e.g. Ali Timber Traders" id="purchVendor" value="${state.newPurchVendor||''}" oninput="state.newPurchVendor=this.value" style="margin-bottom:10px;"/>
+    <div class="label">Vendor / Supplier</div>
+    <select id="purchVendor" onchange="state.newPurchVendor=this.value" style="margin-bottom:10px;">
+      <option value="">— Select vendor —</option>
+      ${getActiveVendors().map(v=>`<option value="${v}" ${state.newPurchVendor===v?'selected':''}>${v}</option>`).join('')}
+    </select>
 
     <div class="label">Purchase Date</div>
     <input type="date" id="purchDate" value="${isAdminOrOwner()?(state.newPurchDate||new Date().toISOString().slice(0,10)):new Date().toISOString().slice(0,10)}" ${dateLockAttrs()} oninput="state.newPurchDate=this.value" style="margin-bottom:12px;"/>
@@ -3293,7 +3320,7 @@ function renderMaterials(){
       <div class="grid2">
         <div><div class="label">Quantity (pcs)</div>
           <input type="number" min="0" placeholder="0" id="purchQty_${s}" value="${state['newPurchQty_'+s]||''}" oninput="state['newPurchQty_${s}']=this.value" style="margin-bottom:0;"/></div>
-        <div><div class="label">Price per Piece (Rs.)</div>
+        <div><div class="label">Price per Piece (Rs.) <span style="color:#e74c3c;">*required</span></div>
           <input type="number" min="0" step="0.01" placeholder="0.00" id="purchPrice_${s}" value="${state['newPurchPrice_'+s]||''}" oninput="state['newPurchPrice_${s}']=this.value" style="margin-bottom:0;"/></div>
       </div>
     </div>`).join('')}
@@ -3850,6 +3877,80 @@ function saveWastagePrices(){
   }
   setTimeout(re, 1500);
 }
+// ==================== APPROVED VENDOR LIST ====================
+// Purchases may only be recorded against a vendor from this list (dropdown — no free typing,
+// so no more "Ali Timber" / "ali timber traders" duplicates fragmenting the ledger and the
+// Costing tab's vendor filter). Admin/Owner add vendors; nothing is deleted — a vendor is
+// retired with a voided flag and disappears from the dropdown but stays on all past records.
+function getActiveVendors(){
+  return (state.vendors||[]).filter(v=>v && !v.voided).map(v=>v.name).sort((a,b)=>a.localeCompare(b));
+}
+function addVendor(){
+  if(!isAdminOrOwner()){ alert('Only Admin/Owner can add vendors.'); return; }
+  const el = document.getElementById('newVendorName');
+  const name = (el?.value||'').trim();
+  const msg = document.getElementById('vendorMsg');
+  if(!name){ if(msg){msg.textContent='⚠️ Enter a vendor name'; msg.className='msg err';} return; }
+  const exists = (state.vendors||[]).some(v=>v && !v.voided && v.name.toLowerCase()===name.toLowerCase());
+  if(exists){ if(msg){msg.textContent='⚠️ "'+name+'" is already in the list'; msg.className='msg err';} return; }
+  state.vendors = [...(state.vendors||[]), {id: Date.now()+Math.random(), name, addedBy: currentUser?.name||'?', at: new Date().toISOString()}];
+  if(el) el.value='';
+  saveAll(); re();
+}
+function retireVendor(id){
+  if(!isAdminOrOwner()){ alert('Only Admin/Owner can retire vendors.'); return; }
+  const v = (state.vendors||[]).find(x=>x && x.id===id);
+  if(!v) return;
+  if(!confirm('Retire vendor "'+v.name+'"? Past purchases keep the name; it just leaves the dropdown for new purchases.')) return;
+  v.voided = true; v.voidedBy = currentUser?.name||'?'; v.voidedAt = new Date().toISOString();
+  saveAll(); re();
+}
+function quickAddPastVendor(encodedName){
+  if(!isAdminOrOwner()) return;
+  const name = decodeURIComponent(encodedName);
+  if((state.vendors||[]).some(v=>v && !v.voided && v.name.toLowerCase()===name.toLowerCase())) return;
+  state.vendors = [...(state.vendors||[]), {id: Date.now()+Math.random(), name, addedBy: currentUser?.name||'?', at: new Date().toISOString(), fromHistory:true}];
+  saveAll(); re();
+}
+function renderVendorCardHTML(){
+  const isAdmin = isAdminOrOwner();
+  const active = (state.vendors||[]).filter(v=>v && !v.voided).sort((a,b)=>a.name.localeCompare(b.name));
+  // Past vendor names already on ledger purchases but not yet in the list — one-tap adopt.
+  const known = new Set(active.map(v=>v.name.toLowerCase()));
+  const historic = [...new Set((state.ledger||[])
+    .filter(e=>e.type==='plank' && e.direction==='IN' && e.vendor)
+    .map(e=>e.vendor.trim()).filter(n=>n && !known.has(n.toLowerCase())))].sort();
+  let html = `<div class="card" style="border:2px solid #8e44ad;">
+    <div class="label" style="color:#8e44ad;">🏷️ Approved Vendors</div>
+    <div style="font-size:11px;color:#888;margin-bottom:10px;">${isAdmin
+      ? 'Purchases can only be recorded against a vendor from this list. Retiring one keeps it on all past records — it just leaves the dropdown.'
+      : 'Purchases can only select from this list. Ask Admin/Owner to add a new vendor.'}</div>`;
+  if(active.length===0){
+    html += `<div style="font-size:12px;color:#e74c3c;font-weight:700;margin-bottom:8px;">⚠️ No vendors yet — purchases are blocked until one is added.</div>`;
+  }
+  active.forEach(v=>{
+    html += `<div class="row" style="padding:6px 8px;background:#f7f0fb;border-radius:6px;margin-bottom:5px;">
+      <span style="font-size:13px;"><b>${v.name}</b> <span style="font-size:10px;color:#aaa;">added by ${v.addedBy||'?'} · ${String(v.at||'').slice(0,10)}</span></span>
+      ${isAdmin?`<button class="btn btn-gray" style="font-size:10px;padding:3px 8px;" onclick="retireVendor(${JSON.stringify(v.id)})">Retire</button>`:''}
+    </div>`;
+  });
+  if(isAdmin){
+    html += `<div class="grid2" style="align-items:end;margin-top:8px;">
+      <div><div class="label">New Vendor Name</div><input type="text" id="newVendorName" placeholder="e.g. Ali Timber Traders" style="margin-bottom:0;"/></div>
+      <button class="btn btn-green" onclick="addVendor()">＋ Add Vendor</button>
+    </div>
+    <div id="vendorMsg" class="msg"></div>`;
+    if(historic.length>0){
+      html += `<div style="font-size:11px;color:#888;margin-top:8px;">Past vendors on old purchases, not yet in the list:</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px;">
+        ${historic.map(n=>`<button class="btn" style="background:#8e44ad;font-size:10px;padding:4px 10px;" onclick="quickAddPastVendor('${encodeURIComponent(n).replace(/'/g,'%27')}')">＋ ${n}</button>`).join('')}
+      </div>`;
+    }
+  }
+  html += `</div>`;
+  return html;
+}
+
 function renderWastagePriceCardHTML(){
   const isAdmin = isAdminOrOwner();
   let rows = WASTE_TYPES.map(t=>{
@@ -6198,7 +6299,12 @@ function addPurchaseBatch(){
   const date = resolveEntryDate(document.getElementById('purchDate')?.value || state.newPurchDate) || new Date().toISOString().slice(0,10);
   const msg = document.getElementById('matMsg');
 
-  if(!vendor){ if(msg){msg.textContent="⚠️ Enter vendor/supplier name";msg.className="msg err";} return; }
+  // Vendor must come from the approved list — the field is a dropdown, and this re-check
+  // makes the rule hold even against a tampered/stale form.
+  if(!vendor || !getActiveVendors().includes(vendor)){
+    if(msg){msg.textContent="⚠️ Select a vendor from the list. New vendors are added by Admin/Owner in the Approved Vendors card above.";msg.className="msg err";}
+    return;
+  }
 
   // Collect qty+price for each size that has a quantity entered
   const sizeEntries = [];
@@ -6211,6 +6317,14 @@ function addPurchaseBatch(){
   });
 
   if(sizeEntries.length===0){ if(msg){msg.textContent="⚠️ Enter quantity for at least one size";msg.className="msg err";} return; }
+
+  // Price is MANDATORY (Owner rule, 11/8/2026): a purchase without a price silently breaks
+  // batch costing forever — that batch can never be costed. Block, never guess.
+  const missingPrice = sizeEntries.filter(e=>!(e.price>0));
+  if(missingPrice.length>0){
+    if(msg){msg.textContent=`⚠️ Price per piece is required for: ${missingPrice.map(e=>e.size+'"').join(', ')}. A purchase without a price can never be costed.`;msg.className="msg err";}
+    return;
+  }
 
   // One batch number covers this entire vendor lot, across all sizes
   const bno = getNextBatchNo('WB');
