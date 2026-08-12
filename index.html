@@ -242,7 +242,7 @@ body.rejection-lock .size-btn{pointer-events:none;opacity:0.45;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1786522036281;
+const APP_BUILD = 1786528634251;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -1059,6 +1059,7 @@ let state = {
   ledgerFilterFrom: '', ledgerFilterTo: '', ledgerFilterSection: 'all',
   ledgerFilterSize: 'all', ledgerFilterBatch: 'all', ledgerFilterDirection: 'all',
   currentTab: "Dashboard",
+  adjStore:'', adjDir:'add', adjBatch:'', adjProduct:'', adjSize:'', adjSocketType:'', adjQty:'', adjReason:'',
   costingFilterBatch:'all', costingFilterProduct:'all', costingFilterVendor:'all',
   costingFilterFrom:'', costingFilterTo:'',
   prodSelectedSize: "24",
@@ -1233,7 +1234,8 @@ function renderDashboard(){
   const prod=[...(state.production||[])].sort((a,b)=>(b.date||"").localeCompare(a.date||"")).slice(0,5);
   const openList=Object.entries(state.openBatches||{});
 
-  let html='';
+  // Owner adjustments are published to EVERY role's dashboard — sunlight is the control.
+  let html=renderRecentAdjustmentsCardHTML();
 
   // Voided & flagged entries — always visible to Admin/Owner here, regardless of which
   // department tab the entry originally came from or whether its batch is still open.
@@ -5674,6 +5676,215 @@ function renderPriceBackfillCardHTML(){
   </div>`;
 }
 
+// ==================== OWNER ADJUSTMENT (bypass entry) ====================
+// A numbered manual stock adjustment for genuinely misplaced/unaccounted stock — the one
+// sanctioned way around the normal workflow. Controls (Owner decision 12/8): Owner-only;
+// reason mandatory (>=10 chars); can never drive stock negative; can never be edited or
+// deleted — a wrong adjustment is countered by a NEW adjustment referencing its number;
+// every adjustment writes an OWNER ADJUSTMENT ledger line, a permanent log entry, and shows
+// on the Dashboard to EVERY role. Sunlight is the control.
+const ADJ_STORES = {
+  planks:  {label:'Wooden Planks (raw)'},
+  scrap:   {label:'Scrap Inventory'},
+  woodfin: {label:'Wood Finishing stock (finished pieces)'},
+  brush:   {label:'Brush Dept stock (brushed pieces)'},
+  rfs:     {label:'Ready-for-Sale'},
+  socket:  {label:'Socket stock'},
+  screw:   {label:'Screw stock'},
+};
+function nextAdjNumber(){
+  return (state.correctionsLog||[]).filter(c=>c && String(c.kind||'').startsWith('owner_adj_')).length + 1;
+}
+function adjBatchOptions(store){
+  if(store==='planks'){ const out=[]; Object.entries(state.materials||{}).forEach(([sz,m])=>(m.batches||[]).forEach(b=>out.push(b.batchNo))); return [...new Set(out)]; }
+  if(store==='scrap') return [...new Set((state.scrapInventory||[]).map(s=>s.batch))];
+  if(store==='woodfin') return [...new Set((state.finishedInventory||[]).map(f=>f.batchNo))];
+  if(store==='brush') return [...new Set((state.finishedBrushes||[]).map(f=>f.batchNo))];
+  if(store==='rfs') return [...new Set((state.readyForSale||[]).map(f=>f.batchNo))];
+  if(store==='socket') return [...new Set((state.socketInventory||[]).map(s=>s.batchNo))];
+  if(store==='screw') return [...new Set((state.screwInventory||[]).map(s=>s.batchNo))];
+  return [];
+}
+function applyOwnerAdjustment(){
+  if(!currentUser || currentUser.role!=='owner'){ alert('Owner only.'); return; }
+  const store = state.adjStore, dir = state.adjDir==='deduct'?'deduct':'add';
+  const batch = (state.adjBatch||'').trim();
+  const qty = Math.floor(+state.adjQty);
+  const reason = (state.adjReason||'').trim();
+  const msg = document.getElementById('adjMsg');
+  const say = (t,ok)=>{ if(msg){msg.textContent=t; msg.className='msg '+(ok?'ok':'err');} };
+  if(!ADJ_STORES[store]){ say('⚠️ Select what to adjust.'); return; }
+  if(!batch){ say('⚠️ Enter the batch number.'); return; }
+  if(!(qty>0)){ say('⚠️ Quantity must be a whole number greater than 0.'); return; }
+  if(reason.length<10){ say('⚠️ Reason is mandatory — write at least 10 characters explaining WHY. This is shown to everyone.'); return; }
+  const today = new Date().toISOString().slice(0,10);
+  const adjNo = nextAdjNumber();
+  const stamp = `OWNER ADJUSTMENT (ADJ-${adjNo}): ${reason}`;
+
+  let ledgerType, ledgerMaterial, ledgerSize='';
+  let doIt = null; // returns error string or null
+
+  if(store==='planks'){
+    const size = state.adjSize;
+    if(!size || !state.materials?.[size]){ say('⚠️ Select the plank size.'); return; }
+    ledgerType='plank'; ledgerMaterial=state.materials[size].name||`${size}" Planks`; ledgerSize=String(size);
+    doIt = ()=>{
+      const m = state.materials[size];
+      let b = (m.batches||[]).find(x=>x.batchNo===batch);
+      if(dir==='deduct'){
+        if(!b || b.qty<qty) return `Only ${b?b.qty:0} planks of ${batch} exist — cannot deduct ${qty}. Adjustments can never make stock negative.`;
+        b.qty -= qty;
+      } else {
+        if(b) b.qty += qty;
+        else m.batches=[...(m.batches||[]),{batchNo:batch, qty, dateAdded:today, vendor:'', pricePerPiece:0}];
+      }
+      return null;
+    };
+  } else if(store==='scrap'){
+    const size = +state.adjSize;
+    if(!(size>0)){ say('⚠️ Enter the scrap piece size in inches.'); return; }
+    ledgerType='scrap'; ledgerMaterial=`${size}" Scrap`; ledgerSize=String(size);
+    doIt = ()=>{
+      let s = (state.scrapInventory||[]).find(x=>x.batch===batch && +x.size===size);
+      if(dir==='deduct'){
+        if(!s || s.quantity<qty) return `Only ${s?s.quantity:0} pcs of ${size}" scrap in ${batch} — cannot deduct ${qty}.`;
+        s.quantity -= qty;
+      } else {
+        if(s) s.quantity += qty;
+        else state.scrapInventory=[...(state.scrapInventory||[]),{size, quantity:qty, batch, dateCreated:today}];
+      }
+      return null;
+    };
+  } else if(store==='woodfin' || store==='brush' || store==='rfs'){
+    const product = state.adjProduct;
+    if(!product){ say('⚠️ Select the product.'); return; }
+    const coll = store==='woodfin' ? 'finishedInventory' : store==='brush' ? 'finishedBrushes' : 'readyForSale';
+    ledgerType='finished';
+    ledgerMaterial = store==='rfs' ? `${product} (Ready for Sale)` : store==='brush' ? `${product} (Brush)` : product;
+    doIt = ()=>{
+      let r = (state[coll]||[]).find(x=>x.batchNo===batch && x.productName===product);
+      if(dir==='deduct'){
+        if(!r || r.qty<qty) return `Only ${r?r.qty:0} pcs of ${product} in ${batch} — cannot deduct ${qty}.`;
+        r.qty -= qty;
+      } else {
+        if(r) r.qty += qty;
+        else {
+          const rec = {id: Date.now()+Math.random(), productName:product, batchNo:batch, qty, dateAdded:today};
+          if(store==='woodfin'){ const w=(state.woodPieces||[]).find(x=>x.name===product); rec.size = w? w.size : null; }
+          state[coll]=[...(state[coll]||[]), rec];
+        }
+      }
+      return null;
+    };
+  } else if(store==='socket'){
+    ledgerType='socket'; ledgerMaterial='Socket';
+    doIt = ()=>{
+      let s = (state.socketInventory||[]).find(x=>x.batchNo===batch);
+      if(dir==='deduct'){
+        if(!s || s.qty<qty) return `Only ${s?s.qty:0} sockets in ${batch} — cannot deduct ${qty}.`;
+        ledgerMaterial = s.socketType||'Socket';
+        s.qty -= qty;
+      } else {
+        if(s){ ledgerMaterial = s.socketType||'Socket'; s.qty += qty; }
+        else {
+          const st = state.adjSocketType;
+          if(!(state.socketTypes||[]).includes(st)) return 'New socket batch needs its socket type selected.';
+          ledgerMaterial = st;
+          state.socketInventory=[...(state.socketInventory||[]),{socketType:st, qty, batchNo:batch, dateAdded:today}];
+        }
+      }
+      return null;
+    };
+  } else { // screw
+    ledgerType='screw'; ledgerMaterial='Screws';
+    doIt = ()=>{
+      let s = (state.screwInventory||[]).find(x=>x.batchNo===batch);
+      if(dir==='deduct'){
+        if(!s || s.qty<qty) return `Only ${s?s.qty:0} screws in ${batch} — cannot deduct ${qty}.`;
+        s.qty -= qty;
+      } else {
+        if(s) s.qty += qty;
+        else state.screwInventory=[...(state.screwInventory||[]),{qty, batchNo:batch, vendor:'', dateAdded:today}];
+      }
+      return null;
+    };
+  }
+
+  if(!confirm(`ADJ-${adjNo} — ${dir==='add'?'ADD':'DEDUCT'} ${qty} → ${ADJ_STORES[store].label}, batch ${batch}${state.adjProduct?', '+state.adjProduct:''}\n\nReason (shown to EVERYONE on the Dashboard and in the Ledger):\n"${reason}"\n\nThis is permanent — it cannot be edited or deleted, only countered by another adjustment referencing ADJ-${adjNo}. Apply?`)) return;
+  const err = doIt();
+  if(err){ say('⚠️ '+err); return; }
+  addLedgerEntry(ledgerType, ledgerMaterial, batch, qty, dir==='add'?'IN':'OUT', stamp, ledgerSize);
+  state.correctionsLog = [...(state.correctionsLog||[]), {
+    id: Date.now()+Math.random(), kind:'owner_adj_'+Date.now(),
+    details:`ADJ-${adjNo}: ${dir==='add'?'+':'−'}${qty} ${ledgerMaterial} · ${batch} — ${reason}`,
+    by: currentUser?.name||'Owner', at: new Date().toISOString()
+  }];
+  if(typeof ghostCorrectionExplained!=='undefined') ghostCorrectionExplained.add(batch);
+  state.adjQty=''; state.adjReason='';
+  saveAll(); re();
+  setTimeout(()=>{ const m2=document.getElementById('adjMsg'); if(m2){m2.textContent=`✅ ADJ-${adjNo} applied and published to the Ledger and Dashboard.`; m2.className='msg ok';} }, 100);
+}
+function renderOwnerAdjustmentCardHTML(){
+  const store = state.adjStore;
+  const batches = store ? adjBatchOptions(store) : [];
+  const needsProduct = ['woodfin','brush','rfs'].includes(store);
+  const needsPlankSize = store==='planks';
+  const needsScrapSize = store==='scrap';
+  const needsSocketType = store==='socket';
+  return `<div class="card" style="border:2px solid #2c3e50;">
+    <div class="label" style="color:#2c3e50;">⚖️ Owner Adjustment — bypass entry</div>
+    <div style="font-size:11px;color:#888;margin-bottom:10px;">For misplaced or unaccounted stock only. Every adjustment gets a number, requires a written reason, appears in the Ledger AND on every user's Dashboard, and can never be edited or deleted — only countered by a new adjustment. It cannot make any stock negative.</div>
+    <div class="grid2">
+      <div><div class="label">What to adjust</div>
+        <select onchange="state.adjStore=this.value;state.adjBatch='';state.adjProduct='';re()">
+          <option value="">— Select —</option>
+          ${Object.entries(ADJ_STORES).map(([k,v])=>`<option value="${k}" ${store===k?'selected':''}>${v.label}</option>`).join('')}
+        </select></div>
+      <div><div class="label">Direction</div>
+        <select onchange="state.adjDir=this.value">
+          <option value="add" ${state.adjDir!=='deduct'?'selected':''}>➕ Add to stock</option>
+          <option value="deduct" ${state.adjDir==='deduct'?'selected':''}>➖ Deduct from stock</option>
+        </select></div>
+      ${needsPlankSize?`<div><div class="label">Plank Size</div>
+        <select onchange="state.adjSize=this.value">
+          <option value="">— Select —</option>
+          ${PLANK_SIZES.map(s=>`<option value="${s}" ${state.adjSize==s?'selected':''}>${s}"</option>`).join('')}
+        </select></div>`:''}
+      ${needsScrapSize?`<div><div class="label">Scrap piece size (inches)</div>
+        <input type="text" inputmode="decimal" value="${state.adjSize||''}" oninput="state.adjSize=this.value" placeholder="e.g. 11"/></div>`:''}
+      ${needsProduct?`<div><div class="label">Product</div>
+        <select onchange="state.adjProduct=this.value">
+          <option value="">— Select —</option>
+          ${(state.woodPieces||[]).map(w=>`<option value="${w.name}" ${state.adjProduct===w.name?'selected':''}>${w.name}</option>`).join('')}
+        </select></div>`:''}
+      ${needsSocketType?`<div><div class="label">Socket Type (for a NEW batch)</div>
+        <select onchange="state.adjSocketType=this.value">
+          <option value="">— existing batch / select for new —</option>
+          ${(state.socketTypes||[]).map(t=>`<option value="${t}" ${state.adjSocketType===t?'selected':''}>${t}</option>`).join('')}
+        </select></div>`:''}
+      <div><div class="label">Batch No ${batches.length?'(existing or type a new one)':''}</div>
+        <input type="text" list="adjBatchList" value="${state.adjBatch||''}" oninput="state.adjBatch=this.value" placeholder="e.g. WB004"/>
+        <datalist id="adjBatchList">${batches.map(b=>`<option value="${b}">`).join('')}</datalist></div>
+      <div><div class="label">Quantity (pcs)</div>
+        <input type="text" inputmode="numeric" value="${state.adjQty||''}" oninput="state.adjQty=this.value" placeholder="e.g. 150"/></div>
+    </div>
+    <div class="label">Reason — mandatory, shown to everyone</div>
+    <textarea rows="2" oninput="state.adjReason=this.value" placeholder="e.g. 150 pcs found in old store room during cleanup, not on any record" style="width:100%;margin-bottom:8px;">${state.adjReason||''}</textarea>
+    <button class="btn btn-full" style="background:#2c3e50;" onclick="applyOwnerAdjustment()">⚖️ Apply Adjustment (with confirmation)</button>
+    <div id="adjMsg" class="msg"></div>
+  </div>`;
+}
+function renderRecentAdjustmentsCardHTML(){
+  const adjs = (state.correctionsLog||[]).filter(c=>c && String(c.kind||'').startsWith('owner_adj_'))
+    .sort((a,b)=>(b.id||0)-(a.id||0)).slice(0,5);
+  if(adjs.length===0) return '';
+  return `<div class="card" style="border:2px solid #2c3e50;">
+    <div class="label" style="color:#2c3e50;">⚖️ Recent Owner Adjustments</div>
+    <div style="font-size:11px;color:#888;margin-bottom:8px;">Manual stock adjustments made by the Owner outside the normal workflow — listed here for everyone, permanently.</div>
+    ${adjs.map(a=>`<div style="font-size:11px;padding:5px 0;border-bottom:1px solid #f0e8de;">${a.details}<div style="font-size:10px;color:#aaa;">${a.by} · ${String(a.at||'').slice(0,10)}</div></div>`).join('')}
+  </div>`;
+}
+
 function renderGhostCorrectionsCardHTML(){
   const fixes = [
     {kind:'wb003_jumbo', title:'WB003 Smart Commando Jumbo — 2964 → 0', desc:'All 2964 were already brushed (2868 + 96, both ledgered). A stale device re-pushed the old stock record on 8/8. Ledger already balanced.'},
@@ -7666,6 +7877,7 @@ function renderAdminPanel(){
       <div id="resyncResult" style="margin-top:8px;font-size:12px;"></div>
     </div>
 
+    ${renderOwnerAdjustmentCardHTML()}
     ${renderGhostCorrectionsCardHTML()}
     ${renderScrapRestorationCardHTML()}
 
