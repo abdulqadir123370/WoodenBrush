@@ -242,7 +242,7 @@ body.rejection-lock .size-btn{pointer-events:none;opacity:0.45;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1786531233122;
+const APP_BUILD = 1786536693796;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -3454,14 +3454,6 @@ function renderMaterials(){
   </div>`;
 
   // Add Screw Stock — purchased from vendors, vendor name required
-    if(!state.ledgerSearched){
-    html+=`<div class="card" style="text-align:center;padding:26px;">
-      <div style="font-size:30px;margin-bottom:8px;">🔍</div>
-      <div style="font-size:13px;font-weight:700;color:#5c3d1e;">Select filters above, then press Search</div>
-      <div style="font-size:11px;color:#888;margin-top:4px;">The ledger loads only what you ask for — nothing is shown until you search.</div>
-    </div>`;
-    return html;
-  }
   html+=`<div class="card" style="border:2px solid #7f8c8d;">
     <div class="label" style="color:#7f8c8d;">🔧 Add Screw Stock</div>
     <div style="font-size:11px;color:#888;margin-bottom:8px;">Purchased from vendors — vendor name required.</div>
@@ -3619,7 +3611,25 @@ function renderLedger(){
       <div><div class="label">To Date</div><input type="date" value="${toDate}" onchange="state.ledgerFilterTo=this.value;ledgerFilterChanged()"/></div>
       <div style="display:flex;align-items:end;"><button class="btn btn-green btn-full" onclick="runLedgerSearch()">🔍 Search</button></div>
     </div>
-    ${hasFilters?`<button class="btn btn-gray" style="font-size:12px;padding:6px 12px;margin-bottom:10px;" onclick="state.ledgerFilterFrom='';state.ledgerFilterTo='';state.ledgerFilterSection='all';state.ledgerFilterSize='all';state.ledgerFilterBatch='all';state.ledgerFilterDirection='all';state.ledgerFilterVendor='all';state.ledgerFilterDept='all';state.ledgerFilterWoodPiece='all';re()">✕ Clear All Filters</button>`:''}
+    ${hasFilters?`<button class="btn btn-gray" style="font-size:12px;padding:6px 12px;margin-bottom:10px;" onclick="state.ledgerFilterFrom='';state.ledgerFilterTo='';state.ledgerFilterSection='all';state.ledgerFilterSize='all';state.ledgerFilterBatch='all';state.ledgerFilterDirection='all';state.ledgerFilterVendor='all';state.ledgerFilterDept='all';state.ledgerFilterWoodPiece='all';state.ledgerSearched=false;re()">✕ Clear All Filters</button>`:''}
+  </div>`;
+
+  // ---- SEARCH GATE (Owner request 12/8, corrected 12/8): nothing below renders until the
+  // Search button is pressed; any filter change invalidates results (ledgerFilterChanged).
+  // NOTE: this gate must live HERE, inside renderLedger, between the filter card and the
+  // totals — a build shipped earlier today had it accidentally inside renderMaterials
+  // (wrong anchor during patching), which truncated the Materials tab and left the ledger
+  // ungated. The test suite now asserts its position, not just its existence.
+  if(!state.ledgerSearched){
+    html+=`<div class="card" style="text-align:center;padding:26px;">
+      <div style="font-size:30px;margin-bottom:8px;">🔍</div>
+      <div style="font-size:13px;font-weight:700;color:#5c3d1e;">Select filters above, then press Search</div>
+      <div style="font-size:11px;color:#888;margin-top:4px;">The ledger loads only what you ask for — nothing is shown until you search.</div>
+    </div>`;
+    return html;
+  }
+
+  html+=`<div class="card">
     <div class="grid3">
       <div style="background:#e8f5e9;border-radius:8px;padding:10px;text-align:center;">
         <div style="font-size:10px;color:#aaa;">Total IN</div>
