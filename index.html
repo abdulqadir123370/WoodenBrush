@@ -81,7 +81,10 @@ input,select{width:100%;padding:8px 10px;border:1px solid #d4b896;border-radius:
    disabled (viewing/navigation stays). Enforced by body.offline-lock, driven by JS below. */
 body.offline-lock .btn,
 body.offline-lock .select-batch-btn,
-body.offline-lock .size-btn{pointer-events:none;opacity:0.45;}
+body.offline-lock .size-btn,
+body.rejection-lock .btn,
+body.rejection-lock .select-batch-btn,
+body.rejection-lock .size-btn{pointer-events:none;opacity:0.45;}
 .hidden{display:none;}
 .aaa{color:#aaa;}
 .green{color:#27ae60;}
@@ -239,7 +242,7 @@ body.offline-lock .size-btn{pointer-events:none;opacity:0.45;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1786453223612;
+const APP_BUILD = 1786522036281;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -494,6 +497,7 @@ function doFirestoreSync(){
       if(failed.length===0){
         syncStatus='saved'; syncConsecutiveFailures=0; lastSyncError=null;
         if(typeof setOfflineLock==='function') setOfflineLock(false); // a real commit proves the connection
+        if(typeof setRejectionLock==='function') setRejectionLock(false); // and proves writes are accepted again
         updateSyncIndicator();
         setTimeout(()=>{syncStatus='idle';updateSyncIndicator();},2000);
         return;
@@ -503,6 +507,9 @@ function doFirestoreSync(){
       lastSyncError = failed[0].reason;
       updateSyncIndicator();
       if(typeof refreshOfflineLock==='function') refreshOfflineLock(true);
+      // Give the offline probe a moment to classify; if we're online and still rejected,
+      // escalate to the hard entry lock.
+      setTimeout(()=>{ try{ evaluateRejectionLock(); }catch(e){} }, 3000);
       scheduleSyncRetry();
       throw lastSyncError;
     });
@@ -886,6 +893,7 @@ function hideStartupOfflineWarning(){
 }
 function setOfflineLock(on){
   hideStartupOfflineWarning();
+  if(on && typeof setRejectionLock==='function') setRejectionLock(false); // offline lock owns the UI while connection is down
   if(on===offlineLockOn) return;
   offlineLockOn = on;
   document.body.classList.toggle('offline-lock', on);
@@ -914,6 +922,39 @@ async function refreshOfflineLock(force){
   lastProbeTs = Date.now();
   const ok = await probeServerReachable();
   setOfflineLock(!ok);
+}
+// ==================== REJECTION ESCALATION ====================
+// When the database is actively REJECTING this device's saves (connection fine, writes
+// refused — i.e. the rules floor caught an outdated build, or a rules misconfiguration),
+// a banner alone lets a determined person keep typing entries that will never save. After
+// two consecutive rejected sync attempts (~30s with retries), this escalates to the same
+// hard entry lock as offline mode: buttons dead, full-width bar, one-tap update. Worst case
+// shrinks from "an hour of lost typing" to "one entry lost, then locked."
+// Honest scope: this code only exists in builds that carry it — a pre-10/8 build being
+// rejected today still shows only its old red banner. The escalation protects every build
+// from HERE forward against any future floor raise.
+let rejectionLockOn = false;
+function setRejectionLock(on){
+  if(on===rejectionLockOn) return;
+  rejectionLockOn = on;
+  document.body.classList.toggle('rejection-lock', on);
+  let bar = document.getElementById('rejectionLockBar');
+  if(on){
+    if(!bar){
+      bar = document.createElement('div');
+      bar.id = 'rejectionLockBar';
+      bar.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:#c0392b;color:#fff;padding:10px 14px;font-size:12px;font-weight:700;text-align:center;z-index:998;';
+      bar.innerHTML = '⛔ The database is REJECTING this device\'s saves — it is running an outdated version. Entries are disabled so nothing typed here can be lost. '
+        + '<button onclick="location.replace(location.pathname + \'?v=\' + Date.now())" style="background:#fff;color:#c0392b;border:none;border-radius:8px;padding:6px 14px;font-size:12px;font-weight:700;cursor:pointer;margin-left:8px;">⬇️ Update now</button>';
+      document.body.appendChild(bar);
+    }
+  } else if(bar){ bar.remove(); }
+}
+function evaluateRejectionLock(){
+  // Only when the connection itself is fine — if we're offline, the offline lock owns the UI.
+  if(syncStatus==='error' && syncConsecutiveFailures>=2 && navigator.onLine!==false && !offlineLockOn){
+    setRejectionLock(true);
+  }
 }
 window.addEventListener('offline', ()=>setOfflineLock(true));
 window.addEventListener('online', ()=>refreshOfflineLock(true));
