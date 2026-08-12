@@ -242,7 +242,7 @@ body.rejection-lock .size-btn{pointer-events:none;opacity:0.45;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1786528634251;
+const APP_BUILD = 1786531233122;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -1059,6 +1059,8 @@ let state = {
   ledgerFilterFrom: '', ledgerFilterTo: '', ledgerFilterSection: 'all',
   ledgerFilterSize: 'all', ledgerFilterBatch: 'all', ledgerFilterDirection: 'all',
   currentTab: "Dashboard",
+  showArchivedLists:false, showAllReceipts:false,
+  ledgerSearched:false,
   adjStore:'', adjDir:'add', adjBatch:'', adjProduct:'', adjSize:'', adjSocketType:'', adjQty:'', adjReason:'',
   costingFilterBatch:'all', costingFilterProduct:'all', costingFilterVendor:'all',
   costingFilterFrom:'', costingFilterTo:'',
@@ -1276,23 +1278,28 @@ function renderDashboard(){
       html+=`</div>`;
     }
 
-    if(voidedAll.length>0){
+    const voidedVisible = state.showArchivedLists ? voidedAll : voidedAll.filter(r=>!r.archived);
+    const voidedArchivedCount = voidedAll.filter(r=>r.archived).length;
+    if(voidedVisible.length>0 || voidedArchivedCount>0){
       html+=`<div class="card" style="border:2px solid #e74c3c;">
-        <div class="label" style="color:#e74c3c;">🚫 Voided Entries (${voidedAll.length})</div>
-        <div style="font-size:11px;color:#888;margin-bottom:10px;">Permanent record — nothing is ever deleted, only cancelled with a reason.</div>`;
-      voidedAll.slice(0,15).forEach(r=>{
+        <div class="label" style="color:#e74c3c;">🚫 Voided Entries (${voidedVisible.length})</div>
+        <div style="font-size:11px;color:#888;margin-bottom:10px;">Permanent record — nothing is ever deleted, only cancelled with a reason. The Owner can archive (hide) old ones.</div>`;
+      voidedVisible.slice(0,15).forEach(r=>{
         html+=`<div style="background:#fdecea;border-radius:8px;padding:10px;margin-bottom:8px;opacity:0.85;">
           <div style="font-size:12px;font-weight:700;text-decoration:line-through;">${r.batchNo} — ${r.woodPieceName}</div>
           <div style="font-size:11px;color:#666;margin:4px 0;text-decoration:line-through;">${r.planksUsed} planks, ${r.piecesProduced} good pcs</div>
           <div style="font-size:10px;color:#aaa;">📅 ${r.date} ⏰ ${r.time||'—'}</div>
           <div style="font-size:11px;color:#e74c3c;margin-top:4px;">Voided by ${r.voidedBy} on ${r.voidedDate} ${r.voidedTime||''}</div>
           <div style="font-size:11px;color:#888;font-style:italic;margin-bottom:6px;">"${r.voidedReason}"</div>
+          ${r.archived?`<div style="font-size:10px;color:#aaa;">🗄️ archived by ${r.archivedBy||'?'} · ${String(r.archivedAt||'').slice(0,10)}</div>`:''}
           <button class="btn" style="background:#5c3d1e;font-size:11px;padding:6px 12px;" onclick="openViewEntryModal(${JSON.stringify(r.id)})">👁️ View</button>
+          ${archiveBtnHTML('production', r.id, !!r.archived)}
         </div>`;
       });
       if(voidedAll.length>15){
         html+=`<div style="font-size:11px;color:#aaa;text-align:center;">+ ${voidedAll.length-15} more</div>`;
       }
+      html+=archivedToggleHTML(voidedArchivedCount);
       html+=`</div>`;
     }
   }
@@ -3022,7 +3029,7 @@ function renderWastage(){
   // Brush Dept wastage tied to a Wood Finishing batch that hasn't been closed yet — show separately
   // so it's not invisible while waiting, then it folds into the batch card automatically once closed.
   const closedBatchNos = new Set((state.closedBatches||[]).map(b=>b.batchNo));
-  const pendingBrushWastage = (state.wastage||[]).filter(w=>w.type==='BrushDeptWastage' && !closedBatchNos.has(w.batchNo));
+  let pendingBrushWastage = (state.wastage||[]).filter(w=>w.type==='BrushDeptWastage' && !closedBatchNos.has(w.batchNo));
   const pendingBrushWastageKg = pendingBrushWastage.filter(w=>!w.voided).reduce((s,w)=>s+(w.wastageKg||0),0);
 
   let html=renderWastagePriceCardHTML();
@@ -3121,7 +3128,9 @@ function renderWastage(){
     </div>`;
   }
 
-  if(pendingBrushWastage.length>0){
+  const pbwArchived = pendingBrushWastage.filter(w=>w.voided && w.archived).length;
+  if(!state.showArchivedLists) pendingBrushWastage = pendingBrushWastage.filter(w=>!(w.voided && w.archived));
+  if(pendingBrushWastage.length>0 || pbwArchived>0){
     const canFlagHereWastage = canFlagInDept('Wastage');
     html+=`<div class="card" style="border:2px solid #e67e22;">
       <div class="label" style="color:#e67e22;">🐛 Brush Dept Wastage (Keere Wala) — Batch Still Open</div>
@@ -3144,13 +3153,14 @@ function renderWastage(){
             </div>
           </div>
           ${w.flagged&&!isVoidedW?`<div style="font-size:11px;color:#3498db;margin-top:6px;background:#e8f4fd;border-radius:6px;padding:6px 8px;">🚩 Flagged by ${w.flaggedBy} on ${w.flaggedDate} ${w.flaggedTime||''}<br/><span style="font-style:italic;">"${w.flagNote}"</span></div>`:''}
-          ${isVoidedW?`<div style="font-size:11px;color:#e74c3c;margin-top:6px;">Voided by ${w.voidedBy} on ${w.voidedDate}<br/><span style="font-style:italic;">"${w.voidedReason}"</span></div>`:''}
+          ${isVoidedW?`<div style="font-size:11px;color:#e74c3c;margin-top:6px;">Voided by ${w.voidedBy} on ${w.voidedDate}<br/><span style="font-style:italic;">"${w.voidedReason}"</span></div><div style="margin-top:4px;">${archiveBtnHTML('wastage', w.id, !!w.archived)}</div>`:''}
           ${!isVoidedW&&withinWindow&&w.id?`<div style="display:flex;gap:6px;margin-top:8px;">
             ${canVoidHereWastage?`<button class="btn btn-red" style="font-size:10px;padding:5px 10px;" onclick="openVoidModal(${JSON.stringify(w.id)},'wastage')">🚫 Void</button>`:''}
             ${canFlagHereWastage&&!isAdminOrOwner()&&!w.flagged?`<button class="btn" style="background:#3498db;font-size:10px;padding:5px 10px;" onclick="openFlagModal(${JSON.stringify(w.id)},'wastage')">🚩 Flag</button>`:''}
           </div>`:''}
         </div>`;
       }).join('')}
+      ${archivedToggleHTML(pbwArchived)}
       <div style="padding-top:8px;border-top:1px solid #f0e8de;font-size:12px;font-weight:700;color:#e67e22;">
         Total Pending: ${pendingBrushWastageKg.toFixed(1)} KG
       </div>
@@ -3242,7 +3252,7 @@ function renderWastage(){
           <summary style="cursor:pointer;color:#7a5230;font-weight:700;">📋 View ${batchQcEntries.length} rejection record${batchQcEntries.length>1?'s':''} (total ${b.qcWastageKg||0} KG)</summary>
           <div style="margin-top:6px;background:#f9f5f0;border-radius:6px;padding:8px;">
             <div style="color:#aaa;font-size:10px;margin-bottom:6px;">Voiding a record here removes it from the live Wastage tab totals, but this batch's own KG summary above was fixed when the batch closed and won't recalculate.</div>
-            ${batchQcEntries.map(w=>{
+            ${(state.showArchivedLists?batchQcEntries:batchQcEntries.filter(w=>!(w.voided&&w.archived))).map(w=>{
               const isVoidedW2 = !!w.voided;
               const withinWindow2 = isRecWithin24Hours(w);
               const canVoidHereWastage2 = isAdminOrOwner() ? !!w.flagged : canVoidInDept('Wastage');
@@ -3253,7 +3263,7 @@ function renderWastage(){
                   <span style="font-weight:700;color:#e74c3c;${isVoidedW2?'text-decoration:line-through;':''}">${(w.wastageKg||0).toFixed(1)} KG</span>
                 </div>
                 ${w.typeSplit?`<div style="color:#888;font-size:10px;">${WASTE_TYPES.map(t=>w.typeSplit[t]?t+': '+w.typeSplit[t].toFixed(1)+'KG':'').filter(Boolean).join(' · ')}</div>`:''}
-                <div style="color:#aaa;font-size:10px;">${w.date||''} ${isVoidedW2?' · 🚫 VOIDED':(w.flagged?' · 🚩 FLAGGED':'')}</div>
+                <div style="color:#aaa;font-size:10px;">${w.date||''} ${isVoidedW2?' · 🚫 VOIDED':(w.flagged?' · 🚩 FLAGGED':'')} ${isVoidedW2?archiveBtnHTML('wastage', w.id, !!w.archived):''}</div>
                 ${!isVoidedW2&&withinWindow2&&w.id&&(canVoidHereWastage2||(canFlagHereWastage2&&!isAdminOrOwner()&&!w.flagged))?`<div style="display:flex;gap:6px;margin-top:4px;">
                   ${canVoidHereWastage2?`<button class="btn btn-red" style="font-size:9px;padding:3px 8px;" onclick="openVoidModal(${JSON.stringify(w.id)},'wastage')">🚫 Void</button>`:''}
                   ${canFlagHereWastage2&&!isAdminOrOwner()&&!w.flagged?`<button class="btn" style="background:#3498db;font-size:9px;padding:3px 8px;" onclick="openFlagModal(${JSON.stringify(w.id)},'wastage')">🚩 Flag</button>`:''}
@@ -3444,6 +3454,14 @@ function renderMaterials(){
   </div>`;
 
   // Add Screw Stock — purchased from vendors, vendor name required
+    if(!state.ledgerSearched){
+    html+=`<div class="card" style="text-align:center;padding:26px;">
+      <div style="font-size:30px;margin-bottom:8px;">🔍</div>
+      <div style="font-size:13px;font-weight:700;color:#5c3d1e;">Select filters above, then press Search</div>
+      <div style="font-size:11px;color:#888;margin-top:4px;">The ledger loads only what you ask for — nothing is shown until you search.</div>
+    </div>`;
+    return html;
+  }
   html+=`<div class="card" style="border:2px solid #7f8c8d;">
     <div class="label" style="color:#7f8c8d;">🔧 Add Screw Stock</div>
     <div style="font-size:11px;color:#888;margin-bottom:8px;">Purchased from vendors — vendor name required.</div>
@@ -3496,6 +3514,18 @@ function ledgerDeptOf(e){
   return 'Wood Finishing';
 }
 
+// Ledger results render ONLY after the Search button (Owner request 12/8): the full ledger
+// is heavy and rarely what anyone wants on first open — filters first, then search. Changing
+// any filter after a search clears the results until Search is pressed again, so what's on
+// screen always matches the filters exactly.
+function ledgerFilterChanged(){
+  state.ledgerSearched = false;
+  re();
+}
+function runLedgerSearch(){
+  state.ledgerSearched = true;
+  re();
+}
 function renderLedger(){
   const ledger = (state.ledger||[]);
   const fromDate = state.ledgerFilterFrom||'';
@@ -3533,14 +3563,14 @@ function renderLedger(){
   const totalOut = filtered.filter(e=>e.direction==='OUT').reduce((s,e)=>s+e.qty,0);
   const hasFilters = fromDate||toDate||section!=='all'||filterSize!=='all'||filterBatch!=='all'||filterDir!=='all'||filterVendor!=='all'||filterDept!=='all'||filterWoodPiece!=='all';
 
-  const sectionColors = {plank:'#5c3d1e', scrap:'#e67e22', finished:'#27ae60', socket:'#9b59b6', screw:'#7f8c8d'};
-  const sectionLabels = {plank:'🪵 Wooden Planks', scrap:'♻️ Scrap', finished:'✅ Finished Pieces', socket:'🔌 Sockets', screw:'🔩 Screws'};
+  const sectionColors = {plank:'#5c3d1e', scrap:'#e67e22', finished:'#27ae60', socket:'#9b59b6', screw:'#7f8c8d', wastage:'#2c3e50'};
+  const sectionLabels = {plank:'🪵 Wooden Planks', scrap:'♻️ Scrap', finished:'✅ Finished Pieces', socket:'🔌 Sockets', screw:'🔩 Screws', wastage:'♻️ Wastage KG (Owner adjustments)'};
 
   let html=`<div class="card card-wide" style="border:2px solid #5c3d1e;">
     <div class="label">📒 Stock Ledger — Filters</div>
     <div class="filter-grid">
       <div><div class="label">Department</div>
-        <select onchange="state.ledgerFilterDept=this.value;re()">
+        <select onchange="state.ledgerFilterDept=this.value;ledgerFilterChanged()">
           <option value="all" ${filterDept==='all'?'selected':''}>All Departments</option>
           <option value="Materials" ${filterDept==='Materials'?'selected':''}>📦 Materials (purchases & stock intake)</option>
           <option value="Wood Finishing" ${filterDept==='Wood Finishing'?'selected':''}>🪚 Wood Finishing</option>
@@ -3548,44 +3578,46 @@ function renderLedger(){
           <option value="Socket Dept" ${filterDept==='Socket Dept'?'selected':''}>🔌 Socket Dept</option>
         </select></div>
       <div><div class="label">Wood Piece Type</div>
-        <select onchange="state.ledgerFilterWoodPiece=this.value;re()">
+        <select onchange="state.ledgerFilterWoodPiece=this.value;ledgerFilterChanged()">
           <option value="all" ${filterWoodPiece==='all'?'selected':''}>All Products</option>
           ${(state.woodPieces||[]).map(w=>`<option value="${w.name}" ${filterWoodPiece===w.name?'selected':''}>${w.name}</option>`).join('')}
         </select></div>
       <div><div class="label">Material Type</div>
-        <select onchange="state.ledgerFilterSection=this.value;state.ledgerFilterSize='all';state.ledgerFilterBatch='all';re()">
+        <select onchange="state.ledgerFilterSection=this.value;state.ledgerFilterSize='all';state.ledgerFilterBatch='all';ledgerFilterChanged()">
           <option value="all" ${section==='all'?'selected':''}>All Materials</option>
           <option value="plank" ${section==='plank'?'selected':''}>🪵 Wooden Planks</option>
           <option value="scrap" ${section==='scrap'?'selected':''}>♻️ Scrap</option>
           <option value="finished" ${section==='finished'?'selected':''}>✅ Finished Pieces</option>
           <option value="socket" ${section==='socket'?'selected':''}>🔌 Sockets</option>
           <option value="screw" ${section==='screw'?'selected':''}>🔩 Screws</option>
+          <option value="wastage" ${section==='wastage'?'selected':''}>♻️ Wastage KG (adjustments)</option>
         </select></div>
       ${section==='plank'&&allSizes.length>0?`
       <div><div class="label">Plank Size</div>
-        <select onchange="state.ledgerFilterSize=this.value;state.ledgerFilterBatch='all';re()">
+        <select onchange="state.ledgerFilterSize=this.value;state.ledgerFilterBatch='all';ledgerFilterChanged()">
           <option value="all" ${filterSize==='all'?'selected':''}>All Sizes</option>
           ${allSizes.map(s=>`<option value="${s}" ${filterSize===s?'selected':''}>${s}" Planks</option>`).join('')}
         </select></div>`:''}
       <div><div class="label">Batch Number</div>
-        <select onchange="state.ledgerFilterBatch=this.value;re()">
+        <select onchange="state.ledgerFilterBatch=this.value;ledgerFilterChanged()">
           <option value="all" ${filterBatch==='all'?'selected':''}>All Batches</option>
           ${allBatches.map(b=>`<option value="${b}" ${filterBatch===b?'selected':''}>${b}</option>`).join('')}
         </select></div>
       ${section==='plank'&&allVendors.length>0?`
       <div><div class="label">Vendor</div>
-        <select onchange="state.ledgerFilterVendor=this.value;re()">
+        <select onchange="state.ledgerFilterVendor=this.value;ledgerFilterChanged()">
           <option value="all" ${filterVendor==='all'?'selected':''}>All Vendors</option>
           ${allVendors.map(v=>`<option value="${v}" ${filterVendor===v?'selected':''}>${v}</option>`).join('')}
         </select></div>`:''}
       <div><div class="label">Direction</div>
-        <select onchange="state.ledgerFilterDirection=this.value;re()">
+        <select onchange="state.ledgerFilterDirection=this.value;ledgerFilterChanged()">
           <option value="all" ${filterDir==='all'?'selected':''}>IN & OUT</option>
           <option value="IN" ${filterDir==='IN'?'selected':''}>↑ IN only</option>
           <option value="OUT" ${filterDir==='OUT'?'selected':''}>↓ OUT only</option>
         </select></div>
-      <div><div class="label">From Date</div><input type="date" value="${fromDate}" onchange="state.ledgerFilterFrom=this.value;re()"/></div>
-      <div><div class="label">To Date</div><input type="date" value="${toDate}" onchange="state.ledgerFilterTo=this.value;re()"/></div>
+      <div><div class="label">From Date</div><input type="date" value="${fromDate}" onchange="state.ledgerFilterFrom=this.value;ledgerFilterChanged()"/></div>
+      <div><div class="label">To Date</div><input type="date" value="${toDate}" onchange="state.ledgerFilterTo=this.value;ledgerFilterChanged()"/></div>
+      <div style="display:flex;align-items:end;"><button class="btn btn-green btn-full" onclick="runLedgerSearch()">🔍 Search</button></div>
     </div>
     ${hasFilters?`<button class="btn btn-gray" style="font-size:12px;padding:6px 12px;margin-bottom:10px;" onclick="state.ledgerFilterFrom='';state.ledgerFilterTo='';state.ledgerFilterSection='all';state.ledgerFilterSize='all';state.ledgerFilterBatch='all';state.ledgerFilterDirection='all';state.ledgerFilterVendor='all';state.ledgerFilterDept='all';state.ledgerFilterWoodPiece='all';re()">✕ Clear All Filters</button>`:''}
     <div class="grid3">
@@ -3655,7 +3687,9 @@ function renderLedger(){
     </table>`;
   }
 
-  const sections = section==='all'?['plank','scrap','finished','socket','screw']:[section];
+  // 'wastage' added 12/8: Owner wastage-KG adjustments write ledger lines with this type —
+  // omitting it here made them invisible in the Ledger tab (audit finding, fixed).
+  const sections = section==='all'?['plank','scrap','finished','socket','screw','wastage']:[section];
   sections.forEach(sec=>{
     const entries=filtered.filter(e=>e.type===sec);
     if(entries.length===0) return;
@@ -3782,7 +3816,9 @@ function renderSales(){
     <div style="font-size:11px;color:#888;margin-bottom:8px;">Entries older than 24 hours can no longer be voided or flagged by anyone.</div>`;
   const isOwner = currentUser?.role==='owner';
   const canFlagHereSales = canFlagInDept('Sales');
-  sales.forEach((s,idx)=>{
+  const salesArchivedCount = sales.filter(s=>s.voided && s.archived).length;
+  const salesVisible = state.showArchivedLists ? sales : sales.filter(s=>!(s.voided && s.archived));
+  salesVisible.forEach((s,idx)=>{
     const isVoidedSale = !!s.voided;
     const payColor = s.payment==='Paid'?'#27ae60':s.payment==='Unpaid'?'#e74c3c':'#e67e22';
     const payIcon = s.payment==='Paid'?'✅':s.payment==='Unpaid'?'❌':'⏳';
@@ -3809,6 +3845,7 @@ function renderSales(){
         </div>
       </div>
         <div style="font-size:11px;color:#888;${isVoidedSale?'text-decoration:line-through;':''}">${s.kgSold} KG @ Rs.${s.pricePerKg}/KG${s.weighSlipDate?` · slip dated ${s.weighSlipDate}`:''}</div>
+      ${isVoidedSale?`<div style="margin-top:4px;">${archiveBtnHTML('sales', s.id, !!s.archived)}</div>`:''}
       ${s.weighSlipUrl?`<a href="${s.weighSlipUrl}" ${String(s.weighSlipUrl).startsWith('data:')?`download="weight-slip-${String(s.id).replace(/[^0-9]/g,'')}.jpg"`:`target="_blank" rel="noopener"`} style="font-size:11px;color:#3498db;font-weight:700;text-decoration:none;">📷 View Weight Slip</a>${s.manualOverride?` <span style="color:#c0392b;font-weight:700;">(entered manually by ${s.manualOverrideBy||'Admin'} — slip was unreadable${s.weighSlipReadKg!=null?`, read as ${s.weighSlipReadKg} KG`:''})</span>`:(s.weighSlipReadKg!=null && Math.abs(s.weighSlipReadKg-s.kgSold)>0.05?` <span style="color:#e67e22;">(slip read ${s.weighSlipReadKg} KG)</span>`:'')}`:(s.manualOverride?`<span style="color:#c0392b;font-weight:700;">📷 No photo saved — entered manually by ${s.manualOverrideBy||'Admin'} (legacy record)</span>`:'')}
       ${s.flagged&&!isVoidedSale?`<div style="font-size:11px;color:#3498db;margin-top:6px;background:#e8f4fd;border-radius:6px;padding:6px 8px;">🚩 Flagged by ${s.flaggedBy} on ${s.flaggedDate} ${s.flaggedTime||''}<br/><span style="font-style:italic;">"${s.flagNote}"</span></div>`:''}
       ${isVoidedSale?`<div style="font-size:11px;color:#e74c3c;margin-top:6px;">Voided by ${s.voidedBy} on ${s.voidedDate}<br/><span style="font-style:italic;">"${s.voidedReason}"</span></div>`:''}
@@ -3841,6 +3878,7 @@ function renderSales(){
       </div>`:''}
     </div>`;
   });
+  html+=archivedToggleHTML(salesArchivedCount);
   html+=`</div>`;
   return html;
 }
@@ -5683,6 +5721,42 @@ function renderPriceBackfillCardHTML(){
 // deleted — a wrong adjustment is countered by a NEW adjustment referencing its number;
 // every adjustment writes an OWNER ADJUSTMENT ledger line, a permanent log entry, and shows
 // on the Dashboard to EVERY role. Sunlight is the control.
+// ==================== ARCHIVE (Owner-only, hide-not-delete) ====================
+// The Owner asked for delete buttons everywhere; the standing rule "nothing is ever deleted"
+// won (Owner agreed 12/8 — the phantom-798 lesson). Archive is the compromise: an archived
+// record disappears from all normal lists but stays fully present in the data — ledger math,
+// Costing, System Watch, audits all still see it. Stamped who/when, reversible any time via
+// each list's "show archived" toggle. Visually a delete; forensically nothing like one.
+const ARCHIVABLE = { production:'production', wastage:'wastage', sales:'sales' };
+function archiveRecord(collKey, id){
+  if(!currentUser || currentUser.role!=='owner'){ alert('Owner only.'); return; }
+  const coll = ARCHIVABLE[collKey]; if(!coll) return;
+  const r = (state[coll]||[]).find(x=>x && x.id===id);
+  if(!r) return;
+  if(!r.voided){ alert('Only voided entries can be archived — live entries stay visible.'); return; }
+  r.archived = true; r.archivedBy = currentUser?.name||'Owner'; r.archivedAt = new Date().toISOString();
+  saveAll(); re();
+}
+function unarchiveRecord(collKey, id){
+  if(!currentUser || currentUser.role!=='owner'){ alert('Owner only.'); return; }
+  const coll = ARCHIVABLE[collKey]; if(!coll) return;
+  const r = (state[coll]||[]).find(x=>x && x.id===id);
+  if(!r) return;
+  r.archived = false; r.unarchivedBy = currentUser?.name||'Owner'; r.unarchivedAt = new Date().toISOString();
+  saveAll(); re();
+}
+function toggleArchivedLists(){ state.showArchivedLists = !state.showArchivedLists; re(); }
+function archiveBtnHTML(collKey, id, archived){
+  if(!currentUser || currentUser.role!=='owner') return '';
+  return archived
+    ? `<button class="btn btn-gray" style="font-size:10px;padding:4px 10px;" onclick="unarchiveRecord('${collKey}',${JSON.stringify(id)})">↩️ Unarchive</button>`
+    : `<button class="btn btn-gray" style="font-size:10px;padding:4px 10px;" onclick="archiveRecord('${collKey}',${JSON.stringify(id)})">🗄️ Archive (hide)</button>`;
+}
+function archivedToggleHTML(count){
+  if(count<=0) return '';
+  return `<div style="font-size:11px;color:#888;margin-top:6px;">🗄️ ${count} archived (hidden, fully kept in the books) <span style="text-decoration:underline;cursor:pointer;" onclick="toggleArchivedLists()">${state.showArchivedLists?'hide':'show'}</span></div>`;
+}
+
 const ADJ_STORES = {
   planks:  {label:'Wooden Planks (raw)'},
   scrap:   {label:'Scrap Inventory'},
@@ -5691,6 +5765,7 @@ const ADJ_STORES = {
   rfs:     {label:'Ready-for-Sale'},
   socket:  {label:'Socket stock'},
   screw:   {label:'Screw stock'},
+  wastage: {label:'Wastage KG (Bhusa / Patti / Gitta)'},
 };
 function nextAdjNumber(){
   return (state.correctionsLog||[]).filter(c=>c && String(c.kind||'').startsWith('owner_adj_')).length + 1;
@@ -5708,8 +5783,10 @@ function adjBatchOptions(store){
 function applyOwnerAdjustment(){
   if(!currentUser || currentUser.role!=='owner'){ alert('Owner only.'); return; }
   const store = state.adjStore, dir = state.adjDir==='deduct'?'deduct':'add';
-  const batch = (state.adjBatch||'').trim();
-  const qty = Math.floor(+state.adjQty);
+  // Wastage adjusts a KG pool, not a batch: batch is fixed to the adjustment marker and
+  // quantity may be decimal. All piece stores stay whole-number and batch-addressed.
+  const batch = store==='wastage' ? 'OWNER-ADJ' : (state.adjBatch||'').trim();
+  const qty = store==='wastage' ? +state.adjQty : Math.floor(+state.adjQty);
   const reason = (state.adjReason||'').trim();
   const msg = document.getElementById('adjMsg');
   const say = (t,ok)=>{ if(msg){msg.textContent=t; msg.className='msg '+(ok?'ok':'err');} };
@@ -5795,6 +5872,30 @@ function applyOwnerAdjustment(){
       }
       return null;
     };
+  } else if(store==='wastage'){
+    const wt = state.adjProduct; // reuse the product select for the waste type
+    if(!WASTE_TYPES.includes(wt)){ say('⚠️ Select the waste type.'); return; }
+    const kg = +state.adjQty; // decimal KG allowed here, unlike piece stores
+    if(!(kg>0)){ say('⚠️ Enter KG greater than 0.'); return; }
+    ledgerType='wastage'; ledgerMaterial=wt+' (Wastage KG)';
+    doIt = ()=>{
+      if(dir==='deduct'){
+        const avail = getWasteTypeStock().available[wt]||0;
+        if(avail < kg) return `Only ${avail.toFixed(1)} KG of ${wt} available — cannot deduct ${kg}.`;
+      }
+      // Both directions are recorded as a clearly-labeled adjustment WASTAGE ENTRY — the
+      // availability math (produced − sold) then reflects it naturally, and the entry shows
+      // in the Wastage tab like everything else. A deduction carries negative KG on the
+      // record, guarded above so the pool can never go below zero.
+      const signed = dir==='add' ? kg : -kg;
+      const split = {Bhusa:0, Patti:0, Gitta:0}; split[wt] = signed;
+      state.wastage = [...(state.wastage||[]), {
+        id: Date.now()+Math.random(), date: today, time: new Date().toTimeString().slice(0,5),
+        batchNo:'OWNER-ADJ', type:'Owner Adjustment', woodPieceName:'—', plankSizeName:'—',
+        wastageKg: signed, typeSplit: split, reason: stamp, status:'confirmed'
+      }];
+      return null;
+    };
   } else { // screw
     ledgerType='screw'; ledgerMaterial='Screws';
     doIt = ()=>{
@@ -5828,6 +5929,7 @@ function renderOwnerAdjustmentCardHTML(){
   const store = state.adjStore;
   const batches = store ? adjBatchOptions(store) : [];
   const needsProduct = ['woodfin','brush','rfs'].includes(store);
+  const isWastage = store==='wastage';
   const needsPlankSize = store==='planks';
   const needsScrapSize = store==='scrap';
   const needsSocketType = store==='socket';
@@ -5857,16 +5959,21 @@ function renderOwnerAdjustmentCardHTML(){
           <option value="">— Select —</option>
           ${(state.woodPieces||[]).map(w=>`<option value="${w.name}" ${state.adjProduct===w.name?'selected':''}>${w.name}</option>`).join('')}
         </select></div>`:''}
+      ${isWastage?`<div><div class="label">Waste Type</div>
+        <select onchange="state.adjProduct=this.value">
+          <option value="">— Select —</option>
+          ${WASTE_TYPES.map(t=>`<option value="${t}" ${state.adjProduct===t?'selected':''}>${t}</option>`).join('')}
+        </select></div>`:''}
       ${needsSocketType?`<div><div class="label">Socket Type (for a NEW batch)</div>
         <select onchange="state.adjSocketType=this.value">
           <option value="">— existing batch / select for new —</option>
           ${(state.socketTypes||[]).map(t=>`<option value="${t}" ${state.adjSocketType===t?'selected':''}>${t}</option>`).join('')}
         </select></div>`:''}
-      <div><div class="label">Batch No ${batches.length?'(existing or type a new one)':''}</div>
+      ${isWastage?'':`<div><div class="label">Batch No ${batches.length?'(existing or type a new one)':''}</div>
         <input type="text" list="adjBatchList" value="${state.adjBatch||''}" oninput="state.adjBatch=this.value" placeholder="e.g. WB004"/>
-        <datalist id="adjBatchList">${batches.map(b=>`<option value="${b}">`).join('')}</datalist></div>
-      <div><div class="label">Quantity (pcs)</div>
-        <input type="text" inputmode="numeric" value="${state.adjQty||''}" oninput="state.adjQty=this.value" placeholder="e.g. 150"/></div>
+        <datalist id="adjBatchList">${batches.map(b=>`<option value="${b}">`).join('')}</datalist></div>`}
+      <div><div class="label">${isWastage?'KG':'Quantity (pcs)'}</div>
+        <input type="text" inputmode="${isWastage?'decimal':'numeric'}" value="${state.adjQty||''}" oninput="state.adjQty=this.value" placeholder="${isWastage?'e.g. 45.5':'e.g. 150'}"/></div>
     </div>
     <div class="label">Reason — mandatory, shown to everyone</div>
     <textarea rows="2" oninput="state.adjReason=this.value" placeholder="e.g. 150 pcs found in old store room during cleanup, not on any record" style="width:100%;margin-bottom:8px;">${state.adjReason||''}</textarea>
@@ -5915,7 +6022,10 @@ function renderGhostCorrectionsCardHTML(){
     </div>`;
   }
   if(applied.length>0){
-    html += `<div style="font-size:11px;color:#888;">Applied: ${applied.map(c=>`<div style="margin-top:3px;">✅ ${c.details} <span style="color:#aaa;">(${c.by}, ${String(c.at).slice(0,10)})</span></div>`).join('')}</div>`;
+    const receipts = [...applied].sort((a,b)=>(b.id||0)-(a.id||0));
+    const shownReceipts = state.showAllReceipts ? receipts : receipts.slice(0,3);
+    html += `<div style="font-size:11px;color:#888;">Applied (${applied.length}): ${shownReceipts.map(c=>`<div style="margin-top:3px;">✅ ${c.details} <span style="color:#aaa;">(${c.by}, ${String(c.at).slice(0,10)})</span></div>`).join('')}
+    ${applied.length>3?`<div style="margin-top:5px;text-decoration:underline;cursor:pointer;" onclick="state.showAllReceipts=!state.showAllReceipts;re()">${state.showAllReceipts?'show latest 3 only':`show all ${applied.length} receipts`}</div>`:''}</div>`;
   }
   html += `</div>`;
   return html;
