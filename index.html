@@ -242,7 +242,7 @@ body.rejection-lock .size-btn{pointer-events:none;opacity:0.45;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1786537763021;
+const APP_BUILD = 1786540242374;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -1553,7 +1553,7 @@ function renderProduction(){
       const isVoided2 = !!r.voided;
       // Admin/Owner: only voidable once flagged. Everyone else: their own dept-level
       // canVoid permission (self-service voids within their daily cap), unrelated to flagging.
-      const canVoidHere2 = isAdminOrOwner() ? !!r.flagged : canVoidInDept('Wood Finishing');
+      const canVoidHere2 = isOwnerVoidSupreme() ? true : isAdminOrOwner() ? !!r.flagged : canVoidInDept('Wood Finishing');
       html+=`<div class="prod-item" style="${isVoided2?'opacity:0.55;':''}">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;">
           <div style="font-weight:600;${isVoided2?'text-decoration:line-through;':''}">${r.woodPieceName} <span style="color:#7a5230;font-size:11px;">(${r.batchNo})</span></div>
@@ -2269,7 +2269,7 @@ function renderBrushDept(){
       <div style="font-size:11px;color:#888;margin-bottom:8px;">Entries older than 24 hours can no longer be voided or flagged by anyone.</div>`;
     recentBrushLog.forEach(r=>{
       const isVoided = !!r.voided;
-      const canVoidHereBrush = isAdminOrOwner() ? !!r.flagged : canVoidInDept('Brush Dept');
+      const canVoidHereBrush = isOwnerVoidSupreme() ? true : isAdminOrOwner() ? !!r.flagged : canVoidInDept('Brush Dept');
       html += `<div class="prod-item" style="${isVoided?'opacity:0.55;':''}">
         <div style="display:flex;justify-content:space-between;align-items:center;">
           <div style="font-weight:600;${isVoided?'text-decoration:line-through;':''}">${r.date} ${r.time} — ${r.productName}</div>
@@ -2585,7 +2585,7 @@ function renderSocketDept(){
       <div style="font-size:11px;color:#888;margin-bottom:8px;">Entries older than 24 hours can no longer be voided or flagged by anyone.</div>`;
     recentSocketLog.forEach(r=>{
       const isVoided = !!r.voided;
-      const canVoidHereSocket = isAdminOrOwner() ? !!r.flagged : canVoidInDept('Socket Dept');
+      const canVoidHereSocket = isOwnerVoidSupreme() ? true : isAdminOrOwner() ? !!r.flagged : canVoidInDept('Socket Dept');
       html += `<div class="prod-item" style="${isVoided?'opacity:0.55;':''}">
         <div style="display:flex;justify-content:space-between;align-items:center;">
           <div style="font-weight:600;${isVoided?'text-decoration:line-through;':''}">${r.date} ${r.time} — ${r.productName}</div>
@@ -3138,8 +3138,8 @@ function renderWastage(){
       <div style="font-size:12px;color:#888;margin-bottom:10px;">This will fold into the batch's total once its Wood Finishing batch is closed. Entries older than 24 hours can no longer be voided or flagged by anyone.</div>
       ${pendingBrushWastage.map(w=>{
         const isVoidedW = !!w.voided;
-        const withinWindow = isRecWithin24Hours(w);
-        const canVoidHereWastage = isAdminOrOwner() ? !!w.flagged : canVoidInDept('Wastage');
+        const withinWindow = isOwnerVoidSupreme() || isRecWithin24Hours(w);
+        const canVoidHereWastage = isOwnerVoidSupreme() ? true : isAdminOrOwner() ? !!w.flagged : canVoidInDept('Wastage');
         return `
         <div style="padding:8px;background:${isVoidedW?'#f5f5f5':'#fff3cd'};border-radius:6px;margin-bottom:6px;border-left:3px solid ${isVoidedW?'#aaa':'#e67e22'};${isVoidedW?'opacity:0.6;':''}">
           <div class="row">
@@ -3255,8 +3255,8 @@ function renderWastage(){
             <div style="color:#aaa;font-size:10px;margin-bottom:6px;">Voiding a record here removes it from the live Wastage tab totals, but this batch's own KG summary above was fixed when the batch closed and won't recalculate.</div>
             ${(state.showArchivedLists?batchQcEntries:batchQcEntries.filter(w=>!(w.voided&&w.archived))).map(w=>{
               const isVoidedW2 = !!w.voided;
-              const withinWindow2 = isRecWithin24Hours(w);
-              const canVoidHereWastage2 = isAdminOrOwner() ? !!w.flagged : canVoidInDept('Wastage');
+              const withinWindow2 = isOwnerVoidSupreme() || isRecWithin24Hours(w);
+              const canVoidHereWastage2 = isOwnerVoidSupreme() ? true : isAdminOrOwner() ? !!w.flagged : canVoidInDept('Wastage');
               return `
               <div style="padding:4px 0;border-bottom:1px solid #f0e8de;${isVoidedW2?'opacity:0.55;':''}">
                 <div style="display:flex;justify-content:space-between;">
@@ -3842,8 +3842,8 @@ function renderSales(){
     // nothing to hand over to owner if buyer hasn't paid the accountant yet (Unpaid). Also hidden
     // once a sale is voided — nothing further should happen against a reversed transaction.
     const showCashBtn = isOwner && !isVoidedSale && (s.payment==='Paid'||s.payment==='Partial') && owedToOwner>0.001;
-    const withinWindowSale = isRecWithin24Hours(s);
-    const canVoidHereSales = isAdminOrOwner() ? !!s.flagged : canVoidInDept('Sales');
+    const withinWindowSale = isOwnerVoidSupreme() || isRecWithin24Hours(s);
+    const canVoidHereSales = isOwnerVoidSupreme() ? true : isAdminOrOwner() ? !!s.flagged : canVoidInDept('Sales');
     html+=`<div style="padding:10px 0;border-bottom:1px solid #f0e8de;${isVoidedSale?'opacity:0.55;':''}">
       <div class="row" style="margin-bottom:4px;">
         <div>
@@ -4955,6 +4955,13 @@ function applyVoidToRun(runId, reason){
   return summary;
 }
 
+// RULE (Owner decision 12/8, superseding flag-first for the Owner role only): the Owner can
+// void ANY non-voided entry directly — no flag needed, no 24-hour wall, per-row 🚫 buttons
+// everywhere. Admin keeps flag-first; staff keep dept permissions, caps, and the 24h window.
+// All void paths (button render, modal open, preview, final commit) consult this ONE helper
+// so the rule can never be half-applied.
+function isOwnerVoidSupreme(){ return !!(currentUser && currentUser.role==='owner'); }
+
 function findVoidableEntry(kind, id){
   if(id===undefined || id===null) return null;
   if(kind==='brush') return (state.brushProcessingLog||[]).find(r=>r.id===id);
@@ -5038,7 +5045,20 @@ function applyVoidToBrushRun(runId, reason){
   summary.socketsRestored = logTotals.socketsRestored;
   summary.screwsRestored = logTotals.screwsRestored;
 
-  addLedgerEntry('finished', run.productName+' (Brush)', run.fbBatchNo, run.qty, 'OUT', `Voided (${reason}) — reversed by ${by}`, '');
+  // BUG FIX (same class as the Wood Finishing void fix, applied here 12/8 for consistency —
+  // Owner asked "does every void go downstream properly", which is exactly what surfaced this):
+  // the reversal ledger line must record what was ACTUALLY pulled back from stock
+  // (brushRemoved+readySaleRemoved), never the full run.qty when part of it is unreachable.
+  const actuallyRemovedBrush = summary.brushRemoved + summary.readySaleRemoved;
+  if(actuallyRemovedBrush>0){
+    addLedgerEntry('finished', run.productName+' (Brush)', run.fbBatchNo, actuallyRemovedBrush, 'OUT',
+      `Voided (${reason}) — reversed by ${by}` + (summary.unreachable>0 ? ` [${summary.unreachable} pcs unreachable — could not be located in stock, NOT reversed, needs manual check]` : ''), '');
+  } else if(summary.unreachable>0){
+    addLedgerEntry('finished', run.productName+' (Brush)', run.fbBatchNo, 0, 'OUT',
+      `Voided (${reason}) — reversed by ${by} — but all ${summary.unreachable} pcs were already unreachable in stock; NOTHING was actually reversed, needs manual check`, '');
+  }
+  // Wood-piece restoration is always the full amount — that consumption is a fact of THIS run,
+  // independent of what later happened to its output (same principle as plank restoration).
   addLedgerEntry('finished', run.productName, run.sourceBatch, run.qty, 'IN', `Restored — voided Brush Dept run (${reason})`, '');
   return summary;
 }
@@ -5093,7 +5113,16 @@ function applyVoidToSocketRun(runId, reason){
   state.readyForSale = (state.readyForSale||[]).filter(r=>r.qty>0);
 
   summary.unreachable = toRemove;
-  addLedgerEntry('finished', run.productName+' (Ready for Sale)', outputBatch, run.qty, 'OUT', `Voided (${reason}) — reversed by ${by}`, '');
+  // Same fix as Brush/Wood Finishing voids: ledger records only what was actually reachable.
+  if(summary.readySaleRemoved>0){
+    addLedgerEntry('finished', run.productName+' (Ready for Sale)', outputBatch, summary.readySaleRemoved, 'OUT',
+      `Voided (${reason}) — reversed by ${by}` + (summary.unreachable>0 ? ` [${summary.unreachable} pcs unreachable — could not be located in stock, NOT reversed, needs manual check]` : ''), '');
+  } else if(summary.unreachable>0){
+    addLedgerEntry('finished', run.productName+' (Ready for Sale)', outputBatch, 0, 'OUT',
+      `Voided (${reason}) — reversed by ${by} — but all ${summary.unreachable} pcs were already unreachable in stock; NOTHING was actually reversed, needs manual check`, '');
+  }
+  // Sockets/screws are always restored in full — their consumption is a fact of THIS
+  // transaction, independent of what later happened to the RFS pieces it produced.
   addLedgerEntry('socket', run.socketType, run.socketBatchNo, run.socketQty, 'IN', `Restored — voided Socket Dept run (${reason})`, '');
   addLedgerEntry('screw', 'Screws', run.screwBatchNo, run.screwQty, 'IN', `Restored — voided Socket Dept run (${reason})`, '');
   return summary;
@@ -5147,8 +5176,9 @@ function applyFlagToKind(kind, runId, note){
 function openVoidModal(runId, kind){
   kind = kind || 'wood';
   const run0 = findVoidableEntry(kind, runId);
-  if(!run0 || !isRecWithin24Hours(run0)){
-    alert("⏰ This entry is more than 24 hours old and can no longer be voided from here — by anyone, including Admin. Only the Owner can void older entries, from the Owner Void tool in the Admin panel.");
+  if(!run0){ alert('Entry not found.'); return; }
+  if(!isOwnerVoidSupreme() && !isRecWithin24Hours(run0)){
+    alert("⏰ This entry is more than 24 hours old and can no longer be voided from here — by anyone except the Owner.");
     return;
   }
   const dept = deptForVoidKind(kind);
@@ -5157,8 +5187,8 @@ function openVoidModal(runId, kind){
   // review — they don't have blanket void access anywhere. Other roles with an explicit
   // canVoid permission for this dept can still self-void within their own daily cap,
   // independent of flagging.
-  if(isAdminOrOwner() && !run0.flagged){
-    alert("This entry hasn't been flagged for review yet. Ask the department to flag it first — Admin/Owner can only void entries once they've been flagged.");
+  if(isAdminOrOwner() && !isOwnerVoidSupreme() && !run0.flagged){
+    alert("This entry hasn't been flagged for review yet. Ask the department to flag it first — Admin can only void entries once they've been flagged. (The Owner is exempt from this rule.)");
     return;
   }
   if(!isAdminOrOwner() && !canVoidInDept(dept)){
@@ -5206,14 +5236,19 @@ function previewVoid(){
   if(!target) return;
   const kind = target.kind || 'wood';
   const run0 = findVoidableEntry(kind, target.runId);
-  if(!run0 || !isRecWithin24Hours(run0)){
+  if(!run0 || (!isOwnerVoidSupreme() && !isRecWithin24Hours(run0))){
     document.getElementById('voidModal').classList.add('hidden');
     alert("⏰ This entry has just passed the 24-hour window and can no longer be voided.");
     return;
   }
   const reason = document.getElementById('voidReason')?.value?.trim();
   const err = document.getElementById('voidErr');
-  if(!reason){ err.textContent="⚠️ A reason is required to void an entry"; err.classList.remove('hidden'); return; }
+  // Raised from "just non-empty" to a real minimum (audit 12/8): now that the Owner reaches
+  // every entry directly through this exact button — any age, no flag needed — a one-character
+  // reason would have been a real gap for the app's single most powerful void path. Matches the
+  // same 10-char floor already used by Owner Adjustment and the Owner Void (any-age) picker, so
+  // every void in the system now carries an equally real reason, not just a technically-present one.
+  if(!reason || reason.length<10){ err.textContent="⚠️ A real reason is required to void an entry — at least 10 characters explaining why."; err.classList.remove('hidden'); return; }
 
   const cloneKeys = ['materials','finishedInventory','finishedBrushes','readyForSale','socketInventory','screwInventory',
     'scrapInventory','production','openBatches','closedBatches','brushProcessingLog','socketProcessingLog',
@@ -5250,7 +5285,7 @@ function confirmVoidFinal(){
   const { target, reason } = pending;
   const kind = target.kind || 'wood';
   const run0 = findVoidableEntry(kind, target.runId);
-  if(!run0 || !isRecWithin24Hours(run0)){
+  if(!run0 || (!isOwnerVoidSupreme() && !isRecWithin24Hours(run0))){
     document.getElementById('voidPreviewModal').classList.add('hidden');
     alert("⏰ This entry has just passed the 24-hour window and can no longer be voided.");
     state.pendingVoid = null;
