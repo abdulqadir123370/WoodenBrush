@@ -242,7 +242,7 @@ body.rejection-lock .size-btn{pointer-events:none;opacity:0.45;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1786536693796;
+const APP_BUILD = 1786537763021;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -1061,6 +1061,7 @@ let state = {
   currentTab: "Dashboard",
   showArchivedLists:false, showAllReceipts:false,
   ledgerSearched:false,
+  ovKind:'', ovId:'', ovReason:'',
   adjStore:'', adjDir:'add', adjBatch:'', adjProduct:'', adjSize:'', adjSocketType:'', adjQty:'', adjReason:'',
   costingFilterBatch:'all', costingFilterProduct:'all', costingFilterVendor:'all',
   costingFilterFrom:'', costingFilterTo:'',
@@ -4929,7 +4930,24 @@ function applyVoidToRun(runId, reason){
   summary.screwsRestored = logTotals.screwsRestored;
 
   // ---- 4. Ledger trail for the reversal ----
-  addLedgerEntry('finished', run.woodPieceName, run.batchNo, run.piecesProduced, 'OUT', `Voided (${reason}) — reversed by ${by}`, '');
+  // BUG FIX (audit 12/8, prompted by "make sure every void goes downstream without errors"):
+  // this used to always write run.piecesProduced as the reversal OUT, even when part of it was
+  // unreachable (summary.unreachable>0 — e.g. some pieces were already moved by a later Owner
+  // Adjustment, or genuinely already dispatched). That overstated the ledger reversal versus
+  // what actually left stock, silently creating exactly the kind of ledger-vs-stock divergence
+  // this whole system exists to catch. The ledger must record only what was ACTUALLY pulled
+  // back; the unreachable remainder is disclosed in the note and in the on-screen preview
+  // (formatVoidSummary), never fabricated as reversed.
+  const actuallyRemoved = summary.finishedRemoved + summary.brushRemoved + summary.readySaleRemoved;
+  if(actuallyRemoved>0){
+    addLedgerEntry('finished', run.woodPieceName, run.batchNo, actuallyRemoved, 'OUT',
+      `Voided (${reason}) — reversed by ${by}` + (summary.unreachable>0 ? ` [${summary.unreachable} pcs unreachable — could not be located in stock, NOT reversed, needs manual check]` : ''), '');
+  } else if(summary.unreachable>0){
+    // Nothing could be pulled back at all — still leave a zero-effect trail note rather than
+    // silence, since the void stamp alone doesn't say WHY no stock moved.
+    addLedgerEntry('finished', run.woodPieceName, run.batchNo, 0, 'OUT',
+      `Voided (${reason}) — reversed by ${by} — but all ${summary.unreachable} pcs were already unreachable in stock; NOTHING was actually reversed, needs manual check`, '');
+  }
   if(summary.planksRestored>0){
     addLedgerEntry(run.isScrapSourced?'scrap':'plank', run.isScrapSourced?run.sourceBatchTag:`${run.sourceSize||''}" Planks`, run.batchNo, summary.planksRestored, 'IN', `Restored — voided run ${run.woodPieceName} (${reason})`, run.isScrapSourced?'':String(run.sourceSize||''));
   }
@@ -5130,7 +5148,7 @@ function openVoidModal(runId, kind){
   kind = kind || 'wood';
   const run0 = findVoidableEntry(kind, runId);
   if(!run0 || !isRecWithin24Hours(run0)){
-    alert("⏰ This entry is more than 24 hours old and can no longer be voided by anyone, including Admin/Owner. This is a permanent rule with no exceptions.");
+    alert("⏰ This entry is more than 24 hours old and can no longer be voided from here — by anyone, including Admin. Only the Owner can void older entries, from the Owner Void tool in the Admin panel.");
     return;
   }
   const dept = deptForVoidKind(kind);
@@ -5935,6 +5953,120 @@ function applyOwnerAdjustment(){
   saveAll(); re();
   setTimeout(()=>{ const m2=document.getElementById('adjMsg'); if(m2){m2.textContent=`✅ ADJ-${adjNo} applied and published to the Ledger and Dashboard.`; m2.className='msg ok';} }, 100);
 }
+// ==================== OWNER VOID — ANY AGE ====================
+// Rule change (Owner decision 12/8): the 24-hour void wall stays absolute for every role in
+// the normal flow, but the OWNER can void any non-voided entry of any age from here — the
+// path that makes old wrong entries correctable (void → stock reversed via the exact same
+// tested machinery as normal voids → entry shows in the voided lists → archivable). Same
+// sunlight as adjustments: mandatory reason, permanent stamps, reversal ledger lines.
+function ownerVoidEntryLabel(kind, r){
+  if(kind==='wood') return `${r.date} ${r.time||''} — ${r.woodPieceName} — ${r.planksUsed} planks → ${r.piecesProduced} pcs (${r.batchNo})`;
+  if(kind==='brush') return `${r.date} ${r.time||''} — ${r.productName} — ${r.qty} pcs (Batch ${r.fbBatchNo})`;
+  if(kind==='socket') return `${r.date} ${r.time||''} — ${r.productName} — ${r.qty} pcs socketed (${r.outputBatchNo||r.fbBatchNo||''})`;
+  if(kind==='wastage') return `${r.date} ${r.time||''} — ${r.batchNo||'—'} — ${(r.wastageKg||0).toFixed(1)} KG (${(r.reason||'').slice(0,40)})`;
+  return `${r.date} ${r.time||''} — ${r.buyer} — ${r.kgSold} KG ${r.wasteType} for Rs.${(r.totalAmount||0).toFixed(0)}`;
+}
+function ownerVoidCandidates(kind){
+  const coll = kind==='wood' ? state.production : kind==='brush' ? state.brushProcessingLog
+    : kind==='socket' ? state.socketProcessingLog : kind==='wastage' ? state.wastage : state.sales;
+  return [...(coll||[])].filter(r=>r && !r.voided).sort((a,b)=>(b.id||0)-(a.id||0)).slice(0,40);
+}
+// Same clone → apply-for-real-on-the-clone → read the summary → discard the clone pattern the
+// normal void flow already uses (submitVoidReason) — reused verbatim rather than reimplemented,
+// so the preview the Owner sees is byte-identical to what will actually happen, computed by the
+// exact same tested cascade code (applyVoidToRun / cascadeVoidBrushLogs / cascadeVoidSocketLogs),
+// not a hand-written guess. This is what surfaces "N pcs could not be reversed — already sold or
+// moved further downstream" BEFORE committing, which matters most for old entries precisely
+// because more could have happened downstream since they were created.
+function previewOwnerVoid(){
+  if(!currentUser || currentUser.role!=='owner'){ alert('Owner only.'); return; }
+  const kind = state.ovKind, id = +state.ovId;
+  const reason = (state.ovReason||'').trim();
+  const msg = document.getElementById('ovMsg');
+  const say = (t,ok)=>{ if(msg){msg.textContent=t; msg.className='msg '+(ok?'ok':'err');} };
+  if(!['wood','brush','socket','wastage','sales'].includes(kind)){ say('⚠️ Select the entry type.'); return; }
+  const r = ownerVoidCandidates(kind).find(x=>x.id===id) || (kind==='wood'?state.production:kind==='brush'?state.brushProcessingLog:kind==='socket'?state.socketProcessingLog:kind==='wastage'?state.wastage:state.sales||[]).find(x=>x&&x.id===id&&!x.voided);
+  if(!r){ say('⚠️ Select the entry to void.'); return; }
+  if(reason.length<10){ say('⚠️ Reason is mandatory — at least 10 characters. It is stamped on the entry forever.'); return; }
+  const fullReason = `OWNER VOID (any-age): ${reason}`;
+
+  const cloneKeys = ['materials','finishedInventory','finishedBrushes','readyForSale','socketInventory','screwInventory',
+    'scrapInventory','production','openBatches','closedBatches','brushProcessingLog','socketProcessingLog',
+    'batchGenealogy','ledger','wastage','sales'];
+  const backup = {};
+  cloneKeys.forEach(k=>{ backup[k]=state[k]; if(state[k]!==undefined) state[k]=JSON.parse(JSON.stringify(state[k])); });
+
+  let summary;
+  if(kind==='brush') summary = applyVoidToBrushRun(id, fullReason);
+  else if(kind==='socket') summary = applyVoidToSocketRun(id, fullReason);
+  else if(kind==='wastage') summary = applyVoidToWastageEntry(id, fullReason);
+  else if(kind==='sales') summary = applyVoidToSaleEntry(id, fullReason);
+  else summary = applyVoidToRun(id, fullReason);
+  const brushVoidedCount = (state.brushProcessingLog||[]).filter(x=>x.voided && x.voidedReason===fullReason).length;
+  const socketVoidedCount = (state.socketProcessingLog||[]).filter(x=>x.voided && x.voidedReason===fullReason).length;
+  if(summary) summary.entriesVoided = brushVoidedCount + socketVoidedCount;
+
+  cloneKeys.forEach(k=>{ state[k]=backup[k]; }); // discard the clone — nothing real changed yet
+
+  document.getElementById('voidPreviewBody').textContent =
+    `OWNER VOID — any age\n${ownerVoidEntryLabel(kind,r)}\n\n` + formatVoidSummary(summary||{});
+  document.getElementById('voidPreviewModal').classList.remove('hidden');
+  state.pendingVoid = {target:{runId:id, kind, dept:null}, reason:fullReason, ownerBypass:true, ownerLabel:ownerVoidEntryLabel(kind,r), ownerRawReason:reason};
+}
+function confirmOwnerVoidFinal(){
+  const pending = state.pendingVoid;
+  if(!pending || !pending.ownerBypass) return;
+  if(!currentUser || currentUser.role!=='owner'){ alert('Owner only.'); state.pendingVoid=null; document.getElementById('voidPreviewModal').classList.add('hidden'); return; }
+  const { target, reason, ownerLabel, ownerRawReason } = pending;
+  const kind = target.kind;
+  let summary;
+  if(kind==='brush') summary = applyVoidToBrushRun(target.runId, reason);
+  else if(kind==='socket') summary = applyVoidToSocketRun(target.runId, reason);
+  else if(kind==='wastage') summary = applyVoidToWastageEntry(target.runId, reason);
+  else if(kind==='sales') summary = applyVoidToSaleEntry(target.runId, reason);
+  else summary = applyVoidToRun(target.runId, reason);
+  state.correctionsLog = [...(state.correctionsLog||[]), {
+    id: Date.now()+Math.random(), kind:'owner_void_'+Date.now(),
+    details:`OWNER VOID: ${ownerLabel} — ${ownerRawReason}`,
+    by: currentUser?.name||'Owner', at: new Date().toISOString()
+  }];
+  document.getElementById('voidPreviewModal').classList.add('hidden');
+  state.pendingVoid = null;
+  state.ovId=''; state.ovReason='';
+  saveAll(); re();
+}
+// The shared preview modal's Confirm button routes here so the normal staff flow
+// (confirmVoidFinal) is completely untouched — zero regression risk to tested behavior.
+function confirmVoidFinalDispatch(){
+  if(state.pendingVoid && state.pendingVoid.ownerBypass) confirmOwnerVoidFinal();
+  else confirmVoidFinal();
+}
+function renderOwnerVoidCardHTML(){
+  const kind = state.ovKind;
+  const kinds = {wood:'Production run (Wood Finishing)', brush:'Brush Dept run', socket:'Socket Dept run', wastage:'Wastage entry', sales:'Sale'};
+  const candidates = kinds[kind] ? ownerVoidCandidates(kind) : [];
+  return `<div class="card" style="border:2px solid #8e2323;">
+    <div class="label" style="color:#8e2323;">🚫 Owner Void — any age</div>
+    <div style="font-size:11px;color:#888;margin-bottom:10px;">The 24-hour void window stays absolute for everyone in the normal flow. This is the Owner's only path around it: void an old entry with a written reason — stock effects are reversed exactly like a normal void, the entry is stamped and moves to the voided lists, and from there it can be archived. Latest 40 entries per type listed.</div>
+    <div class="grid2">
+      <div><div class="label">Entry type</div>
+        <select onchange="state.ovKind=this.value;state.ovId='';re()">
+          <option value="">— Select —</option>
+          ${Object.entries(kinds).map(([k,v])=>`<option value="${k}" ${kind===k?'selected':''}>${v}</option>`).join('')}
+        </select></div>
+      <div><div class="label">Entry</div>
+        <select onchange="state.ovId=this.value">
+          <option value="">— Select —</option>
+          ${candidates.map(r=>`<option value="${r.id}" ${String(state.ovId)===String(r.id)?'selected':''}>${ownerVoidEntryLabel(kind,r)}</option>`).join('')}
+        </select></div>
+    </div>
+    <div class="label">Reason — mandatory, stamped forever</div>
+    <textarea rows="2" oninput="state.ovReason=this.value" placeholder="e.g. duplicate entry discovered during month-end reconciliation" style="width:100%;margin-bottom:8px;">${state.ovReason||''}</textarea>
+    <button class="btn btn-full" style="background:#8e2323;" onclick="previewOwnerVoid()">🚫 Preview & Void (shows exact downstream effect first)</button>
+    <div id="ovMsg" class="msg"></div>
+  </div>`;
+}
+
 function renderOwnerAdjustmentCardHTML(){
   const store = state.adjStore;
   const batches = store ? adjBatchOptions(store) : [];
@@ -7998,6 +8130,7 @@ function renderAdminPanel(){
     </div>
 
     ${renderOwnerAdjustmentCardHTML()}
+    ${renderOwnerVoidCardHTML()}
     ${renderGhostCorrectionsCardHTML()}
     ${renderScrapRestorationCardHTML()}
 
@@ -8861,7 +8994,7 @@ loadFromFirestore();
     <div style="font-size:12px;color:#666;margin-bottom:12px;">Here's exactly what will happen if you proceed. This cannot be undone.</div>
     <div id="voidPreviewBody" style="font-size:13px;line-height:1.6;background:#f9f5f0;border-radius:8px;padding:12px;margin-bottom:14px;white-space:pre-line;max-height:50vh;overflow-y:auto;"></div>
     <div style="display:flex;gap:10px;">
-      <button class="btn btn-red" style="flex:1;" onclick="confirmVoidFinal()">🚫 Yes, Void It</button>
+      <button class="btn btn-red" style="flex:1;" onclick="confirmVoidFinalDispatch()">🚫 Yes, Void It</button>
       <button class="btn btn-gray" style="flex:1;" onclick="cancelVoidPreview()">Go Back</button>
     </div>
   </div>
