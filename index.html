@@ -242,7 +242,7 @@ body.rejection-lock .size-btn{pointer-events:none;opacity:0.45;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1786607456837;
+const APP_BUILD = 1786609670789;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -262,7 +262,8 @@ const SK = {
   checkAcks:"wbt_check_acks",             // "Reviewed — known history" acknowledgments for Auto-Fix items; keyed by exact message text so any change in the number brings the item back
   correctionsLog:"wbt_corrections_log",   // Permanent record of every applied ghost-stock correction (8/7-8/8 stale-device incident and future ones)
   dataSnapshots:"wbt_data_snapshots",     // System Watch: timestamped record of every stock number, for detecting unexplained changes
-  systemFindings:"wbt_system_findings"    // System Watch: permanent findings inbox with proof images, waits for the owner however long
+  systemFindings:"wbt_system_findings",   // System Watch: permanent findings inbox with proof images, waits for the owner however long
+  wastageRecons:"wbt_wastage_recons"      // Physical wastage weigh-ins vs system availability — the anti-"off-book sale" reconciliation trail
 };
 
 const DEFAULT_USERS = [
@@ -1051,6 +1052,7 @@ let state = {
   batchGenealogy: ld(SK.batchGenealogy, {}),
   wastagePrices: ld(SK.wastagePrices, []),
   vendors: ld(SK.vendors, []),
+  wastageRecons: ld(SK.wastageRecons, []),
   checkAcks: ld(SK.checkAcks, []),
   correctionsLog: ld(SK.correctionsLog, []),
   brushProcessingLog: ld(SK.brushProcessingLog, []),
@@ -1095,6 +1097,7 @@ function saveAll(){
   sv(SK.batchGenealogy,state.batchGenealogy);
   sv(SK.wastagePrices,state.wastagePrices);
   sv(SK.vendors,state.vendors);
+  sv(SK.wastageRecons,state.wastageRecons);
   sv(SK.checkAcks,state.checkAcks);
   sv(SK.correctionsLog,state.correctionsLog);
   sv(SK.brushProcessingLog,state.brushProcessingLog);
@@ -3095,6 +3098,7 @@ function renderWastage(){
   const pendingBrushWastageKg = pendingBrushWastage.filter(w=>!w.voided).reduce((s,w)=>s+(w.wastageKg||0),0);
 
   let html=renderWastagePriceCardHTML();
+  html+=renderWastageReconCardHTML();
   html+=`<div class="card" style="background:#fff8f0;border:2px solid #e67e22;">
     <div class="label">🗑️ Wastage by Type</div>
     <div class="grid3" style="margin-bottom:14px;">
@@ -3815,15 +3819,69 @@ function renderLedger(){
   return html;
 }
 
+// ==================== PENDING SALE APPROVAL (fraud control, 13/8) ====================
+// Manually-typed-KG sales wait here. Approve = the sale applies (revenue + pool + gate pass
+// minted now). Reject = permanently marked rejected with reason, never applied — kept visible,
+// never deleted, per the standing rule. Owner-only both ways.
+function approvePendingSale(id){
+  if(!currentUser || currentUser.role!=='owner'){ alert('Owner only.'); return; }
+  const sale = (state.sales||[]).find(x=>x && x.id===id && x.status==='pending' && !x.voided);
+  if(!sale) return;
+  const avail = getWasteTypeStock().available[sale.wasteType]||0;
+  if(sale.kgSold > avail+0.001){
+    alert(`Cannot approve: only ${avail.toFixed(1)} KG of ${sale.wasteType} is available now (this sale claims ${sale.kgSold} KG). Check the pool first — approve would drive it negative.`);
+    return;
+  }
+  if(!confirm(`Approve this manually-entered sale?\n\n${sale.buyer} — ${sale.kgSold} KG ${sale.wasteType} for Rs.${sale.totalAmount.toFixed(0)}\nEntered by: ${sale.manualOverrideBy||'?'}\n\nOpen the slip photo and verify the KG matches before approving. On approval it counts in revenue, reduces the pool, and a Gate Pass is issued.`)) return;
+  sale.status = 'applied';
+  sale.approvedBy = currentUser?.name||'Owner';
+  sale.approvedAt = new Date().toISOString();
+  sale.gatePassNo = 'GP-'+String(((state.sales||[]).filter(x=>x&&x.gatePassNo).length)+1).padStart(4,'0');
+  saveAll(); re();
+}
+function rejectPendingSale(id){
+  if(!currentUser || currentUser.role!=='owner'){ alert('Owner only.'); return; }
+  const sale = (state.sales||[]).find(x=>x && x.id===id && x.status==='pending' && !x.voided);
+  if(!sale) return;
+  const reason = prompt('Reason for rejecting this sale (mandatory, shown permanently):');
+  if(!reason || reason.trim().length<10){ alert('A real reason of at least 10 characters is required.'); return; }
+  sale.status = 'rejected';
+  sale.rejectedBy = currentUser?.name||'Owner';
+  sale.rejectedDate = new Date().toISOString().slice(0,10);
+  sale.rejectReason = reason.trim();
+  saveAll(); re();
+}
+// Buyer statement: WhatsApp-ready text of everything recorded against a buyer. The cheap
+// collusion-breaker — a buyer who paid for 995 KG but whose statement shows 35 KG sees an
+// absurdly cheap bill; buyers correct records that undercharge them.
+function copyBuyerStatement(buyerName){
+  const rows = (state.sales||[]).filter(x=>x && !x.voided && x.buyer===buyerName && x.status!=='pending' && x.status!=='rejected')
+    .sort((a,b)=>(a.datetime||'').localeCompare(b.datetime||''));
+  if(rows.length===0){ alert('No applied sales recorded for '+buyerName+'.'); return; }
+  let total=0;
+  const lines = rows.map(x=>{ total+=x.totalAmount; return `${x.date} — ${x.kgSold} KG ${x.wasteType} @ Rs.${x.pricePerKg}/KG = Rs.${x.totalAmount.toFixed(0)}${x.slipSerialNo?` (slip #${x.slipSerialNo})`:''}`; });
+  const text = `*Royal Plastics — Wastage Purchase Statement*\nBuyer: ${buyerName}\n\n${lines.join('\n')}\n\n*Total: Rs.${total.toFixed(0)}* across ${rows.length} purchase(s)\n\nIf anything above does not match your own record, please inform us immediately.`;
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(()=>alert('📋 Statement copied — paste it into WhatsApp to '+buyerName+'.')).catch(()=>prompt('Copy this statement:', text));
+  } else { prompt('Copy this statement:', text); }
+}
 function renderSales(){
   const sales = [...(state.sales||[])].sort((a,b)=>b.datetime.localeCompare(a.datetime));
-  const activeSales = sales.filter(s=>!s.voided);
+  const activeSales = sales.filter(s=>!s.voided && s.status!=='pending' && s.status!=='rejected');
+  const pendingSales = sales.filter(s=>!s.voided && s.status==='pending');
   const totalRevenue = activeSales.reduce((s,x)=>s+x.totalAmount,0);
   const totalReceived = activeSales.reduce((s,x)=>s+x.amountReceived,0);
   const totalKgSold = activeSales.reduce((s,x)=>s+x.kgSold,0);
   const totalOwedToOwner = activeSales.reduce((s,x)=>s+Math.max(0,(x.amountReceived||0)-(x.ownerReceivedAmount||0)),0);
+  let html='';
+  if(pendingSales.length>0){
+    html+=`<div class="card" style="border:2px solid #c0392b;background:#fdecea;">
+      <div class="label" style="color:#c0392b;">⏳ ${pendingSales.length} Sale${pendingSales.length>1?'s':''} Pending Owner Approval</div>
+      <div style="font-size:11px;color:#888;">Manually-typed KG — not in revenue, not deducted from the pool, no gate pass issued. ${currentUser?.role==='owner'?'Approve or reject each one below in All Transactions.':'The Owner must approve these against the slip photos before the trucks can leave.'}</div>
+    </div>`;
+  }
 
-  let html=`<div class="card" style="border:2px solid #27ae60;background:#f0fff4;">
+  html+=`<div class="card" style="border:2px solid #27ae60;background:#f0fff4;">
     <div class="label">💰 Sales Report</div>
     <div class="grid2" style="margin-bottom:10px;">
       <div style="background:#fff;border-radius:8px;padding:12px;text-align:center;">
@@ -3887,6 +3945,7 @@ function renderSales(){
       </div>
       <div style="font-size:11px;color:#666;">${bKg.toFixed(1)} KG sold across ${bs.length} transaction${bs.length>1?'s':''}</div>
       ${bPending>0?`<div style="font-size:11px;color:#e74c3c;font-weight:700;margin-top:2px;">⚠️ Pending: Rs.${bPending.toLocaleString()}</div>`:'<div style="font-size:11px;color:#27ae60;margin-top:2px;">✅ Fully paid</div>'}
+      ${isAdminOrOwner()?`<button class="btn btn-gray" style="font-size:10px;padding:4px 10px;margin-top:6px;" onclick="copyBuyerStatement(${JSON.stringify(buyer)})">📄 Copy WhatsApp Statement</button>`:''}
     </div>`;
   });
   html+=`</div>`;
@@ -3924,7 +3983,21 @@ function renderSales(){
           <div style="font-size:10px;color:${isVoidedSale?'#e74c3c':payColor};font-weight:700;">${isVoidedSale?'🚫 VOIDED':`${payIcon} ${s.payment}`}</div>
         </div>
       </div>
-        <div style="font-size:11px;color:#888;${isVoidedSale?'text-decoration:line-through;':''}">${s.kgSold} KG @ Rs.${s.pricePerKg}/KG${s.weighSlipDate?` · slip dated ${s.weighSlipDate}`:''}</div>
+        <div style="font-size:11px;color:#888;${isVoidedSale?'text-decoration:line-through;':''}">${s.kgSold} KG @ Rs.${s.pricePerKg}/KG${s.weighSlipDate?` · slip dated ${s.weighSlipDate}`:''}${s.slipSerialNo?` · slip #${s.slipSerialNo}`:''}${s.slipCNo?` · C-No ${s.slipCNo}`:''}</div>
+        ${s.gatePassNo && !isVoidedSale?`<div style="font-size:12px;font-weight:700;color:#8e44ad;margin-top:2px;">🎫 Gate Pass: ${s.gatePassNo}</div>`:''}
+        ${s.status==='pending' && !isVoidedSale?`<div style="font-size:11px;color:#c0392b;font-weight:700;background:#fdecea;border-radius:6px;padding:6px 8px;margin-top:4px;">⏳ PENDING OWNER APPROVAL — manually-typed KG. Not counted in revenue or the wastage pool. NO GATE PASS issued; the truck must not leave.
+          ${currentUser?.role==='owner'?`<div style="display:flex;gap:6px;margin-top:6px;">
+            <button class="btn btn-green" style="font-size:11px;padding:5px 12px;flex:1;" onclick="approvePendingSale(${JSON.stringify(s.id)})">✅ Approve (against slip photo)</button>
+            <button class="btn btn-red" style="font-size:11px;padding:5px 12px;flex:1;" onclick="rejectPendingSale(${JSON.stringify(s.id)})">🚫 Reject</button>
+          </div>`:''}</div>`:''}
+        ${s.status==='rejected' && !isVoidedSale?`<div style="font-size:11px;color:#e74c3c;font-weight:700;margin-top:4px;">🚫 REJECTED by ${s.rejectedBy||'Owner'} on ${s.rejectedDate||''} — never applied. "${s.rejectReason||''}"</div>`:''}
+        ${(()=>{ if(isVoidedSale || s.status==='pending' || s.status==='rejected') return '';
+          const owedNow = Math.max(0,(s.amountReceived||0)-(s.ownerReceivedAmount||0));
+          if(owedNow<=0.001) return '';
+          const ageMs = Date.now() - new Date(s.datetime||s.date).getTime();
+          const ageDays = Math.floor(ageMs/86400000);
+          if(ageMs < 24*3600000) return '';
+          return `<div style="font-size:11px;color:#c0392b;font-weight:700;margin-top:2px;">⏰ Cash owed to Owner for ${ageDays===0?'over 24 hours':ageDays+' day'+(ageDays===1?'':'s')} — Rs.${owedNow.toFixed(0)} still not handed over</div>`; })()}
       ${isVoidedSale?`<div style="margin-top:4px;">${archiveBtnHTML('sales', s.id, !!s.archived)}</div>`:''}
       ${s.weighSlipUrl?`<a href="${s.weighSlipUrl}" ${String(s.weighSlipUrl).startsWith('data:')?`download="weight-slip-${String(s.id).replace(/[^0-9]/g,'')}.jpg"`:`target="_blank" rel="noopener"`} style="font-size:11px;color:#3498db;font-weight:700;text-decoration:none;">📷 View Weight Slip</a>${s.manualOverride?` <span style="color:#c0392b;font-weight:700;">(entered manually by ${s.manualOverrideBy||'Admin'} — slip was unreadable${s.weighSlipReadKg!=null?`, read as ${s.weighSlipReadKg} KG`:''})</span>`:(s.weighSlipReadKg!=null && Math.abs(s.weighSlipReadKg-s.kgSold)>0.05?` <span style="color:#e67e22;">(slip read ${s.weighSlipReadKg} KG)</span>`:'')}`:(s.manualOverride?`<span style="color:#c0392b;font-weight:700;">📷 No photo saved — entered manually by ${s.manualOverrideBy||'Admin'} (legacy record)</span>`:'')}
       ${s.flagged&&!isVoidedSale?`<div style="font-size:11px;color:#3498db;margin-top:6px;background:#e8f4fd;border-radius:6px;padding:6px 8px;">🚩 Flagged by ${s.flaggedBy} on ${s.flaggedDate} ${s.flaggedTime||''}<br/><span style="font-style:italic;">"${s.flagNote}"</span></div>`:''}
@@ -3981,6 +4054,7 @@ function getWasteTypeStock(){
   const sold = {Bhusa:0, Patti:0, Gitta:0};
   (state.sales||[]).forEach(s=>{
     if(s.voided) return;
+    if(s.status==='pending' || s.status==='rejected') return; // not applied — no gate pass issued, KG hasn't left
     if(s.wasteType && sold[s.wasteType]!==undefined) sold[s.wasteType] += (s.kgSold||0);
   });
   const available = {};
@@ -4140,9 +4214,58 @@ function renderWastagePriceCardHTML(){
   </div>`;
 }
 
+// ==================== PHYSICAL WASTAGE RECONCILIATION (anti-off-book-sale, 13/8) ====================
+// The one control that catches sales that were NEVER ENTERED: someone trusted physically
+// weighs the piles, and the app compares against what SHOULD exist (produced − sold).
+// Missing KG has nowhere to hide arithmetically. Admin/Owner only; every recon is a
+// permanent, synced record with who/when and the variance frozen at that moment.
+function saveWastageRecon(){
+  if(!isAdminOrOwner()){ alert('Admin/Owner only.'); return; }
+  const stock = getWasteTypeStock();
+  const rec = { id: Date.now()+Math.random(), at: new Date().toISOString(),
+    date: new Date().toISOString().slice(0,10), by: currentUser?.name||'?', types:{} };
+  let anyEntered = false;
+  for(const t of WASTE_TYPES){
+    const el = document.getElementById('recon_'+t);
+    const v = el && el.value!=='' ? +el.value : null;
+    if(v==null || isNaN(v) || v<0) continue;
+    anyEntered = true;
+    rec.types[t] = { physical: v, system: +(stock.available[t]||0).toFixed(1), variance: +(v-(stock.available[t]||0)).toFixed(1) };
+  }
+  const msg = document.getElementById('reconMsg');
+  if(!anyEntered){ if(msg){msg.textContent='⚠️ Enter at least one weighed KG figure.';msg.className='msg err';} return; }
+  state.wastageRecons = [...(state.wastageRecons||[]), rec];
+  saveAll(); re();
+  setTimeout(()=>{ const m=document.getElementById('reconMsg'); if(m){m.textContent='✅ Reconciliation recorded permanently.';m.className='msg ok';} },100);
+}
+function renderWastageReconCardHTML(){
+  if(!isAdminOrOwner()) return '';
+  const stock = getWasteTypeStock();
+  const recons = [...(state.wastageRecons||[])].sort((a,b)=>(b.id||0)-(a.id||0));
+  const last = recons[0];
+  return `<div class="card" style="border:2px solid #16a085;">
+    <div class="label" style="color:#16a085;">⚖️ Physical Stock Check (weekly)</div>
+    <div style="font-size:11px;color:#888;margin-bottom:10px;">Weigh the actual piles and enter the KG. The app compares against what should exist (produced − sold). A shortfall means KG left the factory without a recorded sale — this is the control that catches off-book sales, so have someone you trust do the weighing, not the person who records sales.</div>
+    ${WASTE_TYPES.map(t=>`<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+      <div style="flex:1;font-size:12px;font-weight:700;">${t}<div style="font-size:10px;color:#888;font-weight:400;">system says ${(stock.available[t]||0).toFixed(1)} KG</div></div>
+      <input type="text" inputmode="decimal" id="recon_${t}" placeholder="weighed KG" style="flex:1;margin-bottom:0;"/>
+    </div>`).join('')}
+    <button class="btn btn-full" style="background:#16a085;" onclick="saveWastageRecon()">⚖️ Record Physical Check</button>
+    <div id="reconMsg" class="msg"></div>
+    ${last?`<div style="margin-top:10px;border-top:1px solid #f0e8de;padding-top:8px;">
+      <div style="font-size:11px;font-weight:700;color:#666;">Last check — ${last.date} by ${last.by}</div>
+      ${Object.entries(last.types).map(([t,d])=>{
+        const bad = Math.abs(d.variance) > Math.max(5, d.system*0.03);
+        return `<div style="font-size:11px;color:${bad?'#c0392b':'#27ae60'};font-weight:${bad?'700':'400'};">${t}: weighed ${d.physical} vs system ${d.system} → ${d.variance>=0?'+':''}${d.variance} KG ${bad?'⚠️ INVESTIGATE':'✓'}</div>`;
+      }).join('')}
+      ${recons.length>1?`<div style="font-size:10px;color:#aaa;margin-top:4px;">${recons.length} checks on record</div>`:''}
+    </div>`:''}
+  </div>`;
+}
+
 function openSaleModal(){
   const stock = getWasteTypeStock();
-  state.saleModal = {stock, slipFile:null, slipUrl:null, slipReadKg:null, slipDate:null, slipUploadPromise:null, slipUploadFailed:false, readStatus:'none', manualOverrideUsed:false};
+  state.saleModal = {stock, slipFile:null, slipUrl:null, slipReadKg:null, slipDate:null, slipSerialNo:null, slipCNo:null, slipUploadPromise:null, slipUploadFailed:false, readStatus:'none', manualOverrideUsed:false};
   document.getElementById('saleModalTitle').textContent = `💰 Sell Wastage`;
   document.getElementById('saleModalSub').textContent = `Choose a wastage type and enter sale details`;
   document.getElementById('saleErr').classList.add('hidden');
@@ -4201,6 +4324,8 @@ function handleSlipFileSelected(input){
   state.saleModal.slipFile = file;
   state.saleModal.slipUrl = null;
   state.saleModal.slipReadKg = null;
+  state.saleModal.slipSerialNo = null;
+  state.saleModal.slipCNo = null;
   state.saleModal.slipUploadFailed = false;
   state.saleModal.readStatus = 'none';
   state.saleModal.manualOverrideUsed = false;
@@ -4271,6 +4396,12 @@ async function readSlipAndAutofill(file){
     }
     state.saleModal.readStatus = 'confirmed';
     state.saleModal.slipReadKg = data.netWeightKg;
+    // Slip serial number + C-No (reader v4): the anti-reuse identity of this physical slip.
+    // Captured whenever the reader returns them — the duplicate hard-block in confirmSale
+    // refuses any serial that has EVER been used on a previous sale (voided/archived included),
+    // so one physical slip can never justify two sales.
+    state.saleModal.slipSerialNo = (typeof data.serialNo==='string' && data.serialNo.trim()) ? data.serialNo.trim() : null;
+    state.saleModal.slipCNo = (typeof data.cNo==='string' && data.cNo.trim()) ? data.cNo.trim() : null;
     // Date printed on the slip (if the reader service returns one). Stored on the sale as
     // evidence of when the weighing actually happened. Only a high-confidence, sane-looking
     // date is used; it auto-fills the (unlocked) date field for Admin/Owner — for everyone
@@ -4452,6 +4583,33 @@ async function confirmSale(){
 
   const totalAmount=kg*price;
   const preSnapshot = takeSnapshot(['sales']);
+
+  // ---- DUPLICATE SLIP HARD-BLOCK (fraud control, Owner request 13/8) ----
+  // One physical slip = one sale, forever. A serial that appears on ANY previous sale —
+  // including voided or archived ones (else void-and-reuse would defeat it) — is burned.
+  const serialNo = modal.slipSerialNo || null;
+  if(serialNo){
+    const clash = (state.sales||[]).find(s=>s && s.slipSerialNo && String(s.slipSerialNo)===String(serialNo));
+    if(clash){
+      err.textContent = `⚠️ BLOCKED: slip serial "${serialNo}" was already used on a sale dated ${clash.date} (${clash.buyer}, ${clash.kgSold} KG${clash.voided?', since voided':''}). One slip can never justify two sales. If this is genuinely a different slip, retake a clearer photo; otherwise this needs the Owner.`;
+      err.classList.remove('hidden');
+      isSubmittingSale = false;
+      return;
+    }
+  }
+
+  // ---- MANUAL-OVERRIDE APPROVAL GATE (fraud control, Owner request 13/8) ----
+  // A confirmed high-confidence photo read (now cross-checked server-side against the slip's
+  // own First/Second/Maunds arithmetic) applies immediately. A MANUAL override — the one path
+  // where a human types the KG — no longer applies silently: it saves as PENDING, invisible
+  // to revenue and the wastage pool, with no gate pass, until the Owner approves it against
+  // the photo. Wrong numbers stop being a quiet act and become a request sent to the Owner.
+  const needsApproval = !!modal.manualOverrideUsed && !(currentUser && currentUser.role==='owner');
+
+  // Gate pass: sequential GP number minted only for sales that actually apply. The guard's
+  // one job at the gate: no wastage truck exits without a GP number that exists in the app.
+  const gatePassNo = needsApproval ? null : ('GP-'+String(((state.sales||[]).filter(s=>s&&s.gatePassNo).length)+1).padStart(4,'0'));
+
   // Every wastage sale is paid in full at the time of recording — no credit sales.
   state.sales=[...(state.sales||[]),{
     id:Date.now()+Math.random(), wasteType,
@@ -4459,6 +4617,9 @@ async function confirmSale(){
     amountReceived:totalAmount, pendingAmount:0,
     payment:'Paid', date, time: new Date().toTimeString().slice(0,5), datetime:new Date().toISOString(),
     voided:false,
+    status: needsApproval ? 'pending' : 'applied',
+    gatePassNo,
+    slipSerialNo: serialNo, slipCNo: modal.slipCNo || null,
     weighSlipUrl: modal.slipUrl, weighSlipReadKg: modal.slipReadKg ?? null,
     weighSlipDate: modal.slipDate ?? null,
     manualOverride: !!modal.manualOverrideUsed,
@@ -4467,6 +4628,10 @@ async function confirmSale(){
   document.getElementById('saleModal').classList.add('hidden');
   state.saleModal=null;
   saveAll(); re();
+  if(needsApproval){
+    setTimeout(()=>{ alert('📋 This sale used a manually-typed KG, so it is saved as PENDING OWNER APPROVAL.\n\nIt does not count in revenue or reduce the wastage pool yet, and NO GATE PASS is issued — the truck cannot leave until the Owner approves it against the slip photo.'); }, 150);
+    return;
+  }
   setTimeout(()=>{
     showReviewPopup({
       snapshot: preSnapshot,
@@ -8432,7 +8597,7 @@ function exportDataPDF(){
   html += `</table>`;
 
   const totalWastageKg = (state.closedBatches||[]).reduce((s,b)=>s+(b.wastageKg||0),0);
-  const totalRevenue = (state.sales||[]).reduce((s,x)=>s+x.totalAmount,0);
+  const totalRevenue = (state.sales||[]).filter(x=>!x.voided && x.status!=='pending' && x.status!=='rejected').reduce((s,x)=>s+x.totalAmount,0);
   html += `<h2>Wastage Sales Summary</h2><table><tr><th>Total Wastage (KG)</th><th>Total Revenue (Rs.)</th></tr>
     <tr><td>${totalWastageKg.toFixed(1)}</td><td>${totalRevenue.toLocaleString()}</td></tr></table>`;
 
