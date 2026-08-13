@@ -242,7 +242,7 @@ body.rejection-lock .size-btn{pointer-events:none;opacity:0.45;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1786540242374;
+const APP_BUILD = 1786607456837;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -2517,14 +2517,21 @@ function renderSocketDept(){
     const wp = (state.woodPieces||[]).find(w=>w.name===selected.productName);
     const socketType = wp?.socketType||'';
     const screwsPerPiece = wp?.screwsRequired||0;
-    const hasBOM = socketType && screwsPerPiece>0;
+    const isNilProduct = isNilBOM(wp);
+    const hasBOM = isNilProduct || (socketType && screwsPerPiece>0);
 
     html += `<div class="card" style="border:2px solid #d4b896;">
       <div class="label">⚙️ Process: ${selected.productName} (${selected.batchNo})</div>
       <div style="font-size:11px;color:#888;margin-bottom:8px;">Available: ${selected.qty} pcs</div>`;
 
     if(!hasBOM){
-      html += `<div style="background:#fdecea;border-radius:8px;padding:10px;font-size:12px;color:#e74c3c;">⚠️ No Bill of Materials set for ${selected.productName}. Go to Materials tab and set Socket Type + Screws Required first.</div>`;
+      html += `<div style="background:#fdecea;border-radius:8px;padding:10px;font-size:12px;color:#e74c3c;">⚠️ No Bill of Materials set for ${selected.productName}. Go to Materials tab and set Socket Type + Screws Required first (or mark it Nil if it genuinely needs neither).</div>`;
+    } else if(isNilProduct){
+      html += `<div style="background:#eafaf1;border-radius:8px;padding:10px;margin-bottom:10px;font-size:12px;color:#27ae60;font-weight:700;">✅ No socket or screws needed for ${selected.productName} — this moves straight to Ready for Sale.</div>
+      <div class="label">Quantity to Process</div>
+      <input type="number" id="socketProcessQty" min="1" max="${selected.qty}" placeholder="e.g. 100" value="${state.socketProcessQty||''}" oninput="state.socketProcessQty=this.value" style="margin-bottom:10px;"/>
+      <button class="btn" style="background:#9b59b6;width:100%;" onclick="recordSocketProcessing()">Move to Ready for Sale</button>
+      <div id="socketProcMsg" class="msg"></div>`;
     } else {
       const socketBatches = (state.socketInventory||[]).filter(s=>s.socketType===socketType && s.qty>0);
       const screwBatches = (state.screwInventory||[]).filter(s=>s.qty>0);
@@ -2594,7 +2601,9 @@ function renderSocketDept(){
             ${r.flagged&&!isVoided?'<span style="font-size:10px;padding:2px 8px;border-radius:6px;background:#e8f4fd;color:#3498db;font-weight:700;">🚩 FLAGGED</span>':''}
           </div>
         </div>
-        <div style="color:#666;font-size:11px;${isVoided?'text-decoration:line-through;':''}">${r.qty} pcs socketed — from Batch ${r.fbBatchNo} → Batch ${r.outputBatchNo||r.fbBatchNo} (${r.socketQty} ${r.socketType} from ${r.socketBatchNo}, ${r.screwQty} screws from ${r.screwBatchNo})</div>
+        <div style="color:#666;font-size:11px;${isVoided?'text-decoration:line-through;':''}">${r.socketType===NIL_BOM
+          ? `${r.qty} pcs moved to Ready for Sale — from Batch ${r.fbBatchNo} → Batch ${r.outputBatchNo||r.fbBatchNo} (no socket/screws needed)`
+          : `${r.qty} pcs socketed — from Batch ${r.fbBatchNo} → Batch ${r.outputBatchNo||r.fbBatchNo} (${r.socketQty} ${r.socketType} from ${r.socketBatchNo}, ${r.screwQty} screws from ${r.screwBatchNo})`}</div>
         ${isVoided?`<div style="font-size:11px;color:#e74c3c;margin-top:6px;background:#fdecea;border-radius:6px;padding:6px 8px;">Voided by ${r.voidedBy} on ${r.voidedDate}<br/><span style="font-style:italic;">"${r.voidedReason}"</span></div>`:''}
         ${r.flagged&&!isVoided?`<div style="font-size:11px;color:#3498db;margin-top:6px;background:#e8f4fd;border-radius:6px;padding:6px 8px;">Flagged by ${r.flaggedBy} on ${r.flaggedDate} ${r.flaggedTime||''}<br/><span style="font-style:italic;">"${r.flagNote}"</span></div>`:''}
         ${!isVoided?`<div style="display:flex;gap:6px;margin-top:8px;">
@@ -2673,11 +2682,63 @@ function recordSocketProcessing(){
   const wp = (state.woodPieces||[]).find(w=>w.name===stock.productName);
   const socketType = wp?.socketType||'';
   const screwsPerPiece = wp?.screwsRequired||0;
-  if(!socketType||!screwsPerPiece){ if(msgEl){msgEl.textContent="⚠️ No Bill of Materials set for this product";msgEl.className="msg err";} return; }
+  const isNilProduct = isNilBOM(wp);
+  if(!isNilProduct && (!socketType||!screwsPerPiece)){ if(msgEl){msgEl.textContent="⚠️ No Bill of Materials set for this product";msgEl.className="msg err";} return; }
 
   const qty = +document.getElementById('socketProcessQty')?.value||0;
   if(!qty||qty<=0){ if(msgEl){msgEl.textContent="⚠️ Enter quantity to process";msgEl.className="msg err";} return; }
   if(qty>stock.qty){ if(msgEl){msgEl.textContent=`⚠️ Only ${stock.qty} pcs available`;msgEl.className="msg err";} return; }
+
+  // ---- NIL BOM pass-through: no socket/screw batches needed, straight to Ready for Sale ----
+  // Reuses the exact same FB-minting/genealogy logic as the normal path so batch numbering,
+  // Trace, and void-cascade machinery all treat a Nil run identically to a normal one — the
+  // only difference is zero socket/screw consumption, everywhere that matters.
+  if(isNilProduct){
+    const todayNil = new Date().toISOString().slice(0,10);
+    const preSnapshotNil = takeSnapshot(['finishedBrushes','readyForSale']);
+    state.finishedBrushes = brushes.map(b=>b.id===stock.id?{...b,qty:b.qty-qty}:b).filter(b=>b.qty>0);
+    state.batchGenealogy = state.batchGenealogy||{};
+    let fbNoNil = Object.keys(state.batchGenealogy).find(k=>{
+      const g = state.batchGenealogy[k];
+      return g && g.sourceBrushBatch===stock.batchNo && g.productName===stock.productName;
+    });
+    if(!fbNoNil){
+      fbNoNil = getNextBatchNo('FB');
+      state.batchGenealogy[fbNoNil] = { productName:stock.productName, sourceBrushBatch:stock.batchNo, dateCreated:todayNil, socketUsage:[], screwUsage:[] };
+    }
+    const idxNil=(state.readyForSale||[]).findIndex(r=>r.productName===stock.productName&&r.batchNo===fbNoNil);
+    if(idxNil>=0){ state.readyForSale[idxNil].qty += qty; }
+    else{ state.readyForSale=[...(state.readyForSale||[]),{ id:Date.now()+Math.random(), productName:stock.productName, batchNo:fbNoNil, qty, dateAdded:todayNil }]; }
+
+    addLedgerEntry('finished', stock.productName, stock.batchNo, qty, 'OUT', `Sent to Socket Dept (no socket/screws needed — Nil BOM)`, '');
+    addLedgerEntry('finished', stock.productName+' (Ready for Sale)', fbNoNil, qty, 'IN', `Moved to Ready for Sale — no socket/screws needed (from Brush Batch ${stock.batchNo})`, '');
+
+    state.socketProcessingLog = [...(state.socketProcessingLog||[]), {
+      id: Date.now()+Math.random(), date: todayNil, time: new Date().toTimeString().slice(0,5),
+      productName: stock.productName, fbBatchNo: stock.batchNo, outputBatchNo: fbNoNil, qty,
+      socketType: NIL_BOM, socketBatchNo:'', socketQty: 0,
+      screwBatchNo:'', screwQty: 0, voided:false
+    }];
+
+    saveAll();
+    state.socketSelectedStock = null; state.socketSelectedBatch=''; state.screwSelectedBatch=''; state.socketProcessQty = '';
+    if(msgEl){msgEl.textContent=`✅ Moved ${qty} pcs straight to Ready for Sale (no socket/screws needed).`;msgEl.className="msg ok";}
+    const stockNameForUndoNil = stock.productName, batchForUndoNil = stock.batchNo;
+    setTimeout(()=>{
+      re();
+      showReviewPopup({
+        snapshot: preSnapshotNil,
+        subtitle: stockNameForUndoNil + ' — Batch ' + batchForUndoNil,
+        field1Label: 'Quantity Processed', field1Value: qty, field1Editable: true,
+        field2Label: 'Screws Used', field2Value: 0, field2Editable: false,
+        onUndo: function(){
+          const m=document.getElementById('socketProcMsg');
+          if(m){m.textContent='↩️ Entry undone — select stock and re-enter.';m.className='msg ok';}
+        }
+      });
+    },100);
+    return;
+  }
 
   const socketBatchNo = state.socketSelectedBatch;
   const screwBatchNo = state.screwSelectedBatch;
@@ -3328,9 +3389,15 @@ function renderBOM(){
       // "-- Select --". Without this, the saved assignment would display as blank, and ANY
       // interaction with this row (even just typing in the screws box, which also re-saves
       // the dropdown's current value) would silently overwrite the real saved value with ''.
-      const savedMissing = w.socketType && !socketTypes.includes(w.socketType);
+      const isNil = isNilBOM(w);
+      const savedMissing = w.socketType && !isNil && !socketTypes.includes(w.socketType);
       html+=`<div style="background:#f9f5f0;border-radius:8px;padding:10px;margin-bottom:8px;">
         <div style="font-size:12px;font-weight:700;margin-bottom:6px;">${w.name} (${w.size}")</div>
+        ${isNil ? `
+        <div style="font-size:12px;color:#27ae60;font-weight:700;background:#eafaf1;border-radius:6px;padding:8px;">
+          ✅ No socket or screws needed — this product goes straight to Ready for Sale in Socket Dept.
+          <span style="font-weight:400;color:#888;text-decoration:underline;cursor:pointer;margin-left:6px;" onclick="toggleNilBOM(${w.id},false)">undo</span>
+        </div>` : `
         ${savedMissing?`<div style="font-size:11px;color:#e67e22;font-weight:700;margin-bottom:6px;">⚠️ This product's saved socket type "${w.socketType}" is not in the Socket Types list above — re-add it there with this exact spelling to make it fully valid again. The saved value is protected and still shown below.</div>`:''}
         <div class="grid2">
           <div><div class="label">Socket Type</div>
@@ -3342,6 +3409,8 @@ function renderBOM(){
           <div><div class="label">Screws Required</div>
             <input type="number" min="0" placeholder="e.g. 2" id="bomScrews_${w.id}" value="${w.screwsRequired||''}" oninput="updateBOM(${w.id})" style="margin-bottom:0;"/></div>
         </div>
+        <div style="font-size:11px;color:#888;margin-top:6px;text-decoration:underline;cursor:pointer;" onclick="toggleNilBOM(${w.id},true)">This product needs no socket/screws — mark as Nil</div>
+        `}
       </div>`;
     });
   }
@@ -4652,7 +4721,14 @@ function openBatchTraceModal(fbBatchNo){
 
   html += `<div class="card" style="border:2px solid #9b59b6;margin-bottom:12px;">
     <div class="label" style="color:#9b59b6;">🔌 Sockets Used On This Batch</div>
-    ${(gen.socketUsage||[]).length===0?`<div style="color:#aaa;font-size:12px;">None yet — not sent through Socket Dept.</div>`:
+    ${(gen.socketUsage||[]).length===0?(
+      // Distinguish "never processed" from "processed as a Nil-BOM product" — the batch's own
+      // Socket Dept log entries tell us which. Claiming "not sent through Socket Dept" for
+      // goods that WERE processed (just needing nothing) would be factually wrong in an audit.
+      (state.socketProcessingLog||[]).some(r=>!r.voided && r.socketType===NIL_BOM && (r.outputBatchNo===fbBatchNo || r.fbBatchNo===fbBatchNo))
+        ? `<div style="color:#27ae60;font-size:12px;">✅ Processed through Socket Dept with no sockets needed (Nil BOM product).</div>`
+        : `<div style="color:#aaa;font-size:12px;">None yet — not sent through Socket Dept.</div>`
+    ):
       (gen.socketUsage||[]).map(u=>`<div style="display:flex;justify-content:space-between;font-size:12px;padding:4px 0;border-bottom:1px solid #f0e8de;">
         <span>${u.batchNo} — ${u.socketType} (${u.date})</span>
         <span style="font-weight:700;">${nf(u.qty)} pcs</span>
@@ -4661,7 +4737,11 @@ function openBatchTraceModal(fbBatchNo){
 
   html += `<div class="card" style="border:2px solid #7f8c8d;">
     <div class="label" style="color:#7f8c8d;">🔩 Screws Used On This Batch</div>
-    ${(gen.screwUsage||[]).length===0?`<div style="color:#aaa;font-size:12px;">None yet — not sent through Socket Dept.</div>`:
+    ${(gen.screwUsage||[]).length===0?(
+      (state.socketProcessingLog||[]).some(r=>!r.voided && r.socketType===NIL_BOM && (r.outputBatchNo===fbBatchNo || r.fbBatchNo===fbBatchNo))
+        ? `<div style="color:#27ae60;font-size:12px;">✅ Processed through Socket Dept with no screws needed (Nil BOM product).</div>`
+        : `<div style="color:#aaa;font-size:12px;">None yet — not sent through Socket Dept.</div>`
+    ):
       (gen.screwUsage||[]).map(u=>`<div style="display:flex;justify-content:space-between;font-size:12px;padding:4px 0;border-bottom:1px solid #f0e8de;">
         <span>${u.batchNo} (${u.date})</span>
         <span style="font-weight:700;">${nf(u.qty)} pcs</span>
@@ -5076,24 +5156,32 @@ function applyVoidToSocketRun(runId, reason){
   const summary = { socketsRestored:0, screwsRestored:0, readySaleRemoved:0, unreachable:0 };
 
   // ---- 1. Restore the sockets consumed ----
-  const sIdx = (state.socketInventory||[]).findIndex(s=>s.batchNo===run.socketBatchNo);
-  if(sIdx>=0){
-    state.socketInventory[sIdx].qty += run.socketQty;
-  } else {
-    state.socketInventory = [...(state.socketInventory||[]), {
-      socketType: run.socketType, qty: run.socketQty, batchNo: run.socketBatchNo, dateAdded: date
-    }];
+  // Guarded at qty>0 (audit finding from testing the Nil BOM feature): without this, a Nil
+  // entry (socketQty=0, socketBatchNo='') would push a PHANTOM zero-qty inventory record with
+  // an empty batch number every time it's voided — matches the guard already present in the
+  // shared restoreSocketBatch/restoreScrewBatch helpers, just missing from this inline copy.
+  if(run.socketQty>0){
+    const sIdx = (state.socketInventory||[]).findIndex(s=>s.batchNo===run.socketBatchNo);
+    if(sIdx>=0){
+      state.socketInventory[sIdx].qty += run.socketQty;
+    } else {
+      state.socketInventory = [...(state.socketInventory||[]), {
+        socketType: run.socketType, qty: run.socketQty, batchNo: run.socketBatchNo, dateAdded: date
+      }];
+    }
   }
   summary.socketsRestored = run.socketQty;
 
   // ---- 2. Restore the screws consumed ----
-  const scIdx = (state.screwInventory||[]).findIndex(s=>s.batchNo===run.screwBatchNo);
-  if(scIdx>=0){
-    state.screwInventory[scIdx].qty += run.screwQty;
-  } else {
-    state.screwInventory = [...(state.screwInventory||[]), {
-      qty: run.screwQty, batchNo: run.screwBatchNo, vendor: '(restored by void)', dateAdded: date
-    }];
+  if(run.screwQty>0){
+    const scIdx = (state.screwInventory||[]).findIndex(s=>s.batchNo===run.screwBatchNo);
+    if(scIdx>=0){
+      state.screwInventory[scIdx].qty += run.screwQty;
+    } else {
+      state.screwInventory = [...(state.screwInventory||[]), {
+        qty: run.screwQty, batchNo: run.screwBatchNo, vendor: '(restored by void)', dateAdded: date
+      }];
+    }
   }
   summary.screwsRestored = run.screwQty;
 
@@ -5123,8 +5211,10 @@ function applyVoidToSocketRun(runId, reason){
   }
   // Sockets/screws are always restored in full — their consumption is a fact of THIS
   // transaction, independent of what later happened to the RFS pieces it produced.
-  addLedgerEntry('socket', run.socketType, run.socketBatchNo, run.socketQty, 'IN', `Restored — voided Socket Dept run (${reason})`, '');
-  addLedgerEntry('screw', 'Screws', run.screwBatchNo, run.screwQty, 'IN', `Restored — voided Socket Dept run (${reason})`, '');
+  // Nil-BOM runs consumed neither (socketQty/screwQty are 0 by construction) — skip these
+  // lines entirely rather than write noisy "restored 0 pcs" ledger entries for them.
+  if(run.socketQty>0) addLedgerEntry('socket', run.socketType, run.socketBatchNo, run.socketQty, 'IN', `Restored — voided Socket Dept run (${reason})`, '');
+  if(run.screwQty>0) addLedgerEntry('screw', 'Screws', run.screwBatchNo, run.screwQty, 'IN', `Restored — voided Socket Dept run (${reason})`, '');
   return summary;
 }
 
@@ -7561,6 +7651,21 @@ function deleteWoodPiece(id){
 }
 
 // Update a wood piece's Bill of Materials (socket type + screws required) as the user types
+// Sentinel for products that genuinely need NO socket/screws (e.g. a piece sold as-is).
+// Distinct from '' (not yet configured, still blocks Socket Dept processing with a warning).
+const NIL_BOM = 'NIL';
+function isNilBOM(wp){ return !!(wp && wp.socketType===NIL_BOM); }
+function toggleNilBOM(woodPieceId, makeNil){
+  const w = (state.woodPieces||[]).find(x=>x.id===woodPieceId);
+  if(!w) return;
+  if(makeNil){
+    state.woodPieces = (state.woodPieces||[]).map(x=>x.id===woodPieceId?{...x, socketType:NIL_BOM, screwsRequired:0}:x);
+  } else {
+    if(!confirm(`Set ${w.name} back to needing a socket type? Socket Dept processing for it will be blocked again until one is selected.`)) return;
+    state.woodPieces = (state.woodPieces||[]).map(x=>x.id===woodPieceId?{...x, socketType:'', screwsRequired:0}:x);
+  }
+  saveAll(); re();
+}
 function updateBOM(woodPieceId){
   const socketEl = document.getElementById('bomSocket_'+woodPieceId);
   const screwsEl = document.getElementById('bomScrews_'+woodPieceId);
@@ -7593,7 +7698,9 @@ function collectSocketTypeNameCandidates(){
   const found = {}; // name -> Set of human-readable sources
   const note = (name, source) => {
     const n = (typeof name==='string' ? name.trim() : '');
-    if(!n || existing.has(n)) return;
+    // NIL is the deliberate "no socket needed" sentinel, never a real socket type name —
+    // it must never be suggested for addition to the master Socket Types list.
+    if(!n || n===NIL_BOM || existing.has(n)) return;
     (found[n] = found[n] || new Set()).add(source);
   };
   (state.woodPieces||[]).forEach(w=>{ if(w) note(w.socketType, `BOM of "${w.name}"`); });
