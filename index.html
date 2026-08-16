@@ -242,7 +242,7 @@ body.rejection-lock .size-btn{pointer-events:none;opacity:0.45;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1786609670789;
+const APP_BUILD = 1786861620786;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -3865,6 +3865,138 @@ function copyBuyerStatement(buyerName){
     navigator.clipboard.writeText(text).then(()=>alert('📋 Statement copied — paste it into WhatsApp to '+buyerName+'.')).catch(()=>prompt('Copy this statement:', text));
   } else { prompt('Copy this statement:', text); }
 }
+// ==================== 🤖 AI REPORT ASSISTANT (13/8, Owner request) ====================
+// Architecture (agreed with Owner): every number is PRE-COMPUTED here by the app's own
+// tested code (computeCostAnalysis, getWasteTypeStock, the sales/recon/adjustment trails).
+// The AI's only job — on the reader service's /report endpoint (Gemini free tier) — is
+// selecting, comparing and narrating those figures; it is instructed to never compute new
+// numbers, and the server verifies every figure the report quotes actually exists in this
+// dataset, flagging anything unmatched. Calculator-grade numbers, AI-grade explanation.
+function compileReportData(){
+  const round1 = v => (typeof v==='number' && isFinite(v)) ? +v.toFixed(1) : null;
+  const round2 = v => (typeof v==='number' && isFinite(v)) ? +v.toFixed(2) : null;
+  const stock = getWasteTypeStock();
+  const cost = (typeof computeCostAnalysis==='function') ? computeCostAnalysis() : [];
+  const salesAll = (state.sales||[]).filter(s=>s && !s.voided);
+  const applied = salesAll.filter(s=>s.status!=='pending' && s.status!=='rejected');
+  const pending = salesAll.filter(s=>s.status==='pending');
+  const now = Date.now();
+
+  const plankStock = {};
+  Object.entries(state.materials||{}).forEach(([size,m])=>{
+    plankStock[size+'"'] = (m.batches||[]).filter(b=>b.qty>0).map(b=>({batch:b.batchNo, qty:b.qty, vendor:b.vendor||null, pricePerPiece:b.pricePerPiece||null}));
+  });
+
+  return {
+    generatedAt: new Date().toISOString(),
+    note: 'All figures pre-computed by the tracking software. Currency Rs., weights KG, quantities pcs.',
+    costingPerBatch: cost.map(b=>({
+      batch:b.batchNo, firstDate:b.firstDate,
+      totalPurchaseCostRs: round1(b.totalCost), totalInches: round1(b.totalInches),
+      baseRatePerInchRs: round2(b.baseRate), goodInches: round1(b.goodInches),
+      lostInches: round1(b.lostInches), lossValueRs: round1(b.lossRs),
+      wastageKg: round1(b.totalWasteKg), wastageIncomeRs: round1(b.wasteIncome),
+      netCostRs: round1(b.netCost), effectiveRatePerInchRs: round2(b.effRate),
+      yieldPercent: round1(b.yieldPct),
+      purchases: (b.purchases||[]).map(p=>({vendor:p.vendor||null, qty:p.qty, pricePerPiece:p.pricePerPiece||null, date:p.date||null})),
+      products: (b.products||[]).map(p=>({name:p.name, sizeInches:p.size, producedPcs:p.qty, baseCostPerPcRs: round2(p.baseCostPc), effectiveCostPerPcRs: round2(p.effCostPc)}))
+    })),
+    wastagePools: { producedKg: {Bhusa:round1(stock.produced.Bhusa), Patti:round1(stock.produced.Patti), Gitta:round1(stock.produced.Gitta)},
+      soldKg: {Bhusa:round1(stock.sold.Bhusa), Patti:round1(stock.sold.Patti), Gitta:round1(stock.sold.Gitta)},
+      availableKg: {Bhusa:round1(stock.available.Bhusa), Patti:round1(stock.available.Patti), Gitta:round1(stock.available.Gitta)},
+      fixedPricesRsPerKg: WASTE_TYPES.reduce((o,t)=>{o[t]=getWastagePrice(t); return o;}, {}) },
+    sales: {
+      appliedCount: applied.length,
+      totalRevenueRs: round1(applied.reduce((s,x)=>s+(x.totalAmount||0),0)),
+      totalKgSold: round1(applied.reduce((s,x)=>s+(x.kgSold||0),0)),
+      cashOwedToOwnerRs: round1(applied.reduce((s,x)=>s+Math.max(0,(x.amountReceived||0)-(x.ownerReceivedAmount||0)),0)),
+      salesWithCashOwedOver24h: applied.filter(x=>{const owed=Math.max(0,(x.amountReceived||0)-(x.ownerReceivedAmount||0)); return owed>0.001 && (now-new Date(x.datetime||x.date).getTime())>86400000;}).map(x=>({buyer:x.buyer, date:x.date, owedRs:round1(Math.max(0,(x.amountReceived||0)-(x.ownerReceivedAmount||0)))})),
+      pendingApprovalCount: pending.length,
+      pendingApprovals: pending.map(x=>({buyer:x.buyer, kg:x.kgSold, amountRs:round1(x.totalAmount), enteredBy:x.manualOverrideBy||null, date:x.date})),
+      recentApplied: applied.slice(-25).map(x=>({date:x.date, buyer:x.buyer, type:x.wasteType, kg:x.kgSold, amountRs:round1(x.totalAmount), gatePass:x.gatePassNo||null, slipSerial:x.slipSerialNo||null, manualOverride:!!x.manualOverride}))
+    },
+    stockLevels: {
+      planks: plankStock,
+      woodFinishing: (state.finishedInventory||[]).filter(f=>f.qty>0).map(f=>({product:f.productName, batch:f.batchNo, qty:f.qty})),
+      brushDept: (state.finishedBrushes||[]).filter(f=>f.qty>0).map(f=>({product:f.productName, batch:f.batchNo, qty:f.qty})),
+      readyForSale: (state.readyForSale||[]).filter(f=>f.qty>0).map(f=>({product:f.productName, batch:f.batchNo, qty:f.qty})),
+      sockets: (state.socketInventory||[]).filter(s=>s.qty>0).map(s=>({type:s.socketType, batch:s.batchNo, qty:s.qty})),
+      screws: (state.screwInventory||[]).filter(s=>s.qty>0).map(s=>({batch:s.batchNo, qty:s.qty})),
+      scrap: (state.scrapInventory||[]).filter(s=>s.quantity>0).map(s=>({sizeInches:s.size, batch:s.batch, qty:s.quantity}))
+    },
+    physicalStockChecks: [...(state.wastageRecons||[])].sort((a,b)=>(b.id||0)-(a.id||0)).slice(0,6).map(r=>({date:r.date, by:r.by, results:r.types})),
+    ownerCorrectionTrail: [...(state.correctionsLog||[])].sort((a,b)=>(b.id||0)-(a.id||0)).slice(0,20).map(c=>({what:c.details, by:c.by, when:String(c.at||'').slice(0,10)}))
+  };
+}
+
+async function runAiReport(presetQuestion){
+  if(!currentUser || currentUser.role!=='owner'){ alert('Owner only.'); return; }
+  const qEl = document.getElementById('aiReportQuestion');
+  const question = presetQuestion || (qEl && qEl.value.trim());
+  const msg = document.getElementById('aiReportMsg');
+  const out = document.getElementById('aiReportResult');
+  if(!question){ if(msg){msg.textContent='⚠️ Type a question or use a quick button.'; msg.className='msg err';} return; }
+  if(typeof WEIGHT_SLIP_READER_URL!=='string' || !WEIGHT_SLIP_READER_URL.startsWith('http')){
+    if(msg){msg.textContent='⚠️ Report service URL not configured.'; msg.className='msg err';} return;
+  }
+  const url = WEIGHT_SLIP_READER_URL.replace('/read-slip','/report');
+  if(msg){msg.textContent='🤖 Compiling data and generating report — usually 5–15 seconds...'; msg.className='msg';}
+  if(out){out.style.display='none';}
+  let data;
+  try{ data = compileReportData(); }
+  catch(e){ console.error('compileReportData failed:', e); if(msg){msg.textContent='⚠️ Could not compile the data: '+e.message; msg.className='msg err';} return; }
+  try{
+    const resp = await fetch(url, { method:'POST',
+      headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+WEIGHT_SLIP_READER_SECRET },
+      body: JSON.stringify({ question, data }) });
+    const res = await resp.json().catch(()=>null);
+    if(!resp.ok || !res || !res.success){
+      const detail = res && res.error ? res.error : ('HTTP '+resp.status);
+      if(msg){msg.textContent='⚠️ Report failed: '+detail; msg.className='msg err';}
+      return;
+    }
+    state.lastAiReport = res.report;
+    if(out){
+      let footer = '';
+      if(Array.isArray(res.unverified) && res.unverified.length>0){
+        footer = `\n\n──────────\n⚠️ VERIFICATION: these figures in the report could not be matched to the app's own computed data — treat them with caution and check the relevant tab before acting: ${res.unverified.join(', ')}`;
+      } else {
+        footer = `\n\n──────────\n✅ Verified: every figure quoted above matches the app's own computed data.`;
+      }
+      out.textContent = res.report + footer;
+      out.style.display='block';
+    }
+    if(msg){msg.textContent=''; msg.className='msg';}
+  }catch(e){
+    console.error('AI report failed:', e);
+    if(msg){msg.textContent='⚠️ Could not reach the report service — check the connection and try again.'; msg.className='msg err';}
+  }
+}
+function copyAiReport(){
+  const text = state.lastAiReport || '';
+  if(!text){ return; }
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(()=>alert('📋 Report copied.')).catch(()=>prompt('Copy the report:', text));
+  } else { prompt('Copy the report:', text); }
+}
+function renderAiReportCardHTML(){
+  if(!currentUser || currentUser.role!=='owner') return '';
+  return `<div class="card" style="border:2px solid #2980b9;">
+    <div class="label" style="color:#2980b9;">🤖 AI Report Assistant</div>
+    <div style="font-size:11px;color:#888;margin-bottom:8px;">Ask anything about the factory's data — costing, yields, stock, sales, fraud signals. Every number in the report comes from the app's own tested calculations (the AI only explains, never computes), and each figure is verified against the data before display. Runs on a free service; complex questions take a few seconds.</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">
+      <button class="btn btn-gray" style="font-size:11px;padding:5px 10px;" onclick="runAiReport('Give me a full cost analysis: for every batch show the cost, effective rate, yield, loss value and wastage income, then tell me which batches were the best and worst performers and any warning signs.')">📈 Cost Analysis</button>
+      <button class="btn btn-gray" style="font-size:11px;padding:5px 10px;" onclick="runAiReport('Summarize current stock across every department, wastage pools, and recent sales. Keep it short and flag anything unusual.')">📦 Stock & Sales Summary</button>
+      <button class="btn btn-gray" style="font-size:11px;padding:5px 10px;" onclick="runAiReport('Review all fraud signals: pending sale approvals, cash owed to owner over 24 hours, physical stock check variances, manual overrides, and recent owner corrections. Tell me plainly if anything needs my attention.')">🕵️ Fraud Signals</button>
+    </div>
+    <textarea id="aiReportQuestion" rows="2" placeholder="Or ask your own question — e.g. 'which vendor's planks gave the best yield?' (English / Urdu / Roman Urdu)" style="width:100%;margin-bottom:8px;"></textarea>
+    <button class="btn btn-full" style="background:#2980b9;" onclick="runAiReport()">🤖 Generate Report</button>
+    <div id="aiReportMsg" class="msg"></div>
+    <div id="aiReportResult" style="display:none;white-space:pre-wrap;background:#f4f9fd;border-radius:8px;padding:12px;font-size:12px;line-height:1.5;margin-top:8px;max-height:60vh;overflow-y:auto;"></div>
+    <button class="btn btn-gray" style="font-size:11px;padding:5px 12px;margin-top:6px;" onclick="copyAiReport()">📋 Copy Report</button>
+  </div>`;
+}
+
 function renderSales(){
   const sales = [...(state.sales||[])].sort((a,b)=>b.datetime.localeCompare(a.datetime));
   const activeSales = sales.filter(s=>!s.voided && s.status!=='pending' && s.status!=='rejected');
@@ -8436,6 +8568,7 @@ function renderAdminPanel(){
       <div id="resyncResult" style="margin-top:8px;font-size:12px;"></div>
     </div>
 
+    ${renderAiReportCardHTML()}
     ${renderOwnerAdjustmentCardHTML()}
     ${renderOwnerVoidCardHTML()}
     ${renderGhostCorrectionsCardHTML()}
