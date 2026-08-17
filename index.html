@@ -242,7 +242,7 @@ body.rejection-lock .size-btn{pointer-events:none;opacity:0.45;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1786861620786;
+const APP_BUILD = 1786948842912;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -400,6 +400,27 @@ function recKey(rec){
 // Snapshot of {docId: recordJSON} per collection as last seen/pushed — used to diff so we
 // only write records that actually changed, and delete docs for records that were removed.
 let syncShadow = {};
+// In-flight write tracker (fix for a real data-loss bug, 16/08/2026): two rapid local writes
+// to the SAME collection get correctly coalesced into one debounced outbound Firestore batch
+// (syncToFirestore's 1.2s debounce) — that part was always safe. The actual bug lived on the
+// INBOUND side: the onSnapshot listener does a full-collection replace of state[stateKey] the
+// moment it sees any non-purely-local-pending change, reading whatever snap.forEach() currently
+// enumerates. If that read races ahead of the SDK's own local cache finishing folding in a
+// batch this device JUST sent (a real, observed Firestore SDK timing gap when several docs in
+// one collection are written back-to-back), the listener can silently resurrect a record this
+// device had already deleted/updated moments earlier — exactly what happened to a fully-
+// consumed Brush Dept batch reappearing at full quantity after being correctly socket-processed.
+// Fix: remember which (stateKey, docId) pairs are still awaiting confirmation of OUR OWN most
+// recent write, and while a docId is in flight, a full-replace snapshot event keeps this
+// device's own current in-memory value for it instead of trusting a snapshot that may be stale
+// by exactly the record that matters. Cleared the moment that specific write is confirmed.
+let inFlightWrites = {}; // stateKey -> { docId: true }
+function markInFlight(stateKey, docId){
+  (inFlightWrites[stateKey] = inFlightWrites[stateKey] || {})[docId] = true;
+}
+function clearInFlight(stateKey, docId){
+  if(inFlightWrites[stateKey]) delete inFlightWrites[stateKey][docId];
+}
 // True per collection only once we've received a real, confirmed first snapshot for it —
 // doFirestoreSync refuses to touch (add/update/delete) any collection until this is true.
 let collectionReady = {};
@@ -452,10 +473,10 @@ function doFirestoreSync(){
       const shadow = syncShadow[stateKey] || {};
       Object.entries(recs).forEach(([docId, rec])=>{
         const j = JSON.stringify(rec);
-        if(shadow[docId] !== j) ops.push({t:'set', col, docId, data:{v:j, updatedAt:now, b:APP_BUILD}, stateKey, j});
+        if(shadow[docId] !== j){ ops.push({t:'set', col, docId, data:{v:j, updatedAt:now, b:APP_BUILD}, stateKey, j}); markInFlight(stateKey, docId); }
       });
       Object.keys(shadow).forEach(docId=>{
-        if(!(docId in recs)) ops.push({t:'del', col, docId, stateKey});
+        if(!(docId in recs)){ ops.push({t:'del', col, docId, stateKey}); markInFlight(stateKey, docId); }
       });
     });
     if(ops.length===0){
@@ -485,10 +506,16 @@ function doFirestoreSync(){
               if(!syncShadow[o.stateKey]) syncShadow[o.stateKey] = {};
               if(o.t==='set') syncShadow[o.stateKey][o.docId] = o.j;
               else delete syncShadow[o.stateKey][o.docId];
+              clearInFlight(o.stateKey, o.docId);
             });
           })
           .catch(err=>{
             console.error('Firestore batch error:', err, '— collections in this failed chunk:', [...new Set(chunk.map(o=>o.col))].join(', '));
+            // A failed write must NOT stay "in flight" forever — clear it so a later retry
+            // (which recomputes ops fresh from current state) can mark it in-flight again.
+            // Leaving stale in-flight entries around would permanently pin a record to its
+            // local value even after the device goes back to genuinely trusting the cloud.
+            chunk.forEach(o=>clearInFlight(o.stateKey, o.docId));
             throw err;
           })
       );
@@ -682,6 +709,21 @@ function attachFirestoreListeners(onAllFirstSnapshots){
             sh[doc.id] = JSON.stringify(r);
           }catch(e){}
         });
+        // THE FIX: for any docId this device is still waiting to hear back about, don't trust
+        // this snapshot for it — the snapshot can legitimately be a half-tick behind our own
+        // just-sent write. Keep this device's own current in-memory value instead (its own
+        // deletion/update stands until its OWN write is confirmed, at which point clearInFlight
+        // removes it from this set and future snapshots are trusted normally again).
+        const inFlight = inFlightWrites[stateKey];
+        if(inFlight && !isFirst){
+          const currentByDocId = {};
+          const currentVal = MAP_COLLECTIONS[stateKey] ? (state[stateKey]||{}) : recordsOf(stateKey);
+          Object.entries(currentVal).forEach(([k,v])=>{ currentByDocId[k]=v; });
+          Object.keys(inFlight).forEach(docId=>{
+            if(docId in currentByDocId){ recs[docId] = currentByDocId[docId]; }
+            else { delete recs[docId]; } // this device deleted it locally — a stale snapshot must not resurrect it
+          });
+        }
         if(MAP_COLLECTIONS[stateKey]){
           state[stateKey] = recs;
         } else {
