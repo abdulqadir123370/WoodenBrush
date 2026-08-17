@@ -242,7 +242,7 @@ body.rejection-lock .size-btn{pointer-events:none;opacity:0.45;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1786948842912;
+const APP_BUILD = 1786953499157;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -824,11 +824,67 @@ function loadFromFirestore(){
 // (This lever only exists in builds that contain this code — it cannot reach builds older
 // than itself. For those, the one-time WhatsApp "close and reopen the tracker" round is the
 // only bridge; from this build onward, the lever works forever.)
+let currentMinBuildFloor = 0; // live value of wbt_meta/config.minBuild, kept current by the listener below
+
+// ==================== FLEET LOCK BUTTON (Owner request 17/08/2026) ====================
+// One-tap replacement for the manual Firebase-console trip: writes THIS device's APP_BUILD
+// into wbt_meta/config.minBuild. Every device below the floor gets the update wall instantly
+// (via the existing listener + wall machinery — nothing new on the enforcement side).
+// Safety: Owner-only; cannot set a floor above the build actually running here (so the Owner
+// can never wall out their own device); merge-write so any other fields on the config doc
+// survive; shows current floor vs new floor and confirms before writing.
+async function setFleetMinimumBuild(){
+  if(!currentUser || currentUser.role!=='owner'){ alert('Owner only.'); return; }
+  if(!fbDb){ alert('Firestore is not connected — cannot set the fleet floor right now.'); return; }
+  const current = currentMinBuildFloor || 0;
+  if(current === APP_BUILD){
+    alert('The fleet minimum is already set to this exact build ('+APP_BUILD+'). Nothing to do.');
+    return;
+  }
+  if(current > APP_BUILD){
+    alert('The current fleet minimum ('+current+') is NEWER than this device\'s build ('+APP_BUILD+') — this device itself needs updating first. Refusing to lower the floor.');
+    return;
+  }
+  const msg = 'Raise the fleet minimum build?\n\n' +
+    'Current floor: ' + (current || '(none set)') + '\n' +
+    'New floor: ' + APP_BUILD + ' (this device\'s build)\n\n' +
+    'Every device on an OLDER build will be blocked within seconds — full-screen update wall, entries disabled, pending work flushed first, one-tap self-update. Devices already on this build or newer are unaffected.\n\nProceed?';
+  if(!confirm(msg)) return;
+  try{
+    await fbDb.collection(META_COLLECTION).doc('config').set({
+      minBuild: APP_BUILD,
+      minBuildSetBy: currentUser?.name || 'Owner',
+      minBuildSetAt: new Date().toISOString(),
+      b: APP_BUILD // build-stamp like every other client write — the Firestore rules floor requires it (the console bypassed rules; this client write cannot)
+    }, {merge:true});
+    alert('✅ Fleet minimum set to ' + APP_BUILD + '. Older devices are being walled off right now.');
+    re();
+  }catch(e){
+    console.error('setFleetMinimumBuild failed:', e);
+    alert('⚠️ Could not write the fleet minimum: ' + (e && e.message ? e.message : e) + '\n\nNothing was changed. Check the connection and try again, or use the Firebase console as before.');
+  }
+}
+function renderFleetLockCardHTML(){
+  if(!currentUser || currentUser.role!=='owner') return '';
+  const current = currentMinBuildFloor || 0;
+  const upToDate = current === APP_BUILD;
+  return `<div class="card" style="border:2px solid #7d3c98;">
+    <div class="label" style="color:#7d3c98;">🔒 Fleet Build Lock</div>
+    <div style="font-size:11px;color:#888;margin-bottom:8px;">Forces every device onto at least this build. Use after pushing a fix that old builds must not keep running (data-corruption bugs, security rules changes). Normal feature updates do NOT need this — devices self-update within minutes anyway.</div>
+    <div style="font-size:12px;margin-bottom:4px;">Current fleet minimum: <b>${current || '(none set)'}</b>${current && current<APP_BUILD?' <span style="color:#e67e22;">(older than this device)</span>':''}</div>
+    <div style="font-size:12px;margin-bottom:10px;">This device's build: <b>${APP_BUILD}</b></div>
+    ${upToDate
+      ? `<div style="font-size:12px;color:#27ae60;font-weight:700;">✅ Fleet minimum already matches this build.</div>`
+      : `<button class="btn btn-full" style="background:#7d3c98;" onclick="setFleetMinimumBuild()">🔒 Set fleet minimum to this build (${APP_BUILD})</button>`}
+  </div>`;
+}
+
 function attachMinBuildListener(){
   if(!fbDb) return;
   try{
     fbDb.collection(META_COLLECTION).doc('config').onSnapshot(doc=>{
       const minBuild = doc.exists ? +((doc.data()||{}).minBuild||0) : 0;
+      currentMinBuildFloor = minBuild; // remembered for the Owner's fleet-lock button display
       if(minBuild && APP_BUILD < minBuild){ showMinBuildWall(minBuild); }
       else { hideMinBuildWall(); }
     }, err=>{ /* ignore — the wall is an extra safety, never a point of failure */ });
@@ -8611,6 +8667,7 @@ function renderAdminPanel(){
     </div>
 
     ${renderAiReportCardHTML()}
+    ${renderFleetLockCardHTML()}
     ${renderOwnerAdjustmentCardHTML()}
     ${renderOwnerVoidCardHTML()}
     ${renderGhostCorrectionsCardHTML()}
