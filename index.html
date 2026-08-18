@@ -242,7 +242,7 @@ body.rejection-lock .size-btn{pointer-events:none;opacity:0.45;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1786953499157;
+const APP_BUILD = 1787048866676;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -6781,6 +6781,17 @@ function captureDataSnapshot(){
     ts: Date.now(),
     quantities: q,
     socketTypes: [...(state.socketTypes||[])],
+    // Counts of the append-only logs — used by System Watch rule 1d to detect entries
+    // silently vanishing (the wiped-processing half of the Aug 2026 BB013 incident).
+    logCounts: {
+      ledger: (state.ledger||[]).length,
+      production: (state.production||[]).length,
+      brushProcessingLog: (state.brushProcessingLog||[]).length,
+      socketProcessingLog: (state.socketProcessingLog||[]).length,
+      wastage: (state.wastage||[]).length,
+      sales: (state.sales||[]).length,
+      voidLog: (state.voidLog||[]).length,
+    },
   };
 }
 
@@ -7010,6 +7021,61 @@ function runSystemWatch(explainedBatches){
           `At ${new Date(prev.ts).toLocaleString()} this showed ${before} pcs. At ${new Date(curr.ts).toLocaleString()} it shows ${after} pcs. No production run, purchase, sale, wastage, void, or any other record in that window touches this batch — so nothing in the books accounts for the change. This is the same pattern as the July stock-wipe incident and needs a person to look.`,
           tabForSnapshotKey(key)));
       });
+
+      // 1c. Brush batch quantity INCREASED more than legitimate production accounts for —
+      // the stale-device "resurrection" signature (BB012 incident 13-17/8, BB013 incident 17/8).
+      // Stricter than 1a: 1a passes if ANY activity touched the batch in the window; a
+      // resurrection landing in the same window as a genuine socket run would slip through it.
+      // Here the increase amount itself must be covered by real IN entries: brush-machine
+      // output (ledger 'finished' IN) plus socket-processing voids (which restore brush qty).
+      allKeys.forEach(key=>{
+        if(!key.startsWith('brush|')) return;
+        const before = (prev.quantities||{})[key] ?? 0;
+        const after = (curr.quantities||{})[key] ?? 0;
+        if(after <= before) return;
+        const batchNo = key.split('|')[1];
+        if(explained.has(batchNo)) return;
+        const inWin = r => r && typeof r.id==='number' && r.id>=sinceId && r.id<=untilId;
+        let allowedIn = 0;
+        (state.ledger||[]).forEach(e=>{
+          if(inWin(e) && e.direction==='IN' && e.type==='finished' && String(e.batchNo)===batchNo) allowedIn += e.qty||0;
+        });
+        (state.socketProcessingLog||[]).forEach(s=>{
+          if(s && s.voided && String(s.fbBatchNo)===batchNo && s.voidedDate
+            && new Date(s.voidedDate+'T'+(s.voidedTime||'00:00')+':00').getTime()>=sinceId-60000) allowedIn += s.qty||0;
+        });
+        const increase = after - before;
+        if(increase > allowedIn){
+          findings.push(addSystemFinding('brush-ghost-increase', key,
+            `${describeSnapshotKey(key)} INCREASED by ${increase} pcs but recorded production only accounts for ${allowedIn}`,
+            `At ${new Date(prev.ts).toLocaleString()} this batch showed ${before} pcs; now it shows ${after}. Brush stock can only rise from brush-machine output or a voided socket run — those explain ${allowedIn} pcs of this rise, leaving ${increase-allowedIn} pcs appearing from nowhere. This is the exact signature of the stale-device sync resurrection that hit BB012 and BB013 in August 2026 (an old device silently re-uploading a quantity that had already been processed). Check the Ledger for this batch and physically verify the pile before trusting this number.`,
+            'Brush Dept'));
+        }
+      });
+    }
+
+    // 1d. Records VANISHED from an append-only log. Ledger, production, processing logs,
+    // wastage, sales and the void log never legitimately lose records — voids stamp records,
+    // they don't remove them. A count going DOWN means entries were wiped (the other half of
+    // the BB013 incident: the resurrection didn't just restore old stock, it erased the
+    // incharge's processing entries). Only a deliberate Admin/Owner Reset empties these — and
+    // a reset zeroes several logs at once, which is detected and reported as one event.
+    if(prev && prev.logCounts){
+      const shrunk = Object.keys(curr.logCounts||{}).filter(k => (curr.logCounts[k]||0) < (prev.logCounts[k]||0));
+      const zeroed = shrunk.filter(k => (curr.logCounts[k]||0)===0);
+      if(zeroed.length>=4){
+        findings.push(addSystemFinding('logs-reset', 'logs-reset',
+          `${zeroed.length} record logs were emptied at once — a Reset was run`,
+          `Between ${new Date(prev.ts).toLocaleString()} and ${new Date(curr.ts).toLocaleString()} these logs went to zero: ${zeroed.join(', ')}. This pattern only comes from an Admin/Owner Reset button. If nobody ran a Reset on purpose, treat this as a serious incident.`,
+          'Dashboard'));
+      } else {
+        shrunk.forEach(k=>{
+          findings.push(addSystemFinding('log-shrink', 'log-shrink|'+k,
+            `${k} lost ${(prev.logCounts[k]||0)-(curr.logCounts[k]||0)} record(s) — entries vanished from a permanent log`,
+            `${k} had ${prev.logCounts[k]} records at ${new Date(prev.ts).toLocaleString()} and has ${curr.logCounts[k]} at ${new Date(curr.ts).toLocaleString()}. Nothing in normal use removes records from this log — voids only stamp records as cancelled. Vanishing entries means data was wiped (stale-device sync overwrite, console tampering, or a partial reset). This is exactly how the BB013 socket-processing entries were lost on 17/8 before anyone noticed.`,
+            'Dashboard'));
+        });
+      }
     }
 
     // 1b. Socket type names that DISAPPEARED from the master list (additions are normal).
