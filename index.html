@@ -242,7 +242,7 @@ body.rejection-lock .size-btn{pointer-events:none;opacity:0.45;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1787051254921;
+const APP_BUILD = 1787055404717;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -1941,7 +1941,7 @@ function recordProduction(){
   const planksUsed=+planksInput.value;
   const wpId=+wpSel.value;
   // Snapshot state BEFORE any mutation below, so a 15-second self-correction can cleanly roll back
-  const preSnapshot = takeSnapshot(['materials','finishedInventory','scrapInventory','wastage','openBatches','production']);
+  const preSnapshot = takeSnapshot(['materials','finishedInventory','scrapInventory','wastage','openBatches','production','ledger']);
   const pieceSize=+wpSel.options[wpSel.selectedIndex]?.dataset?.size||0;
   if(!planksUsed||!wpId){showProdMsg("⚠️ Fill all fields",false);return;}
   const effSize=openBatch.isScrap?(openBatch.scrapSize||parseInt(size)):parseInt(size);
@@ -2484,7 +2484,7 @@ function recordBrushProcessing(){
   const wasteTypeSplit = wastageQty>0 && wastageKg>0 ? {Bhusa:0, Patti:0, Gitta:wastageKg} : null;
 
   const today = new Date().toISOString().slice(0,10);
-  const preSnapshot = takeSnapshot(['finishedInventory','reworkStock','brushScrapLog','wastage','finishedBrushes','scrapInventory']);
+  const preSnapshot = takeSnapshot(['finishedInventory','reworkStock','brushScrapLog','wastage','finishedBrushes','scrapInventory','ledger','brushProcessingLog']);
 
   // Deduct processed quantity from finished wood stock
   state.finishedInventory = finished.map(f=>f.id===stock.id?{...f,qty:f.qty-total}:f).filter(f=>f.qty>0);
@@ -2823,7 +2823,7 @@ function recordSocketProcessing(){
   // only difference is zero socket/screw consumption, everywhere that matters.
   if(isNilProduct){
     const todayNil = new Date().toISOString().slice(0,10);
-    const preSnapshotNil = takeSnapshot(['finishedBrushes','readyForSale']);
+    const preSnapshotNil = takeSnapshot(['finishedBrushes','readyForSale','ledger','socketProcessingLog','batchGenealogy']);
     state.finishedBrushes = brushes.map(b=>b.id===stock.id?{...b,qty:b.qty-qty}:b).filter(b=>b.qty>0);
     state.batchGenealogy = state.batchGenealogy||{};
     let fbNoNil = Object.keys(state.batchGenealogy).find(k=>{
@@ -2881,7 +2881,7 @@ function recordSocketProcessing(){
   if(!screwBatch || screwBatch.qty<screwsNeeded){ if(msgEl){msgEl.textContent=`⚠️ Screw batch ${screwBatchNo} doesn't have enough stock (has ${screwBatch?.qty||0}, need ${screwsNeeded})`;msgEl.className="msg err";} return; }
 
   const today = new Date().toISOString().slice(0,10);
-  const preSnapshot = takeSnapshot(['finishedBrushes','socketInventory','screwInventory','readyForSale']);
+  const preSnapshot = takeSnapshot(['finishedBrushes','socketInventory','screwInventory','readyForSale','ledger','socketProcessingLog','batchGenealogy']);
 
   // Deduct finished brushes stock
   state.finishedBrushes = brushes.map(b=>b.id===stock.id?{...b,qty:b.qty-qty}:b).filter(b=>b.qty>0);
