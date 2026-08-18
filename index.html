@@ -242,7 +242,7 @@ body.rejection-lock .size-btn{pointer-events:none;opacity:0.45;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1787048866676;
+const APP_BUILD = 1787051254921;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -576,6 +576,33 @@ function flushPendingSync(){
 }
 document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='hidden') flushPendingSync(); });
 window.addEventListener('pagehide', flushPendingSync);
+
+// ---- Idle-tab guard (added Aug 2026) ----
+// A tab left hidden for hours (shop PC, forgotten phone tab) rejoins with hours-old code and
+// hours-old in-memory data — the raw material of every stale-device incident this app has had
+// (BB012/BB013 resurrections, the July wipe). The rules floor and in-flight tracking defend
+// against the damage; this closes the door before it opens: a tab hidden longer than
+// IDLE_RELOAD_HOURS reloads itself the moment it becomes visible again, so the user always
+// resumes on fresh code + a fresh Firestore load. A reload is ~2 seconds and loses nothing:
+// any pending outbound write was already flushed by flushPendingSync when the tab was hidden,
+// and unsaved half-typed form fields older than 3 hours are stale by definition anyway.
+const IDLE_RELOAD_HOURS = 3;
+let _hiddenSince = null;
+document.addEventListener('visibilitychange', ()=>{
+  if(document.visibilityState==='hidden'){
+    _hiddenSince = Date.now();
+  } else if(_hiddenSince){
+    const idleMs = Date.now() - _hiddenSince;
+    _hiddenSince = null;
+    if(idleMs > IDLE_RELOAD_HOURS*60*60*1000){
+      // If a debounced write is somehow still pending, push it out first and give the
+      // batch a moment to commit — never reload over an unconfirmed write.
+      try{ flushPendingSync(); }catch(e){}
+      console.log('Idle-tab guard: tab was hidden ' + Math.round(idleMs/3600000) + 'h — reloading for fresh code + data');
+      setTimeout(()=>{ location.reload(); }, 1500);
+    }
+  }
+});
 
 function updateSyncIndicator(){
   const el = document.getElementById('syncIndicator');
