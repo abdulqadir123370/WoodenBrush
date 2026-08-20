@@ -242,7 +242,7 @@ body.rejection-lock .size-btn{pointer-events:none;opacity:0.45;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1787211970529;
+const APP_BUILD = 1787230567095;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -7051,6 +7051,41 @@ function resolveSystemFinding(id){
   re();
 }
 
+// ============ RECEIPT-DERIVATION ENGINE (migration S1, validated 20/8) ============
+// The exact module proven against 83 replay windows of real history (82 exact, 1 known
+// pre-ADJ4 defect). stock = opening balance + sum(receipts after it). Pure, no state.
+function shadowLedgerEntryKey(e){
+  if(!e || !e.type || !e.batchNo) return null;
+  const mat = String(e.material||'');
+  switch(e.type){
+    case 'plank':  return 'plank|'+String(e.size)+'|'+e.batchNo;
+    case 'socket': return 'socket|'+e.batchNo+'|'+mat;
+    case 'screw':  return 'screw|'+e.batchNo;
+    case 'scrap':  return 'scrap|'+String(e.size)+'|'+e.batchNo;
+    case 'finished': {
+      if(/\(Brush\)$/.test(mat))          return 'brush|'+e.batchNo+'|'+mat.replace(/ \(Brush\)$/,'');
+      if(/\(Ready for Sale\)$/.test(mat)) return 'rfs|'+e.batchNo+'|'+mat.replace(/ \(Ready for Sale\)$/,'');
+      if(/^WB/.test(e.batchNo)) return 'wood|'+e.batchNo+'|'+mat;
+      if(/^BB/.test(e.batchNo)) return 'brush|'+e.batchNo+'|'+mat;
+      if(/^FB/.test(e.batchNo)) return 'rfs|'+e.batchNo+'|'+mat;
+      return null;
+    }
+    default: return null;
+  }
+}
+function shadowDeriveStocks(genesis, watermarkId, ledger){
+  const out = {...genesis};
+  for(const e of (ledger||[])){
+    if(!e || typeof e.id !== 'number' || e.id <= watermarkId) continue;
+    const key = shadowLedgerEntryKey(e);
+    if(!key) continue;
+    out[key] = (out[key]||0) + (e.direction==='IN' ? (e.qty||0) : -(e.qty||0));
+  }
+  Object.keys(out).forEach(k=>{ if(Math.abs(out[k])<1e-9) out[k]=0; });
+  return out;
+}
+// ============ END ENGINE ============
+
 function runSystemWatch(explainedBatches){
   // explainedBatches: batch numbers whose stock THIS cycle's own fixes just changed (renames,
   // ledger-restores). Those changes are corrections, not suspicious activity — without this,
@@ -7196,6 +7231,41 @@ function runSystemWatch(explainedBatches){
 
   // Store the new snapshot; keep 7 days of 2-hourly history (84), bounded.
   state.dataSnapshots = [curr, ...snapshots].slice(0, 84);
+  // ============ RECEIPT SHADOW (migration S2, added 20/8) ============
+  // The future stock system in rehearsal: derive every stock figure from the last snapshot
+  // (opening balance) + ledger receipts since, and compare against the app's actual stored
+  // stock. The stored collections remain fully authoritative — this only OBSERVES. Fourteen
+  // clean days of this running on live data is the gate for switching authority over.
+  try {
+    const resetJustDetected = findings.some(f=>f && (f.kind==='logs-reset'));
+    if(prev && prev.quantities && !resetJustDetected){
+      const currSnap = captureDataSnapshot();
+      const famOf = k => k.split('|')[0];
+      const prevFams = new Set(Object.keys(prev.quantities).map(famOf));
+      const currFams = new Set(Object.keys(currSnap.quantities).map(famOf));
+      const derived = shadowDeriveStocks(prev.quantities, prev.ts, state.ledger||[]);
+      const keys = new Set([...Object.keys(prev.quantities), ...Object.keys(currSnap.quantities), ...Object.keys(derived)]);
+      let compared = 0, bad = 0;
+      keys.forEach(key=>{
+        const fam = famOf(key);
+        if(fam==='scrap') return;                       // snapshots don't record scrap yet
+        if(!prevFams.has(fam) || !currFams.has(fam)) return; // partial-snapshot safety
+        compared++;
+        const actual = currSnap.quantities[key] ?? 0;
+        const rec = derived[key] ?? 0;
+        if(Math.round(rec) !== Math.round(actual)){
+          bad++;
+          findings.push(addSystemFinding('shadow-mismatch', 'shadow|'+key,
+            `RECEIPT SHADOW: ${describeSnapshotKey(key)} — receipts say ${Math.round(rec)}, stored stock says ${actual}`,
+            `The rehearsal of the new receipt-based stock system disagrees with the stored number for this item. Starting from the ${new Date(prev.ts).toLocaleString()} snapshot (${prev.quantities[key] ?? 0} pcs) and applying every ledger receipt since, the receipts arrive at ${Math.round(rec)} — but the app's stored stock shows ${actual}. One of two things is true: a stock movement happened without writing a receipt (a code path that must be fixed before migration), or the stored stock was changed by something outside the normal workflow. Either way this is exactly what the shadow run exists to catch — report it to Claude with this finding.`,
+            'Dashboard'));
+        }
+      });
+      window._shadowStatus = { at: Date.now(), compared, mismatches: bad };
+    }
+  } catch(shErr){ console.error('receipt shadow error (observation only, app unaffected):', shErr); }
+  // ============ END RECEIPT SHADOW ============
+
   return { findings, baseline: !quantitiesComparable };
 }
 
@@ -8845,6 +8915,7 @@ function renderAdminPanel(){
     <div class="card" style="border:2px solid #c0392b;">
       <div class="label" style="color:#c0392b;">📬 System Watch — Findings Inbox</div>
       <div style="font-size:11px;color:#888;margin-bottom:10px;">The watch compares every stock number against its last snapshot and reviews every fresh entry, every 2 hours — across ALL tabs and data, whether anyone opens them or not. Anything suspicious waits here permanently (with a downloadable proof image) until someone marks it handled. The watch never touches, voids, or flags any entry itself.</div>
+      ${(function(){ const s = window._shadowStatus; if(!s) return '<div style="font-size:11px;margin-top:6px;color:#999;">🧾 Receipt shadow (new-system rehearsal): waiting for first watch cycle</div>'; const ok = s.mismatches===0; return '<div style="font-size:11px;margin-top:6px;padding:6px 8px;border-radius:6px;background:'+(ok?'#eaf7ee':'#fdecea')+';color:'+(ok?'#1e7d3c':'#b3261e')+';">🧾 Receipt shadow (new-system rehearsal): '+(ok? 'all '+s.compared+' stock figures match the receipts' : s.mismatches+' mismatch(es) — see findings')+' · '+new Date(s.at).toLocaleTimeString()+'</div>'; })()}
       ${renderFindingsInboxHTML()}
     </div>
 
