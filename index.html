@@ -242,7 +242,7 @@ body.rejection-lock .size-btn{pointer-events:none;opacity:0.45;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1787055404717;
+const APP_BUILD = 1787211970529;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -472,10 +472,27 @@ function doFirestoreSync(){
       const recs = recordsOf(stateKey);
       const shadow = syncShadow[stateKey] || {};
       Object.entries(recs).forEach(([docId, rec])=>{
+        // Records seeded as local defaults (fresh/empty device) must NEVER be pushed over
+        // real server data — they become pushable only after the server confirms it's a
+        // genuinely fresh install (see the users first-snapshot handling).
+        if(rec && rec._seedDefault) return;
         const j = JSON.stringify(rec);
         if(shadow[docId] !== j){ ops.push({t:'set', col, docId, data:{v:j, updatedAt:now, b:APP_BUILD}, stateKey, j}); markInFlight(stateKey, docId); }
       });
-      Object.keys(shadow).forEach(docId=>{
+      // MASS-DELETE GUARD (added 20/8 after the users-collection default-overwrite incident):
+      // a device whose local copy of a collection is completely empty while the server has
+      // records would emit a delete for every one of them — the exact shape of the July
+      // stock-wipe and the 19/8 users overwrite. No normal workflow empties an entire
+      // collection from one device EXCEPT an explicit Admin/Owner Reset, which announces
+      // itself via _allowMassDeleteUntil. Anything else gets blocked loudly instead of obeyed.
+      const shadowIds = Object.keys(shadow);
+      const wouldDeleteAll = shadowIds.length>0 && Object.keys(recs).length===0;
+      const resetWindowOpen = (window._allowMassDeleteUntil||0) > Date.now();
+      if(wouldDeleteAll && !resetWindowOpen){
+        console.error('SYNC GUARD: refusing to delete ALL '+shadowIds.length+' server records of '+col+' — this device holds zero local records for it, which is the stale-wipe signature. If this is intentional, use the Reset button.');
+        return;
+      }
+      shadowIds.forEach(docId=>{
         if(!(docId in recs)){ ops.push({t:'del', col, docId, stateKey}); markInFlight(stateKey, docId); }
       });
     });
@@ -750,6 +767,29 @@ function attachFirestoreListeners(onAllFirstSnapshots){
             if(docId in currentByDocId){ recs[docId] = currentByDocId[docId]; }
             else { delete recs[docId]; } // this device deleted it locally — a stale snapshot must not resurrect it
           });
+        }
+        // USERS PROTECTION (added 20/8 after the default-password overwrite incident):
+        if(stateKey==='users'){
+          const localUsers = state.users||[];
+          if(Object.keys(recs).length===0 && localUsers.length>0){
+            if(isFirst && localUsers.every(u=>u._seedDefault)){
+              // Server is genuinely empty and this device only holds factory defaults →
+              // a real first install. Strip the seed tags so they become pushable.
+              state.users = localUsers.map(u=>{ const c={...u}; delete c._seedDefault; return c; });
+              syncShadow[stateKey] = {};
+              collectionReady[stateKey] = true;
+              sv(SK[stateKey], state.users);
+              firstSeen[stateKey] = true; checkAllFirst();
+              return;
+            }
+            // Server users vanished while this device still has real ones — never accept a
+            // zero-user state (it would lock everyone out and then sync the lockout).
+            console.error('SYNC GUARD: users collection arrived EMPTY from the server while this device holds '+localUsers.length+' real users — keeping local users, not syncing the emptiness. Investigate who deleted the users.');
+            collectionReady[stateKey] = false; // block outbound too until a real snapshot arrives
+            firstSeen[stateKey] = true; checkAllFirst();
+            return;
+          }
+          // Server HAS users → server wins unconditionally; discard any locally-seeded defaults.
         }
         if(MAP_COLLECTIONS[stateKey]){
           state[stateKey] = recs;
@@ -3107,7 +3147,10 @@ fixBrokenQcWastageEntries();
 mergeDuplicateClosedBatches();
   syncLedgerFromExistingData();
   // Initialize users if not set
-  if(!state.users || state.users.length===0) state.users = DEFAULT_USERS;
+  // Seed factory defaults ONLY as tagged, non-syncable placeholders — they let someone log
+  // in on a fresh device, but can never overwrite real server users (see sync guards). The
+  // tag is stripped only when the server confirms it genuinely has no users (first install).
+  if(!state.users || state.users.length===0) state.users = DEFAULT_USERS.map(u=>({...u, _seedDefault:true}));
   // Migration: add Owner account if it's missing from previously-saved user data
   if(!state.users.some(u=>u.role==='owner')){
     const ownerDefault = DEFAULT_USERS.find(u=>u.role==='owner');
@@ -8281,6 +8324,7 @@ function confirmResetAll(){
 function hideResetBars(){document.getElementById('resetProdBar').classList.add('hidden');document.getElementById('resetAllBar').classList.add('hidden');}
 
 function resetProduction(){
+  window._allowMassDeleteUntil = Date.now() + 120000; // announce intentional mass deletion to the sync guard
   if(!isAdminOrOwner()){ alert("Only Admin or Owner can do this."); return; }
   [SK.production,SK.scrapInventory,SK.wastage,SK.openBatches,SK.closedBatches,SK.sales,SK.finishedInventory,SK.reworkStock,SK.finishedBrushes,SK.brushScrapLog,SK.readyForSale,SK.voidLog,SK.batchGenealogy,SK.brushProcessingLog,SK.socketProcessingLog].forEach(k=>localStorage.removeItem(k));
   state.production=[]; state.scrapInventory=[]; state.wastage=[];
@@ -8293,6 +8337,7 @@ function resetProduction(){
   hideResetBars(); saveAll(); re();
 }
 function resetAll(){
+  window._allowMassDeleteUntil = Date.now() + 120000; // announce intentional mass deletion to the sync guard
   if(!isAdminOrOwner()){ alert("Only Admin or Owner can do this."); return; }
   Object.values(SK).forEach(k=>localStorage.removeItem(k));
   state.materials=emptyMats(); state.woodPieces=DEFAULT_WOOD_PIECES;
