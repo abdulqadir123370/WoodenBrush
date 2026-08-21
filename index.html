@@ -242,7 +242,7 @@ body.rejection-lock .size-btn{pointer-events:none;opacity:0.45;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1787312424190;
+const APP_BUILD = 1787316458457;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -1041,7 +1041,8 @@ async function sendRemoteCommand(deviceId, action){
 
 function renderFleetStatusHTML(){
   if(!currentUser || (currentUser.role!=='owner' && currentUser.role!=='admin')) return '';
-  const rows = Object.values(fleetStatusDocs).sort((a,b)=>(b.ts||0)-(a.ts||0));
+  const CUTOFF = 48*60*60*1000; // devices silent >48h drop off the card (their doc remains; they reappear on next heartbeat)
+  const rows = Object.values(fleetStatusDocs).filter(r=>r.ts && (Date.now()-r.ts) < CUTOFF).sort((a,b)=>(b.ts||0)-(a.ts||0));
   const now = Date.now();
   const fmtAge = t => !t ? '—' : (now-t<90000 ? 'just now' : Math.round((now-t)/60000)+' min ago');
   let html = `<div class="card" style="border:2px solid #2c5f8a;">
@@ -8559,6 +8560,7 @@ function doLogin(){
   }
   currentUser = {...user, loginName: name||user.name};
   localStorage.setItem('wbt_currentUser', JSON.stringify(currentUser));
+  try{ reportDeviceStatus(); }catch(e){} // fleet card shows this user's name within seconds of login
   resetIdleTimer();
   document.getElementById('loginScreen').style.display='none';
   renderAuthenticatedApp();
