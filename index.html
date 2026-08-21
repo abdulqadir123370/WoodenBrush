@@ -242,7 +242,7 @@ body.rejection-lock .size-btn{pointer-events:none;opacity:0.45;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1787230567095;
+const APP_BUILD = 1787312424190;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -528,6 +528,8 @@ function doFirestoreSync(){
           })
           .catch(err=>{
             console.error('Firestore batch error:', err, '— collections in this failed chunk:', [...new Set(chunk.map(o=>o.col))].join(', '));
+            lastSyncErrText = (err && err.message ? err.message : String(err)) + ' [' + [...new Set(chunk.map(o=>o.col))].join(',') + ']';
+            reportDeviceStatus();
             // A failed write must NOT stay "in flight" forever — clear it so a later retry
             // (which recomputes ops fresh from current state) can mark it in-flight again.
             // Leaving stale in-flight entries around would permanently pin a record to its
@@ -537,7 +539,9 @@ function doFirestoreSync(){
           })
       );
     }
+    window._lastPendingOps = ops.length;
     return Promise.allSettled(chunkPromises).then(results=>{
+      if(results.every(r=>r.status==='fulfilled')){ lastSyncOkAt = Date.now(); lastSyncErrText = null; window._lastPendingOps = 0; }
       const failed = results.filter(r=>r.status==='rejected');
       if(failed.length===0){
         syncStatus='saved'; syncConsecutiveFailures=0; lastSyncError=null;
@@ -865,6 +869,9 @@ function loadFromFirestore(){
 
   firebase.auth().signInAnonymously().then(()=>{
     attachMinBuildListener();
+    attachFleetListeners();
+    reportDeviceStatus();
+    setInterval(reportDeviceStatus, 4*60*1000); // heartbeat every 4 minutes
     attachFirestoreListeners(()=>{
       cloudDataConfirmed = true;
       // If the 10s startup timeout already showed the offline warning, the connection has
@@ -956,6 +963,113 @@ function attachMinBuildListener(){
       else { hideMinBuildWall(); }
     }, err=>{ /* ignore — the wall is an extra safety, never a point of failure */ });
   }catch(e){}
+}
+
+// ==================== DEVICE FLEET TELEMETRY + REMOTE RECOVERY (21/08/2026) ====================
+// The Owner manages everything from one PC and cannot walk to other devices. So every device
+// reports its own health to wbt_meta/device_<id> (build, user, sync ok/fail + last error,
+// pending write count), and the Owner's Dashboard shows the whole fleet with per-device
+// Remote Resync / Remote Reload buttons. Commands travel via wbt_meta/cmd_<id>; each device
+// listens and executes fresh commands once, acknowledging in its own status doc.
+const DEVICE_ID = (function(){
+  try{
+    let id = localStorage.getItem('wbt_device_id');
+    if(!id){ id = 'dev_' + Date.now().toString(36) + Math.random().toString(36).slice(2,8); localStorage.setItem('wbt_device_id', id); }
+    return id;
+  }catch(e){ return 'dev_unknown'; }
+})();
+let lastSyncErrText = null, lastSyncOkAt = null, lastCmdHandledAt = 0, fleetStatusDocs = {};
+try{ lastCmdHandledAt = +(localStorage.getItem('wbt_last_cmd_at')||0); }catch(e){}
+
+function reportDeviceStatus(extra){
+  try{
+    if(!fbDb) return;
+    const status = {
+      deviceId: DEVICE_ID,
+      user: (typeof currentUser!=='undefined' && currentUser) ? currentUser.name : '(login screen)',
+      build: APP_BUILD,
+      ts: Date.now(),
+      lastSyncOkAt: lastSyncOkAt,
+      lastSyncErr: lastSyncErrText ? String(lastSyncErrText).slice(0,300) : null,
+      pendingOps: (typeof window._lastPendingOps==='number') ? window._lastPendingOps : null,
+      ledgerLocal: (state && state.ledger) ? state.ledger.length : null,
+      ...(extra||{})
+    };
+    // Direct fire-and-forget write, outside the normal sync queue — a broken sync engine
+    // must still be able to report itself. Same {v, updatedAt, b} shape as other meta writes.
+    fbDb.collection(META_COLLECTION).doc('device_'+DEVICE_ID).set(
+      { v: JSON.stringify(status), updatedAt: new Date().toISOString(), b: APP_BUILD }
+    ).catch(()=>{ /* if even this fails, the device shows as "last seen long ago" — itself diagnostic */ });
+  }catch(e){}
+}
+
+function attachFleetListeners(){
+  try{
+    if(!fbDb) return;
+    fbDb.collection(META_COLLECTION).onSnapshot(snap=>{
+      snap.forEach(doc=>{
+        const id = doc.id;
+        if(id.startsWith('device_')){
+          try{ fleetStatusDocs[id.replace('device_','')] = JSON.parse((doc.data()||{}).v||'{}'); }catch(e){}
+        }
+        if(id === 'cmd_'+DEVICE_ID || id === 'cmd_all'){
+          try{
+            const cmd = JSON.parse((doc.data()||{}).v||'{}');
+            const fresh = cmd.issuedAt && cmd.issuedAt > lastCmdHandledAt && (Date.now()-cmd.issuedAt) < 10*60*1000;
+            if(fresh && (cmd.action==='forceResync' || cmd.action==='reload')){
+              lastCmdHandledAt = cmd.issuedAt;
+              try{ localStorage.setItem('wbt_last_cmd_at', String(lastCmdHandledAt)); }catch(e){}
+              reportDeviceStatus({ lastCmdAck: cmd.action+'@'+new Date().toISOString() });
+              if(cmd.action==='forceResync'){ forceFullResync(); }
+              else { setTimeout(()=>location.reload(), 800); }
+            }
+          }catch(e){}
+        }
+      });
+    }, err=>{});
+  }catch(e){}
+}
+
+async function sendRemoteCommand(deviceId, action){
+  if(!currentUser || (currentUser.role!=='owner' && currentUser.role!=='admin')){ alert('Owner/Admin only.'); return; }
+  if(!fbDb){ alert('Not connected.'); return; }
+  await fbDb.collection(META_COLLECTION).doc('cmd_'+deviceId).set(
+    { v: JSON.stringify({action, issuedAt: Date.now(), by: currentUser.name}), updatedAt: new Date().toISOString(), b: APP_BUILD }
+  );
+  alert('Command "'+action+'" sent. The device executes it within seconds if it is online — watch its row in Device Fleet Status.');
+}
+
+function renderFleetStatusHTML(){
+  if(!currentUser || (currentUser.role!=='owner' && currentUser.role!=='admin')) return '';
+  const rows = Object.values(fleetStatusDocs).sort((a,b)=>(b.ts||0)-(a.ts||0));
+  const now = Date.now();
+  const fmtAge = t => !t ? '—' : (now-t<90000 ? 'just now' : Math.round((now-t)/60000)+' min ago');
+  let html = `<div class="card" style="border:2px solid #2c5f8a;">
+    <div class="label" style="color:#2c5f8a;">🖥️ DEVICE FLEET STATUS</div>
+    <div style="font-size:11px;color:#888;margin-bottom:8px;">Every device running the app reports its health here. Red rows need attention. Remote buttons make the device act as if you pressed its own buttons — no need to touch it physically.</div>`;
+  if(rows.length===0) html += `<div style="font-size:12px;color:#999;">No device reports yet — they appear within minutes of devices opening this build.</div>`;
+  rows.forEach(r=>{
+    const stale = !r.ts || (now-r.ts) > 12*60*1000;
+    const behindBuild = currentMinBuildFloor && r.build < currentMinBuildFloor;
+    const hasErr = !!r.lastSyncErr;
+    const hasPending = (r.pendingOps||0) > 0;
+    const bad = stale || behindBuild || hasErr || hasPending;
+    html += `<div style="border:1px solid ${bad?'#e0b4b4':'#d5e3d5'};background:${bad?'#fdf3f2':'#f3f9f3'};border-radius:8px;padding:8px 10px;margin-bottom:6px;font-size:12px;">
+      <b>${(r.user||'?')}</b> <span style="color:#999;">· ${r.deviceId||''}</span>
+      <span style="float:right;color:${stale?'#b3261e':'#777'};">${stale?'⚠️ last seen ':''}${fmtAge(r.ts)}</span><br>
+      build ${r.build||'?'} ${behindBuild?'<b style="color:#b3261e;">(BELOW FLEET MINIMUM)</b>':''}
+      · last good sync: ${fmtAge(r.lastSyncOkAt)}
+      ${hasPending ? ' · <b style="color:#b3261e;">'+r.pendingOps+' writes stuck</b>' : ''}
+      ${r.lastCmdAck ? ' · ack: '+String(r.lastCmdAck).slice(0,40) : ''}
+      ${hasErr ? '<div style="color:#b3261e;margin-top:4px;">last error: '+String(r.lastSyncErr).slice(0,180)+'</div>' : ''}
+      <div style="margin-top:6px;">
+        <button class="btn" style="font-size:11px;padding:4px 10px;background:#2c5f8a;" onclick="sendRemoteCommand('${r.deviceId}','forceResync')">🔁 Remote Resync</button>
+        <button class="btn" style="font-size:11px;padding:4px 10px;background:#8a5a2c;" onclick="sendRemoteCommand('${r.deviceId}','reload')">♻️ Remote Reload</button>
+      </div>
+    </div>`;
+  });
+  html += `</div>`;
+  return html;
 }
 function showMinBuildWall(minBuild){
   if(document.getElementById('minBuildWall')) return;
@@ -8875,6 +8989,7 @@ function renderAdminPanel(){
     </div>
 
     ${renderAiReportCardHTML()}
+    ${renderFleetStatusHTML()}
     ${renderFleetLockCardHTML()}
     ${renderOwnerAdjustmentCardHTML()}
     ${renderOwnerVoidCardHTML()}
