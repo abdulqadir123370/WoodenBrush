@@ -242,7 +242,7 @@ body.rejection-lock .size-btn{pointer-events:none;opacity:0.45;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1787316458457;
+const APP_BUILD = 1787396333116;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -2224,6 +2224,10 @@ function recordProduction(){
     const idx=(state.scrapInventory||[]).findIndex(e=>e.size===rem&&e.batch===scrapKey);
     if(idx>=0){state.scrapInventory[idx].quantity+=planksUsed;}
     else{state.scrapInventory=[...(state.scrapInventory||[]),{size:rem,quantity:planksUsed,batch:scrapKey,dateCreated:entryDate}];}
+    // Receipt for offcut scrap (added 22/8): this write previously left NO ledger trail — the
+    // source of the audit's "pre-ledger scrap" mystery stock, and a receipt gap that would
+    // have blocked the migration. Every stock movement writes a receipt, no exceptions.
+    addLedgerEntry('scrap',`${rem}" offcuts`,scrapKey,planksUsed,'IN',`Offcut scrap from ${wp.name} production (${rem}" remainder per plank)`,String(rem));
   }
 
   // Add rejected pieces to scrap inventory — stored using the ORIGINAL piece size
@@ -5491,7 +5495,7 @@ function applyVoidToRun(runId, reason){
     }
   });
 
-  const summary = { planksRestored:0, plankRestoreMethod:'', finishedRemoved:0, brushRemoved:0, readySaleRemoved:0, unreachable:0 };
+  const summary = { planksRestored:0, plankRestoreMethod:'', finishedRemoved:0, brushRemoved:0, readySaleRemoved:0, scrapRemoved:0, unreachable:0 };
 
   // ---- 1. Restore the planks/scrap this run consumed ----
   if(run.isScrapSourced){
@@ -5531,6 +5535,43 @@ function applyVoidToRun(runId, reason){
 
   // ---- 2. Cascade-remove the wood pieces this run produced, following them downstream ----
   let toRemove = run.piecesProduced;
+
+  // ---- 1b. Remove the SCRAP and WASTAGE this run created (added 22/8) ----
+  // The 12/8 WB004 void proved this was missing: the void restored planks and removed good
+  // pieces but left the run's 3,211 rejected pieces sitting in scrap inventory forever — a
+  // phantom pile with a real-looking date. A void must reverse EVERYTHING its run wrote.
+  if(run.salvageQty>0){
+    const rejKey = `${getRootBatchNo(run.batchNo)}-Rejected-${run.woodPieceName}`;
+    let left = run.salvageQty;
+    (state.scrapInventory||[]).forEach(s=>{
+      if(left<=0) return;
+      if(s.batch===rejKey){ const take=Math.min(s.quantity||0,left); s.quantity-=take; left-=take; }
+    });
+    state.scrapInventory = (state.scrapInventory||[]).filter(s=>(s.quantity||0)>0);
+    const removed = run.salvageQty - left;
+    if(removed>0) addLedgerEntry('scrap', `Rejected ${run.salvageSize}" pieces`, rejKey, removed, 'OUT', `Removed — voided run ${run.woodPieceName} (${reason})`, String(run.salvageSize||''));
+    summary.scrapRemoved = removed;
+    if(left>0) summary.unreachable += left; // scrap already consumed elsewhere — flagged in the summary
+  }
+  if(run.remainderType==='Scrap' && run.remainder>0 && !run.isScrapSourced){
+    const offKey = `${run.batchNo}-Scrap-${run.woodPieceName}`;
+    let left = run.planksUsed;
+    (state.scrapInventory||[]).forEach(s=>{
+      if(left<=0) return;
+      if(s.batch===offKey){ const take=Math.min(s.quantity||0,left); s.quantity-=take; left-=take; }
+    });
+    state.scrapInventory = (state.scrapInventory||[]).filter(s=>(s.quantity||0)>0);
+    const removedOff = run.planksUsed - left;
+    if(removedOff>0) addLedgerEntry('scrap', `${run.remainder}" offcuts`, offKey, removedOff, 'OUT', `Removed — voided run ${run.woodPieceName} (${reason})`, String(run.remainder));
+  }
+  if(run.wastageKgFromReject>0){
+    (state.wastage||[]).forEach(w=>{
+      if(!w.voided && w.batchNo===run.batchNo && w.woodPieceName===run.woodPieceName
+        && w.date===run.date && Math.abs((w.wastageKg||0)-(run.wastageKgFromReject||0))<0.01){
+        w.voided = true; w.voidReason = `Run voided (${reason})`; w.voidedDate = date; w.voidedTime = time;
+      }
+    });
+  }
 
   // a) Still sitting in Wood Finishing's output pool (not yet sent to Brush Dept)?
   const fiIdx = (state.finishedInventory||[]).findIndex(f=>f.productName===run.woodPieceName && f.batchNo===run.batchNo);
@@ -6961,6 +7002,13 @@ function captureDataSnapshot(){
   (state.readyForSale||[]).forEach(f=>{ q[`rfs|${f.batchNo}|${f.productName}`] = (q[`rfs|${f.batchNo}|${f.productName}`]||0)+(f.qty||0); });
   (state.socketInventory||[]).forEach(s=>{ q[`socket|${s.batchNo}|${s.socketType}`] = (q[`socket|${s.batchNo}|${s.socketType}`]||0)+(s.qty||0); });
   (state.screwInventory||[]).forEach(s=>{ q[`screw|${s.batchNo}`] = (q[`screw|${s.batchNo}`]||0)+(s.qty||0); });
+  // Scrap/rejected stock (added 22/8 after a resurrected-scrap report): this family was
+  // never captured in snapshots before, which meant rule 1a's generic "unexplained change"
+  // check — despite covering every OTHER stock family automatically — had literally nothing
+  // to compare scrap against. A resurrected scrap batch could reappear with zero alarm. Same
+  // key scheme the ledger/shadow engines already use for scrap (scrap|size|batchTag), so this
+  // single addition switches on real monitoring with no other code changes required.
+  (state.scrapInventory||[]).forEach(s=>{ q[`scrap|${s.size}|${s.batch}`] = (q[`scrap|${s.size}|${s.batch}`]||0)+(s.quantity||0); });
   return {
     id: Date.now() + Math.random(),
     ts: Date.now(),
@@ -6988,6 +7036,7 @@ function describeSnapshotKey(key){
   if(p[0]==='rfs')    return `Ready-for-Sale — ${p[2]}, batch ${p[1]}`;
   if(p[0]==='socket') return `Socket stock — ${p[2]}, batch ${p[1]}`;
   if(p[0]==='screw')  return `Screw stock, batch ${p[1]}`;
+  if(p[0]==='scrap')  return `Scrap/rejected stock — ${p[2]} (${p[1]}" batch)`;
   return key;
 }
 function tabForSnapshotKey(key){
@@ -6995,7 +7044,7 @@ function tabForSnapshotKey(key){
   // some tabs ('Production' is displayed as "Wood Finishing"); see tabDisplayLabel.
   const p = key.split('|');
   if(p[0]==='plank') return 'Materials';
-  if(p[0]==='wood') return 'Production';
+  if(p[0]==='wood' || p[0]==='scrap') return 'Production';
   if(p[0]==='brush') return 'BrushDept';
   if(p[0]==='rfs' || p[0]==='socket' || p[0]==='screw') return 'SocketDept';
   return 'Dashboard';
@@ -7009,12 +7058,13 @@ function tabDisplayLabel(tabKey){
 // though many records store only a date, not a time.
 function anyRecordedActivity(key, sinceId, untilId){
   const p = key.split('|');
-  const batchNo = p[0]==='plank' ? p[2] : p[1];
+  const batchNo = (p[0]==='plank'||p[0]==='scrap') ? p[2] : p[1]; // both use family|size|batchTag
   const inWin = r => r && typeof r.id==='number' && r.id>=sinceId && r.id<=untilId;
   const touches = r => String(r.batchNo||'')===batchNo
     || String(r.batchNo||'').startsWith(batchNo+'-')
     || String(r.sourceBatch||'')===batchNo || String(r.fbBatchNo||'')===batchNo || String(r.outputBatchNo||'')===batchNo
-    || String(r.socketBatchNo||'')===batchNo || String(r.screwBatchNo||'')===batchNo;
+    || String(r.socketBatchNo||'')===batchNo || String(r.screwBatchNo||'')===batchNo
+    || String(r.sourceBatchTag||'')===batchNo; // production runs sourced FROM scrap/rejected stock (added 22/8)
   const collections = [state.ledger, state.production, state.brushProcessingLog, state.socketProcessingLog, state.wastage, state.sales, state.voidLog];
   if(collections.some(col => (col||[]).some(r => inWin(r) && touches(r)))) return true;
   // Voids don't create new records — they stamp existing ones. A void in the window counts as activity.
@@ -7233,7 +7283,7 @@ function runSystemWatch(explainedBatches){
         const after = (curr.quantities||{})[key] ?? 0;
         if(before===after) return;
         const kp = key.split('|');
-        const keyBatch = kp[0]==='plank' ? kp[2] : kp[1];
+        const keyBatch = (kp[0]==='plank'||kp[0]==='scrap') ? kp[2] : kp[1]; // both use family|size|batchTag
         if(explained.has(keyBatch)) return; // changed by this cycle's own corrections — not suspicious
         if(anyRecordedActivity(key, sinceId, untilId)) return; // explained — normal work happened
         findings.push(addSystemFinding('unexplained-change', key,
@@ -7363,7 +7413,13 @@ function runSystemWatch(explainedBatches){
       let compared = 0, bad = 0;
       keys.forEach(key=>{
         const fam = famOf(key);
-        if(fam==='scrap') return;                       // snapshots don't record scrap yet
+        // Scrap is now captured in snapshots (22/8) and IS watched by rule 1a below for new
+        // resurrections/wipes. It stays excluded from the receipt-shadow specifically because
+        // the 18/8 audit documented real PRE-LEDGER gaps in scrap history (Section B5) — the
+        // shadow compares against the FULL ledger from genesis, so it would drown in known old
+        // noise rather than surface new problems. Re-enable here once that history is cleaned
+        // up (an ADJ batch, same pattern as ADJ-4) ahead of migration.
+        if(fam==='scrap') return;
         if(!prevFams.has(fam) || !currFams.has(fam)) return; // partial-snapshot safety
         compared++;
         const actual = currSnap.quantities[key] ?? 0;
