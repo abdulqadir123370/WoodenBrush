@@ -242,7 +242,7 @@ body.rejection-lock .size-btn{pointer-events:none;opacity:0.45;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1787396333116;
+const APP_BUILD = 1787468217753;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -598,6 +598,24 @@ function flushPendingSync(){
 document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='hidden') flushPendingSync(); });
 window.addEventListener('pagehide', flushPendingSync);
 
+// ==================== ENTRY GUARD — LIVE CLOUD REQUIRED (23/08/2026) ====================
+// Owner's rule after the 22/8 lost-run incident: VIEWING works offline (harmless, useful on
+// the floor), but DATA ENTRY requires a verified live cloud connection. An entry that can
+// only happen while sync is proven working reaches the server within seconds — the whole
+// "saved on the phone, died on the phone" failure class (Noman's 4100, the 5:41 run) becomes
+// impossible. Proof of life: a server-delivered snapshot or a successful write commit within
+// the last 30 seconds (window._lastServerContact / lastSyncOkAt).
+function requireLiveCloud(actionLabel){
+  const last = Math.max(window._lastServerContact||0, lastSyncOkAt||0);
+  const fresh = last && (Date.now()-last) < 30*1000;
+  if(fresh) return true;
+  alert('🔌 '+(actionLabel||'This entry')+' needs a live cloud connection and none is verified right now.\n\n' +
+    'Entry save nahi hogi jab tak cloud connection confirm na ho — warna entry sirf is device par reh kar kho sakti hai (22/8 wala masla).\n\n' +
+    'Internet check karein (WiFi/mobile data switch karke dekhen), app khula rakhein — connection aate hi entries khud enable ho jayengi. Stock DEKHNA offline bhi chalta hai.');
+  return false;
+}
+
+
 // ---- Idle-tab guard (added Aug 2026) ----
 // A tab left hidden for hours (shop PC, forgotten phone tab) rejoins with hours-old code and
 // hours-old in-memory data — the raw material of every stale-device incident this app has had
@@ -744,6 +762,9 @@ function attachFirestoreListeners(onAllFirstSnapshots){
   allKeys.forEach(stateKey=>{
     const col = SK[stateKey];
     fbDb.collection(col).onSnapshot({includeMetadataChanges:false}, snap=>{
+      // Live-cloud proof: a snapshot delivered from the SERVER (not the local cache) is the
+      // strongest evidence the connection is real right now. Feeds requireLiveCloud().
+      if(!snap.metadata || !snap.metadata.fromCache) window._lastServerContact = Date.now();
       const changes = snap.docChanges();
       const isLocalEcho = changes.length>0 && changes.every(c=>c.doc.metadata.hasPendingWrites);
       const isFirst = !firstSeen[stateKey];
@@ -2075,6 +2096,7 @@ function openBatch(){
 
 let isSubmittingProduction = false;
 function recordProduction(){
+  if(!requireLiveCloud('Production entry')) return;
   if(isSubmittingProduction) return; // prevent double-click/double-submission
   isSubmittingProduction = true;
   const btn=document.getElementById('recordProdBtn');
@@ -2390,6 +2412,7 @@ function openCloseModal(){
 
 let isSubmittingClose = false;
 function confirmClose(){
+  if(!requireLiveCloud('Batch close')) return;
   if(isSubmittingClose) return;
   isSubmittingClose = true;
   setTimeout(()=>{isSubmittingClose=false;}, 1000);
@@ -2616,6 +2639,7 @@ function calcBrushSplit(){
 
 let isSubmittingBrush = false;
 function recordBrushProcessing(){
+  if(!requireLiveCloud('Brush processing entry')) return;
   if(isSubmittingBrush) return;
   isSubmittingBrush = true;
   setTimeout(()=>{isSubmittingBrush=false;}, 1000);
@@ -2742,6 +2766,7 @@ function recordBrushProcessing(){
 }
 
 function markReworkCompleted(id){
+  if(!requireLiveCloud('Rework completion')) return;
   const rework = state.reworkStock||[];
   const item = rework.find(r=>r.id===id);
   if(!item) return;
@@ -2956,6 +2981,7 @@ function calcSocketNeed(socketType, screwsPerPiece){
 
 let isSubmittingSocket = false;
 function recordSocketProcessing(){
+  if(!requireLiveCloud('Socket processing entry')) return;
   if(isSubmittingSocket) return;
   isSubmittingSocket = true;
   setTimeout(()=>{isSubmittingSocket=false;}, 1000);
@@ -4111,6 +4137,7 @@ function renderLedger(){
 // minted now). Reject = permanently marked rejected with reason, never applied — kept visible,
 // never deleted, per the standing rule. Owner-only both ways.
 function approvePendingSale(id){
+  if(!requireLiveCloud('Sale approval')) return;
   if(!currentUser || currentUser.role!=='owner'){ alert('Owner only.'); return; }
   const sale = (state.sales||[]).find(x=>x && x.id===id && x.status==='pending' && !x.voided);
   if(!sale) return;
@@ -4639,6 +4666,7 @@ function renderWastagePriceCardHTML(){
 // Missing KG has nowhere to hide arithmetically. Admin/Owner only; every recon is a
 // permanent, synced record with who/when and the variance frozen at that moment.
 function saveWastageRecon(){
+  if(!requireLiveCloud('Wastage stock check')) return;
   if(!isAdminOrOwner()){ alert('Admin/Owner only.'); return; }
   const stock = getWasteTypeStock();
   const rec = { id: Date.now()+Math.random(), at: new Date().toISOString(),
@@ -4949,6 +4977,7 @@ function updateSaleTypeAvailable(){
 
 let isSubmittingSale = false;
 async function confirmSale(){
+  if(!requireLiveCloud('Sale')) return;
   if(isSubmittingSale) return;
   isSubmittingSale = true;
   setTimeout(()=>{isSubmittingSale=false;}, 1000);
@@ -5479,6 +5508,7 @@ function cascadeVoidBrushLogs(productName, sourceBatch, qtyToReverse, reason, by
 }
 
 function applyVoidToRun(runId, reason){
+  if(!requireLiveCloud('Void')) return { blocked:true, planksRestored:0, plankRestoreMethod:'', finishedRemoved:0, brushRemoved:0, readySaleRemoved:0, scrapRemoved:0, unreachable:0 };
   const by = currentUser?.loginName || currentUser?.name || 'Unknown';
   const date = new Date().toISOString().slice(0,10);
   const time = new Date().toTimeString().slice(0,5);
@@ -6443,6 +6473,7 @@ function findUnpricedPurchases(){
   );
 }
 function applyPurchasePriceBackfill(entryId){
+  if(!requireLiveCloud('Price backfill')) return;
   // Admin AND Owner may backfill (Owner decision 11/8) — but STRICTLY ONE TIME per purchase:
   // once a price is on the entry, nobody (Admin or Owner) can change it through this tool.
   // Filling a blank is enrichment; changing a filled price would be altering a financial
@@ -6555,6 +6586,7 @@ function adjBatchOptions(store){
   return [];
 }
 function applyOwnerAdjustment(){
+  if(!requireLiveCloud('Owner adjustment')) return;
   if(!currentUser || currentUser.role!=='owner'){ alert('Owner only.'); return; }
   const store = state.adjStore, dir = state.adjDir==='deduct'?'deduct':'add';
   // Wastage adjusts a KG pool, not a batch: batch is fixed to the adjustment marker and
@@ -6784,6 +6816,7 @@ function confirmOwnerVoidFinal(){
 // The shared preview modal's Confirm button routes here so the normal staff flow
 // (confirmVoidFinal) is completely untouched — zero regression risk to tested behavior.
 function confirmVoidFinalDispatch(){
+  if(!requireLiveCloud('Void')) return;
   if(state.pendingVoid && state.pendingVoid.ownerBypass) confirmOwnerVoidFinal();
   else confirmVoidFinal();
 }
@@ -7774,6 +7807,7 @@ function renderAutoFixResults(){
 }
 
 function addPurchaseBatch(){
+  if(!requireLiveCloud('Purchase entry')) return;
   if(isSubmittingPurchase) return; // prevent double-tap duplicate purchase entries
   isSubmittingPurchase = true;
   setTimeout(()=>{isSubmittingPurchase=false;}, 1000);
