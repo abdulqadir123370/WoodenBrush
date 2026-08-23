@@ -242,7 +242,7 @@ body.rejection-lock .size-btn{pointer-events:none;opacity:0.45;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1787468217753;
+const APP_BUILD = 1787470116297;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -1271,6 +1271,23 @@ function showOfflineWarning(){
   const el = document.getElementById('offlineWarning');
   if(el) el.classList.remove('hidden');
 }
+
+// WATCHDOG (added 23/08/2026): the startup banner above is meant to self-clear the moment
+// refreshOfflineLock's probe succeeds — but that path depends on fbDb/auth being ready at
+// the exact instant the 10s first-load timer fires, and a live report showed it staying
+// stuck (stale "couldn't reach the server") minutes after the connection had clearly
+// recovered (a direct probe succeeded in 4ms while the banner was still showing). Rather
+// than chase that race through several async call chains, this runs completely
+// independently: whenever the banner is visible, keep probing every 4s and hide it
+// unconditionally the moment a probe succeeds. It can only ever make the banner MORE
+// accurate, never less — and it does nothing at all while the banner is already hidden.
+setInterval(()=>{
+  const el = document.getElementById('offlineWarning');
+  if(!el || el.classList.contains('hidden') || !fbDb) return;
+  fbDb.collection(META_COLLECTION).doc('config').get({source:'server'})
+    .then(()=>{ el.classList.add('hidden'); if(typeof refreshOfflineLock==='function') refreshOfflineLock(true); })
+    .catch(()=>{ /* still genuinely unreachable — leave the banner as-is */ });
+}, 4000);
 
 function emptyMats(){return{"12":{name:'Wooden Planks 12"',size:12,low:50,batches:[]},"24":{name:'Wooden Planks 24"',size:24,low:30,batches:[]},"36":{name:'Wooden Planks 36"',size:36,low:20,batches:[]}};}
 
