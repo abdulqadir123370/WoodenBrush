@@ -79,12 +79,24 @@ input,select{width:100%;padding:8px 10px;border:1px solid #d4b896;border-radius:
 .wastage-card-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;font-size:11px;background:#f9f5f0;border-radius:6px;padding:10px;}
 /* OFFLINE ENTRY LOCK — while the device has no live connection, all action buttons are
    disabled (viewing/navigation stays). Enforced by body.offline-lock, driven by JS below. */
+/* OFFLINE ENTRY LOCK — while the device has no live connection, EVERY action element is
+   visibly disabled (dimmed + unclickable): buttons, dropdowns, text inputs, checkboxes, links
+   acting as buttons. Viewing stays fully readable — stock numbers, tabs, ledger — since
+   checking stock during an outage is genuinely useful. Broadened 23/08 from just 3 button
+   classes to every interactive element, so "the app is locked" is visually unmistakable
+   instead of just three specific buttons looking normal while saves silently fail.
+   Tab navigation (.tab-btn) is deliberately EXCLUDED so browsing between sections still works. */
+body.offline-lock button:not(.tab-btn),
+body.offline-lock input,
+body.offline-lock select,
+body.offline-lock textarea,
 body.offline-lock .btn,
 body.offline-lock .select-batch-btn,
 body.offline-lock .size-btn,
 body.rejection-lock .btn,
 body.rejection-lock .select-batch-btn,
-body.rejection-lock .size-btn{pointer-events:none;opacity:0.45;}
+body.rejection-lock .size-btn{pointer-events:none;opacity:0.4;filter:grayscale(40%);}
+body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 .hidden{display:none;}
 .aaa{color:#aaa;}
 .green{color:#27ae60;}
@@ -242,7 +254,7 @@ body.rejection-lock .size-btn{pointer-events:none;opacity:0.45;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1787470116297;
+const APP_BUILD = 1787471551080;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -1287,6 +1299,22 @@ setInterval(()=>{
   fbDb.collection(META_COLLECTION).doc('config').get({source:'server'})
     .then(()=>{ el.classList.add('hidden'); if(typeof refreshOfflineLock==='function') refreshOfflineLock(true); })
     .catch(()=>{ /* still genuinely unreachable — leave the banner as-is */ });
+}, 4000);
+
+// LOCK-STATE WATCHDOG (added 23/08/2026): the visible button-dimming (body.offline-lock)
+// suffers the exact same reliability gap as the banner above — it depends on the same
+// multi-step refreshOfflineLock chain, which can miss the moment connectivity changes in
+// either direction (stuck grey/locked after reconnecting, OR stuck looking normal while
+// actually offline — the second one is the dangerous direction, since it makes the app look
+// interactive when a save would in fact do nothing). This checks the real, current state
+// every 4s, completely independent of that chain, and sets body.offline-lock directly to
+// match — the single most reliable signal available (identical to what requireLiveCloud
+// itself checks before allowing any save).
+setInterval(()=>{
+  if(!fbDb){ document.body.classList.add('offline-lock'); return; }
+  fbDb.collection(META_COLLECTION).doc('config').get({source:'server'})
+    .then(()=>{ window._lastServerContact = Date.now(); document.body.classList.remove('offline-lock'); })
+    .catch(()=>{ document.body.classList.add('offline-lock'); });
 }, 4000);
 
 function emptyMats(){return{"12":{name:'Wooden Planks 12"',size:12,low:50,batches:[]},"24":{name:'Wooden Planks 24"',size:24,low:30,batches:[]},"36":{name:'Wooden Planks 36"',size:36,low:20,batches:[]}};}
