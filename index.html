@@ -254,7 +254,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1788266811068;
+const APP_BUILD = 1788272821250;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -1588,6 +1588,7 @@ function renderDashboard(){
 
   // Owner adjustments are published to EVERY role's dashboard — sunlight is the control.
   let html=renderRecentAdjustmentsCardHTML();
+  html+=renderAiReportCardHTML(); // Admin + Owner (moved here from Admin tab 01/09/2026)
 
   // Voided & flagged entries — always visible to Admin/Owner here, regardless of which
   // department tab the entry originally came from or whether its batch is still open.
@@ -4389,9 +4390,11 @@ function compileReportData(){
     plankStock[size+'"'] = (m.batches||[]).filter(b=>b.qty>0).map(b=>({batch:b.batchNo, qty:b.qty, vendor:b.vendor||null, pricePerPiece:b.pricePerPiece||null}));
   });
 
-  return {
+  const ownerAll = aiOwnerOnlySections();
+  const data = {
     generatedAt: new Date().toISOString(),
-    note: 'All figures pre-computed by the tracking software. Currency Rs., weights KG, quantities pcs. For questions about a day/week/month or a department (production, wastage, purchases, sales) use the activity section; for current stock use stockLevels; for costing use costingPerBatch.',
+    note: 'All figures pre-computed by the tracking software. Currency Rs., weights KG, quantities pcs. For questions about a day/week/month or a department (production, wastage, purchases, sales) use the activity section; for current stock use stockLevels; for costing use costingPerBatch.'
+      + (ownerAll ? '' : ' RESTRICTED USER: this user is an Admin, not the Owner. Costing, batch cost/rate/yield/loss figures, and fraud signals (pending approvals, cash owed, overrides, stock-check variances, owner corrections) are NOT included in this dataset and are Owner-only — if asked about them, say plainly that this is Owner-only information and do not estimate or infer it.'),
     activity: compileActivityData(),
     costingPerBatch: cost.map(b=>({
       batch:b.batchNo, firstDate:b.firstDate,
@@ -4430,6 +4433,18 @@ function compileReportData(){
     physicalStockChecks: [...(state.wastageRecons||[])].sort((a,b)=>(b.id||0)-(a.id||0)).slice(0,6).map(r=>({date:r.date, by:r.by, results:r.types})),
     ownerCorrectionTrail: [...(state.correctionsLog||[])].sort((a,b)=>(b.id||0)-(a.id||0)).slice(0,20).map(c=>({what:c.details, by:c.by, when:String(c.at||'').slice(0,10)}))
   };
+  if(!ownerAll){
+    // Strip Owner-only sections for Admin. Done at the data level so a free-text question
+    // can't route around the missing buttons.
+    delete data.costingPerBatch;
+    delete data.physicalStockChecks;
+    delete data.ownerCorrectionTrail;
+    if(data.sales){
+      delete data.sales.cashOwedToOwnerRs; delete data.sales.salesWithCashOwedOver24h; delete data.sales.pendingApprovals;
+      if(Array.isArray(data.sales.recentApplied)) data.sales.recentApplied = data.sales.recentApplied.map(({manualOverride, ...rest})=>rest);
+    }
+  }
+  return data;
 }
 
 async function runAiReport(presetQuestion){
@@ -4488,18 +4503,24 @@ function copyAiReport(){
     navigator.clipboard.writeText(text).then(()=>alert('📋 Report copied.')).catch(()=>prompt('Copy the report:', text));
   } else { prompt('Copy the report:', text); }
 }
+// Owner-only report sections (01/09/2026 Owner instruction): costing and fraud signals.
+// Admin gets the card on the Dashboard but neither the buttons NOR the underlying data —
+// compileReportData() strips those sections for non-Owners, so a typed question about them
+// gets an honest "Owner-only" answer instead of a leak.
+function aiOwnerOnlySections(){ return !!(currentUser && currentUser.role==='owner'); }
 function renderAiReportCardHTML(){
-  if(!currentUser || currentUser.role!=='owner') return '';
+  if(!isAdminOrOwner()) return '';
+  const ownerAll = aiOwnerOnlySections();
   return `<div class="card" style="border:2px solid #2980b9;">
     <div class="label" style="color:#2980b9;">🤖 AI Report Assistant</div>
-    <div style="font-size:11px;color:#888;margin-bottom:8px;">Ask anything about the factory's data — today's production in any department, wastage, purchases, stock, costing, sales, fraud signals, any day/week/month. Every number in the report comes from the app's own tested calculations (the AI only explains, never computes), and each figure is verified against the data before display. Runs on a free service; complex questions take a few seconds.</div>
+    <div style="font-size:11px;color:#888;margin-bottom:8px;">Ask anything about the factory's data — today's production in any department, wastage, purchases, stock, sales, any day/week/month${ownerAll?', costing, fraud signals':''}.${ownerAll?'':' (Costing and fraud signals are Owner-only.)'} Every number in the report comes from the app's own tested calculations (the AI only explains, never computes), and each figure is verified against the data before display. Runs on a free service; complex questions take a few seconds.</div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">
       <button class="btn btn-gray" style="font-size:11px;padding:5px 10px;" onclick="runAiReport('Give me today\'s production report: Wood Finishing (planks used, pieces produced, rejected, by product), Brush Dept (brush machine output, color/regmal rework, kharab maal, keere wala), and Socket Dept (moved to Ready for Sale). Compare briefly with yesterday.')">🏭 Today's Production</button>
       <button class="btn btn-gray" style="font-size:11px;padding:5px 10px;" onclick="runAiReport('What was today\'s wastage: total KG, Bhusa/Patti/Gitta split, and which department or batch it came from. Then compare with yesterday and this week so far.')">🗑️ Today's Wastage</button>
       <button class="btn btn-gray" style="font-size:11px;padding:5px 10px;" onclick="runAiReport('Give me this week\'s summary (week starting Monday): production per department, wastage, plank purchases, wastage sales. Flag anything unusual versus last week.')">📅 This Week</button>
-      <button class="btn btn-gray" style="font-size:11px;padding:5px 10px;" onclick="runAiReport('Give me a full cost analysis: for every batch show the cost, effective rate, yield, loss value and wastage income, then tell me which batches were the best and worst performers and any warning signs.')">📈 Cost Analysis</button>
+      ${ownerAll?`<button class="btn btn-gray" style="font-size:11px;padding:5px 10px;" onclick="runAiReport('Give me a full cost analysis: for every batch show the cost, effective rate, yield, loss value and wastage income, then tell me which batches were the best and worst performers and any warning signs.')">📈 Cost Analysis</button>`:''}
       <button class="btn btn-gray" style="font-size:11px;padding:5px 10px;" onclick="runAiReport('Summarize current stock across every department, wastage pools, and recent sales. Keep it short and flag anything unusual.')">📦 Stock & Sales Summary</button>
-      <button class="btn btn-gray" style="font-size:11px;padding:5px 10px;" onclick="runAiReport('Review all fraud signals: pending sale approvals, cash owed to owner over 24 hours, physical stock check variances, manual overrides, and recent owner corrections. Tell me plainly if anything needs my attention.')">🕵️ Fraud Signals</button>
+      ${ownerAll?`<button class="btn btn-gray" style="font-size:11px;padding:5px 10px;" onclick="runAiReport('Review all fraud signals: pending sale approvals, cash owed to owner over 24 hours, physical stock check variances, manual overrides, and recent owner corrections. Tell me plainly if anything needs my attention.')">🕵️ Fraud Signals</button>`:''}
     </div>
     <textarea id="aiReportQuestion" rows="2" placeholder="Or ask your own question — e.g. 'Wood Finishing ki aaj ki production?', 'wastage last month?', 'which vendor gave the best yield?' (English / Urdu / Roman Urdu)" style="width:100%;margin-bottom:8px;"></textarea>
     <button class="btn btn-full" style="background:#2980b9;" onclick="runAiReport()">🤖 Generate Report</button>
@@ -7100,12 +7121,28 @@ function renderOwnerAdjustmentCardHTML(){
     <div id="adjMsg" class="msg"></div>
   </div>`;
 }
+// Hide is PER DEVICE (localStorage) and remembers the newest adjustment id at hide time —
+// the moment a NEW adjustment lands, the card comes back on its own. Transparency stays:
+// hiding collapses to a one-line "N hidden — show" link, never removes anything.
+function hideRecentAdjustments(){
+  const adjs = (state.correctionsLog||[]).filter(c=>c && String(c.kind||'').startsWith('owner_adj_'));
+  const newest = adjs.reduce((m,c)=>Math.max(m,c.id||0),0);
+  try{ localStorage.setItem('wbt_adj_hidden_upto', String(newest)); }catch(e){}
+  re();
+}
+function showRecentAdjustments(){ try{ localStorage.removeItem('wbt_adj_hidden_upto'); }catch(e){} re(); }
 function renderRecentAdjustmentsCardHTML(){
   const adjs = (state.correctionsLog||[]).filter(c=>c && String(c.kind||'').startsWith('owner_adj_'))
     .sort((a,b)=>(b.id||0)-(a.id||0)).slice(0,5);
   if(adjs.length===0) return '';
+  let hiddenUpto = 0; try{ hiddenUpto = parseInt(localStorage.getItem('wbt_adj_hidden_upto')||'0',10)||0; }catch(e){}
+  const newest = adjs[0].id||0;
+  if(hiddenUpto>=newest){
+    return `<div style="font-size:11px;color:#888;padding:4px 2px 10px;">⚖️ Recent Owner Adjustments hidden on this device · <a href="#" onclick="showRecentAdjustments();return false;" style="color:#2c3e50;font-weight:700;">show</a></div>`;
+  }
   return `<div class="card" style="border:2px solid #2c3e50;">
-    <div class="label" style="color:#2c3e50;">⚖️ Recent Owner Adjustments</div>
+    <div class="label" style="color:#2c3e50;display:flex;justify-content:space-between;align-items:center;">⚖️ Recent Owner Adjustments
+      <button class="btn btn-gray" style="font-size:10px;padding:2px 8px;" title="Hides this card on this device only. It comes back automatically when a new adjustment is made." onclick="hideRecentAdjustments()">Hide</button></div>
     <div style="font-size:11px;color:#888;margin-bottom:8px;">Manual stock adjustments made by the Owner outside the normal workflow — listed here for everyone, permanently.</div>
     ${adjs.map(a=>`<div style="font-size:11px;padding:5px 0;border-bottom:1px solid #f0e8de;">${a.details}<div style="font-size:10px;color:#aaa;">${a.by} · ${String(a.at||'').slice(0,10)}</div></div>`).join('')}
   </div>`;
@@ -9278,7 +9315,6 @@ function renderAdminPanel(){
       <div id="resyncResult" style="margin-top:8px;font-size:12px;"></div>
     </div>
 
-    ${renderAiReportCardHTML()}
     ${renderFleetStatusHTML()}
     ${renderFleetLockCardHTML()}
     ${renderOwnerAdjustmentCardHTML()}
