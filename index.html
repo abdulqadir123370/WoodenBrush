@@ -254,7 +254,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1787471551080;
+const APP_BUILD = 1788262416214;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -4231,6 +4231,108 @@ function copyBuyerStatement(buyerName){
 // selecting, comparing and narrating those figures; it is instructed to never compute new
 // numbers, and the server verifies every figure the report quotes actually exists in this
 // dataset, flagging anything unmatched. Calculator-grade numbers, AI-grade explanation.
+// ---- ACTIVITY ENGINE (added 01/09/2026) ----------------------------------------------
+// Pre-computes per-day / per-week / per-month totals for every department so the report
+// assistant can answer "what was today's Wood Finishing production", "this week's wastage",
+// etc. by QUOTING figures instead of computing them. Dates use the same UTC YYYY-MM-DD
+// convention every entry in the app is stored with, so "today" here always matches the
+// date staff entries were saved under.
+function _actEmptyPeriod(){
+  return {
+    woodFinishing:{ runs:0, planksUsed:0, piecesProduced:0, rejectedPieces:0, byProduct:{}, byBatch:{} },
+    brushDept:{ brushMachineOut:0, colorRework:0, regmalRework:0, kharabMaalScrap:0, keereWalaWastagePcs:0, keereWalaWastageKg:0, byProduct:{} },
+    socketDept:{ readyForSaleOut:0, socketsUsed:0, screwsUsed:0, byProduct:{} },
+    rework:{ completedPcs:0, completedByCategory:{} },
+    wastage:{ entries:0, totalKg:0, byType:{Bhusa:0,Patti:0,Gitta:0}, bySource:{} },
+    wastageSales:{ count:0, kg:0, amountRs:0, byType:{} },
+    plankPurchases:{ entries:0, pcs:0, byVendor:{}, bySize:{} }
+  };
+}
+function _actAdd(obj, key, n){ obj[key] = +(((obj[key]||0) + (n||0)).toFixed(2)); }
+function _actProd(obj, name, field, n){ if(!obj[name]) obj[name]={}; _actAdd(obj[name], field, n); }
+function _actR1(v){ return (typeof v==='number' && isFinite(v)) ? +v.toFixed(1) : 0; }
+function _actWeekKey(dateStr){ // ISO week: Monday start, key = date of that Monday
+  const d = new Date(dateStr+'T00:00:00Z'); if(isNaN(d)) return null;
+  const day = (d.getUTCDay()+6)%7; d.setUTCDate(d.getUTCDate()-day);
+  return d.toISOString().slice(0,10);
+}
+function compileActivityData(){
+  const today = new Date().toISOString().slice(0,10);
+  const yest = new Date(Date.now()-86400000).toISOString().slice(0,10);
+  const cutoffDaily = new Date(Date.now()-31*86400000).toISOString().slice(0,10);
+  const cutoffMonthly = new Date(Date.now()-95*86400000).toISOString().slice(0,7);
+  const daily={}, weekly={}, monthly={};
+  const buckets = dateStr => {
+    if(!dateStr || typeof dateStr!=='string') return [];
+    const out=[];
+    if(dateStr>=cutoffDaily){ out.push(daily[dateStr] = daily[dateStr] || _actEmptyPeriod()); }
+    const wk=_actWeekKey(dateStr); if(wk && wk>=cutoffDaily){ out.push(weekly[wk] = weekly[wk] || _actEmptyPeriod()); }
+    const mo=dateStr.slice(0,7); if(mo>=cutoffMonthly){ out.push(monthly[mo] = monthly[mo] || _actEmptyPeriod()); }
+    return out;
+  };
+  // Wood Finishing production runs
+  (state.production||[]).filter(r=>r && !r.voided).forEach(r=>{
+    buckets(r.date).forEach(b=>{ const w=b.woodFinishing;
+      w.runs++; _actAdd(w,'planksUsed',r.planksUsed); _actAdd(w,'piecesProduced',r.piecesProduced); _actAdd(w,'rejectedPieces',r.rejectedPieces);
+      _actProd(w.byProduct, r.woodPieceName, 'planksUsed', r.planksUsed); _actProd(w.byProduct, r.woodPieceName, 'produced', r.piecesProduced); _actProd(w.byProduct, r.woodPieceName, 'rejected', r.rejectedPieces);
+      _actProd(w.byBatch, r.batchNo, 'planksUsed', r.planksUsed); _actProd(w.byBatch, r.batchNo, 'produced', r.piecesProduced);
+    });
+  });
+  // Brush Dept: machine output log + rework additions + kharab maal + keere wala wastage
+  (state.brushProcessingLog||[]).filter(r=>r && !r.voided).forEach(r=>{
+    buckets(r.date).forEach(b=>{ _actAdd(b.brushDept,'brushMachineOut',r.qty); _actProd(b.brushDept.byProduct, r.productName, 'brushMachineOut', r.qty); });
+  });
+  (state.reworkStock||[]).forEach(r=>{ if(!r) return;
+    buckets(r.dateAdded).forEach(b=>{ const f = r.category==='Color' ? 'colorRework' : 'regmalRework'; _actAdd(b.brushDept,f,r.qty); _actProd(b.brushDept.byProduct, r.productName, f, r.qty); });
+    if(r.status==='completed' && r.completedDate){ buckets(r.completedDate).forEach(b=>{ _actAdd(b.rework,'completedPcs',r.qty); _actAdd(b.rework.completedByCategory, r.category||'?', r.qty); }); }
+  });
+  (state.brushScrapLog||[]).forEach(r=>{ if(!r) return;
+    buckets(r.date).forEach(b=>{ _actAdd(b.brushDept,'kharabMaalScrap',r.qty); _actProd(b.brushDept.byProduct, r.productName, 'kharabMaalScrap', r.qty); });
+  });
+  // Socket Dept
+  (state.socketProcessingLog||[]).filter(r=>r && !r.voided).forEach(r=>{
+    buckets(r.date).forEach(b=>{ const sd=b.socketDept; _actAdd(sd,'readyForSaleOut',r.qty); _actAdd(sd,'socketsUsed',r.socketQty); _actAdd(sd,'screwsUsed',r.screwQty);
+      _actProd(sd.byProduct, r.productName, 'readyForSaleOut', r.qty); });
+  });
+  // Wastage entries (all sources)
+  (state.wastage||[]).filter(w=>w && !w.voided).forEach(w=>{
+    buckets(w.date).forEach(b=>{ const ws=b.wastage; ws.entries++; _actAdd(ws,'totalKg',w.wastageKg);
+      const split=w.typeSplit||{}; ['Bhusa','Patti','Gitta'].forEach(t=>_actAdd(ws.byType,t,split[t]));
+      _actAdd(ws.bySource, w.type||'Other', w.wastageKg);
+      if(w.type==='BrushDeptWastage'){ _actAdd(b.brushDept,'keereWalaWastagePcs',w.rejectedPieces); _actAdd(b.brushDept,'keereWalaWastageKg',w.wastageKg); }
+    });
+  });
+  // Wastage sales (applied only)
+  (state.sales||[]).filter(s=>s && !s.voided && s.status!=='pending' && s.status!=='rejected').forEach(s=>{
+    buckets(s.date).forEach(b=>{ const x=b.wastageSales; x.count++; _actAdd(x,'kg',s.kgSold); _actAdd(x,'amountRs',s.totalAmount); _actAdd(x.byType, s.wasteType||'?', s.kgSold); });
+  });
+  // Plank purchases (ledger plank IN entries with a vendor)
+  (state.ledger||[]).filter(l=>l && l.type==='plank' && l.direction==='IN' && l.vendor).forEach(l=>{
+    buckets(l.date).forEach(b=>{ const x=b.plankPurchases; x.entries++; _actAdd(x,'pcs',l.qty); _actAdd(x.byVendor, l.vendor, l.qty); _actAdd(x.bySize, l.material||l.size, l.qty); });
+  });
+  const sortDesc = o => Object.keys(o).sort().reverse().reduce((acc,k)=>{acc[k]=o[k];return acc;},{});
+  // Raw entries for the last 7 days — for "who/which batch/what time" questions
+  const cutoffRaw = new Date(Date.now()-7*86400000).toISOString().slice(0,10);
+  const recent = {
+    woodFinishingRuns: (state.production||[]).filter(r=>r && !r.voided && r.date>=cutoffRaw).map(r=>({date:r.date,time:r.time,batch:r.batchNo,product:r.woodPieceName,planksUsed:r.planksUsed,produced:r.piecesProduced,rejected:r.rejectedPieces,rejectionReason:r.rejectionReason||null,notes:r.notes||null})),
+    brushDept: (state.brushProcessingLog||[]).filter(r=>r && !r.voided && r.date>=cutoffRaw).map(r=>({date:r.date,time:r.time,product:r.productName,woodBatch:r.sourceBatch,brushBatch:r.fbBatchNo,brushMachineOut:r.qty})),
+    socketDept: (state.socketProcessingLog||[]).filter(r=>r && !r.voided && r.date>=cutoffRaw).map(r=>({date:r.date,time:r.time,product:r.productName,brushBatch:r.fbBatchNo,finishedBatch:r.outputBatchNo,qty:r.qty,socketType:r.socketType||null,socketsUsed:r.socketQty,screwsUsed:r.screwQty})),
+    wastage: (state.wastage||[]).filter(w=>w && !w.voided && w.date>=cutoffRaw).map(w=>({date:w.date,time:w.time,source:w.type,batch:w.batchNo,product:w.woodPieceName,pcs:w.rejectedPieces||null,kg:_actR1(w.wastageKg),split:w.typeSplit||null,reason:w.reason||null})),
+    reworkAdded: (state.reworkStock||[]).filter(r=>r && r.dateAdded>=cutoffRaw).map(r=>({date:r.dateAdded,category:r.category,product:r.productName,batch:r.batchNo,qty:r.qty,status:r.status,completedDate:r.completedDate||null})),
+    voids: (state.voidLog||[]).filter(v=>v && v.date>=cutoffRaw).map(v=>({date:v.date,dept:v.dept,by:v.userId}))
+  };
+  return {
+    dates:{ today, yesterday:yest, thisWeekStartsMonday:_actWeekKey(today), thisMonth:today.slice(0,7),
+      explanation:'Look up "today" in dailyActivity[dates.today]; a date missing from dailyActivity means NO entries were recorded that day (say so). weeklyActivity keys are the Monday each week starts; monthlyActivity keys are YYYY-MM.' },
+    departments:{ woodFinishing:'planks cut into brush bodies (production runs)', brushDept:'brush machine output; also sends Color/Regmal to rework, Kharab Maal to scrap, Keere Wala to wastage', socketDept:'fits sockets + screws and moves stock to Ready for Sale (or Nil-BOM straight through)',
+      notTracked:'There is NO CNC department in this system — if asked about CNC, say it is not tracked here.' },
+    dailyActivity: sortDesc(daily), weeklyActivity: sortDesc(weekly), monthlyActivity: sortDesc(monthly),
+    recentEntriesLast7Days: recent,
+    pendingRework: (state.reworkStock||[]).filter(r=>r && r.status==='pending').map(r=>({product:r.productName,batch:r.batchNo,category:r.category,qty:r.qty,since:r.dateAdded})),
+    openBatches: Object.entries(state.openBatches||{}).filter(([,b])=>b).map(([size,b])=>({plankSize:size+'"',batch:b.batchNo,opened:b.dateOpened,runs:(b.runs||[]).filter(r=>!r.voided).length}))
+  };
+}
+
 function compileReportData(){
   const round1 = v => (typeof v==='number' && isFinite(v)) ? +v.toFixed(1) : null;
   const round2 = v => (typeof v==='number' && isFinite(v)) ? +v.toFixed(2) : null;
@@ -4248,7 +4350,8 @@ function compileReportData(){
 
   return {
     generatedAt: new Date().toISOString(),
-    note: 'All figures pre-computed by the tracking software. Currency Rs., weights KG, quantities pcs.',
+    note: 'All figures pre-computed by the tracking software. Currency Rs., weights KG, quantities pcs. For questions about a day/week/month or a department (production, wastage, purchases, sales) use the activity section; for current stock use stockLevels; for costing use costingPerBatch.',
+    activity: compileActivityData(),
     costingPerBatch: cost.map(b=>({
       batch:b.batchNo, firstDate:b.firstDate,
       totalPurchaseCostRs: round1(b.totalCost), totalInches: round1(b.totalInches),
@@ -4302,7 +4405,13 @@ async function runAiReport(presetQuestion){
   if(msg){msg.textContent='🤖 Compiling data and generating report — usually 5–15 seconds...'; msg.className='msg';}
   if(out){out.style.display='none';}
   let data;
-  try{ data = compileReportData(); }
+  try{ data = compileReportData();
+    // Size guard: the report service caps the dataset at 400k chars. Trim the raw-entry
+    // detail first, then the per-day history, before ever failing the request.
+    let len = JSON.stringify(data).length;
+    if(len>320000 && data.activity){ data.activity.recentEntriesLast7Days = 'omitted (dataset too large)'; len = JSON.stringify(data).length; }
+    if(len>380000 && data.activity){ const d=data.activity.dailyActivity||{}; data.activity.dailyActivity = Object.fromEntries(Object.entries(d).slice(0,14)); }
+  }
   catch(e){ console.error('compileReportData failed:', e); if(msg){msg.textContent='⚠️ Could not compile the data: '+e.message; msg.className='msg err';} return; }
   try{
     const resp = await fetch(url, { method:'POST',
@@ -4342,13 +4451,16 @@ function renderAiReportCardHTML(){
   if(!currentUser || currentUser.role!=='owner') return '';
   return `<div class="card" style="border:2px solid #2980b9;">
     <div class="label" style="color:#2980b9;">🤖 AI Report Assistant</div>
-    <div style="font-size:11px;color:#888;margin-bottom:8px;">Ask anything about the factory's data — costing, yields, stock, sales, fraud signals. Every number in the report comes from the app's own tested calculations (the AI only explains, never computes), and each figure is verified against the data before display. Runs on a free service; complex questions take a few seconds.</div>
+    <div style="font-size:11px;color:#888;margin-bottom:8px;">Ask anything about the factory's data — today's production in any department, wastage, purchases, stock, costing, sales, fraud signals, any day/week/month. Every number in the report comes from the app's own tested calculations (the AI only explains, never computes), and each figure is verified against the data before display. Runs on a free service; complex questions take a few seconds.</div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">
+      <button class="btn btn-gray" style="font-size:11px;padding:5px 10px;" onclick="runAiReport('Give me today\'s production report: Wood Finishing (planks used, pieces produced, rejected, by product), Brush Dept (brush machine output, color/regmal rework, kharab maal, keere wala), and Socket Dept (moved to Ready for Sale). Compare briefly with yesterday.')">🏭 Today's Production</button>
+      <button class="btn btn-gray" style="font-size:11px;padding:5px 10px;" onclick="runAiReport('What was today\'s wastage: total KG, Bhusa/Patti/Gitta split, and which department or batch it came from. Then compare with yesterday and this week so far.')">🗑️ Today's Wastage</button>
+      <button class="btn btn-gray" style="font-size:11px;padding:5px 10px;" onclick="runAiReport('Give me this week\'s summary (week starting Monday): production per department, wastage, plank purchases, wastage sales. Flag anything unusual versus last week.')">📅 This Week</button>
       <button class="btn btn-gray" style="font-size:11px;padding:5px 10px;" onclick="runAiReport('Give me a full cost analysis: for every batch show the cost, effective rate, yield, loss value and wastage income, then tell me which batches were the best and worst performers and any warning signs.')">📈 Cost Analysis</button>
       <button class="btn btn-gray" style="font-size:11px;padding:5px 10px;" onclick="runAiReport('Summarize current stock across every department, wastage pools, and recent sales. Keep it short and flag anything unusual.')">📦 Stock & Sales Summary</button>
       <button class="btn btn-gray" style="font-size:11px;padding:5px 10px;" onclick="runAiReport('Review all fraud signals: pending sale approvals, cash owed to owner over 24 hours, physical stock check variances, manual overrides, and recent owner corrections. Tell me plainly if anything needs my attention.')">🕵️ Fraud Signals</button>
     </div>
-    <textarea id="aiReportQuestion" rows="2" placeholder="Or ask your own question — e.g. 'which vendor's planks gave the best yield?' (English / Urdu / Roman Urdu)" style="width:100%;margin-bottom:8px;"></textarea>
+    <textarea id="aiReportQuestion" rows="2" placeholder="Or ask your own question — e.g. 'Wood Finishing ki aaj ki production?', 'wastage last month?', 'which vendor gave the best yield?' (English / Urdu / Roman Urdu)" style="width:100%;margin-bottom:8px;"></textarea>
     <button class="btn btn-full" style="background:#2980b9;" onclick="runAiReport()">🤖 Generate Report</button>
     <div id="aiReportMsg" class="msg"></div>
     <div id="aiReportResult" style="display:none;white-space:pre-wrap;background:#f4f9fd;border-radius:8px;padding:12px;font-size:12px;line-height:1.5;margin-top:8px;max-height:60vh;overflow-y:auto;"></div>
