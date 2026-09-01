@@ -254,7 +254,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1788272821250;
+const APP_BUILD = 1788273179379;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -7135,7 +7135,9 @@ function renderRecentAdjustmentsCardHTML(){
   const adjs = (state.correctionsLog||[]).filter(c=>c && String(c.kind||'').startsWith('owner_adj_'))
     .sort((a,b)=>(b.id||0)-(a.id||0)).slice(0,5);
   if(adjs.length===0) return '';
-  let hiddenUpto = 0; try{ hiddenUpto = parseInt(localStorage.getItem('wbt_adj_hidden_upto')||'0',10)||0; }catch(e){}
+  // Number(), not parseInt: adjustment ids are Date.now()+Math.random() (fractional), and
+  // parseInt truncating the fraction made the stored id always compare LESS than the newest.
+  let hiddenUpto = 0; try{ hiddenUpto = Number(localStorage.getItem('wbt_adj_hidden_upto')||'0')||0; }catch(e){}
   const newest = adjs[0].id||0;
   if(hiddenUpto>=newest){
     return `<div style="font-size:11px;color:#888;padding:4px 2px 10px;">⚖️ Recent Owner Adjustments hidden on this device · <a href="#" onclick="showRecentAdjustments();return false;" style="color:#2c3e50;font-weight:700;">show</a></div>`;
