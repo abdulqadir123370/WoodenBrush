@@ -254,7 +254,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1788273179379;
+const APP_BUILD = 1788273872639;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -4325,7 +4325,7 @@ function _actAggregateWindow(win){
 }
 
 function compileActivityData(){
-  const cutoffDaily = new Date(Date.now()-31*86400000).toISOString().slice(0,10);
+  const cutoffDaily = new Date(Date.now()-14*86400000).toISOString().slice(0,10); // 14 days (was 31) — payload size drives mobile latency
   const cutoffMonthly = new Date(Date.now()-95*86400000).toISOString().slice(0,7);
   const daily={}, weekly={}, monthly={};
   const buckets = dateStr => {
@@ -4354,7 +4354,7 @@ function compileActivityData(){
   const currentShift = _actAggregateWindow(shift);
   const previousShift = _actAggregateWindow(prevShift);
 
-  const cutoffRaw = new Date(Date.now()-7*86400000).toISOString().slice(0,10);
+  const cutoffRaw = new Date(Date.now()-3*86400000).toISOString().slice(0,10); // 3 days of raw entries (was 7)
   const recent = {
     woodFinishingRuns: (state.production||[]).filter(r=>r&&!r.voided&&r.date>=cutoffRaw).map(r=>({date:r.date,time:r.time,batch:r.batchNo,product:r.woodPieceName,planksUsed:r.planksUsed,produced:r.piecesProduced,rejected:r.rejectedPieces,rejectionReason:r.rejectionReason||null,notes:r.notes||null})),
     brushDept: (state.brushProcessingLog||[]).filter(r=>r&&!r.voided&&r.date>=cutoffRaw).map(r=>({date:r.date,time:r.time,product:r.productName,woodBatch:r.sourceBatch,brushBatch:r.fbBatchNo,brushMachineOut:r.qty})),
@@ -4370,7 +4370,7 @@ function compileActivityData(){
       notTracked:'There is NO CNC department in this system — if asked about CNC, say it is not tracked here.' },
     currentShift, previousShift,
     dailyActivity: sortDesc(daily), weeklyActivity: sortDesc(weekly), monthlyActivity: sortDesc(monthly),
-    recentEntriesLast7Days: recent,
+    recentEntriesLast3Days: recent,
     pendingRework: (state.reworkStock||[]).filter(r=>r && r.status==='pending').map(r=>({product:r.productName,batch:r.batchNo,category:r.category,qty:r.qty,since:r.dateAdded})),
     openBatches: Object.entries(state.openBatches||{}).filter(([,b])=>b).map(([size,b])=>({plankSize:size+'"',batch:b.batchNo,opened:b.dateOpened,runs:(b.runs||[]).filter(r=>!r.voided).length}))
   };
@@ -4448,7 +4448,7 @@ function compileReportData(){
 }
 
 async function runAiReport(presetQuestion){
-  if(!currentUser || currentUser.role!=='owner'){ alert('Owner only.'); return; }
+  if(!isAdminOrOwner()){ alert('Admin/Owner only.'); return; }
   const qEl = document.getElementById('aiReportQuestion');
   const question = presetQuestion || (qEl && qEl.value.trim());
   const msg = document.getElementById('aiReportMsg');
@@ -4465,14 +4465,22 @@ async function runAiReport(presetQuestion){
     // Size guard: the report service caps the dataset at 400k chars. Trim the raw-entry
     // detail first, then the per-day history, before ever failing the request.
     let len = JSON.stringify(data).length;
-    if(len>320000 && data.activity){ data.activity.recentEntriesLast7Days = 'omitted (dataset too large)'; len = JSON.stringify(data).length; }
+    if(len>320000 && data.activity){ data.activity.recentEntriesLast3Days = 'omitted (dataset too large)'; len = JSON.stringify(data).length; }
     if(len>380000 && data.activity){ const d=data.activity.dailyActivity||{}; data.activity.dailyActivity = Object.fromEntries(Object.entries(d).slice(0,14)); }
   }
   catch(e){ console.error('compileReportData failed:', e); if(msg){msg.textContent='⚠️ Could not compile the data: '+e.message; msg.className='msg err';} return; }
+  // 100s hard timeout + a live elapsed counter so a slow free-tier response is visibly
+  // "still working", not "hung". Payload size shown so slowness is explainable.
+  const body = JSON.stringify({ question, data });
+  const sizeKB = Math.round(body.length/1024);
+  const t0 = Date.now();
+  const ctrl = new AbortController();
+  const killer = setTimeout(()=>ctrl.abort(), 100000);
+  const ticker = setInterval(()=>{ const m=document.getElementById('aiReportMsg'); if(m && m.className==='msg'){ m.textContent=`🤖 Generating report — ${Math.round((Date.now()-t0)/1000)}s (sent ${sizeKB} KB; free AI, usually 10–40s)...`; } }, 1000);
   try{
-    const resp = await fetch(url, { method:'POST',
+    const resp = await fetch(url, { method:'POST', signal: ctrl.signal,
       headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+WEIGHT_SLIP_READER_SECRET },
-      body: JSON.stringify({ question, data }) });
+      body });
     const res = await resp.json().catch(()=>null);
     if(!resp.ok || !res || !res.success){
       const detail = res && res.error ? res.error : ('HTTP '+resp.status);
@@ -4480,6 +4488,7 @@ async function runAiReport(presetQuestion){
       return;
     }
     state.lastAiReport = res.report;
+    state.lastAiReportQuestion = question;
     if(out){
       let footer = '';
       if(Array.isArray(res.unverified) && res.unverified.length>0){
@@ -4489,12 +4498,19 @@ async function runAiReport(presetQuestion){
       }
       out.textContent = res.report + footer;
       out.style.display='block';
+      state.lastAiReportShown = res.report + footer;
     }
-    if(msg){msg.textContent=''; msg.className='msg';}
+    if(msg){msg.textContent=`✅ ${Math.round((Date.now()-t0)/1000)}s`; msg.className='msg';}
   }catch(e){
     console.error('AI report failed:', e);
-    if(msg){msg.textContent='⚠️ Could not reach the report service — check the connection and try again.'; msg.className='msg err';}
-  }
+    const secs = Math.round((Date.now()-t0)/1000);
+    if(msg){
+      msg.textContent = (e && e.name==='AbortError')
+        ? `⚠️ Timed out after ${secs}s — the free AI service is slow right now. Try a narrower question (one department, one day) or try again in a minute.`
+        : `⚠️ Lost the connection after ${secs}s (sent ${sizeKB} KB) — the network dropped before the answer came back. Check signal and try again.`;
+      msg.className='msg err';
+    }
+  }finally{ clearTimeout(killer); clearInterval(ticker); }
 }
 function copyAiReport(){
   const text = state.lastAiReport || '';
@@ -4522,10 +4538,10 @@ function renderAiReportCardHTML(){
       <button class="btn btn-gray" style="font-size:11px;padding:5px 10px;" onclick="runAiReport('Summarize current stock across every department, wastage pools, and recent sales. Keep it short and flag anything unusual.')">📦 Stock & Sales Summary</button>
       ${ownerAll?`<button class="btn btn-gray" style="font-size:11px;padding:5px 10px;" onclick="runAiReport('Review all fraud signals: pending sale approvals, cash owed to owner over 24 hours, physical stock check variances, manual overrides, and recent owner corrections. Tell me plainly if anything needs my attention.')">🕵️ Fraud Signals</button>`:''}
     </div>
-    <textarea id="aiReportQuestion" rows="2" placeholder="Or ask your own question — e.g. 'Wood Finishing ki aaj ki production?', 'wastage last month?', 'which vendor gave the best yield?' (English / Urdu / Roman Urdu)" style="width:100%;margin-bottom:8px;"></textarea>
+    <textarea id="aiReportQuestion" rows="2" oninput="state.aiQuestionDraft=this.value" placeholder="Or ask your own question — e.g. 'Wood Finishing ki aaj ki production?', 'wastage last month?', 'which vendor gave the best yield?' (English / Urdu / Roman Urdu)" style="width:100%;margin-bottom:8px;">${(state.aiQuestionDraft||'').replace(/&/g,'&amp;').replace(/</g,'&lt;')}</textarea>
     <button class="btn btn-full" style="background:#2980b9;" onclick="runAiReport()">🤖 Generate Report</button>
     <div id="aiReportMsg" class="msg"></div>
-    <div id="aiReportResult" style="display:none;white-space:pre-wrap;background:#f4f9fd;border-radius:8px;padding:12px;font-size:12px;line-height:1.5;margin-top:8px;max-height:60vh;overflow-y:auto;"></div>
+    <div id="aiReportResult" style="display:${state.lastAiReportShown?'block':'none'};white-space:pre-wrap;background:#f4f9fd;border-radius:8px;padding:12px;font-size:12px;line-height:1.5;margin-top:8px;max-height:60vh;overflow-y:auto;">${state.lastAiReportShown?(state.lastAiReportQuestion?'❓ '+state.lastAiReportQuestion.replace(/&/g,'&amp;').replace(/</g,'&lt;')+'\n\n':'')+state.lastAiReportShown.replace(/&/g,'&amp;').replace(/</g,'&lt;'):''}</div>
     <button class="btn btn-gray" style="font-size:11px;padding:5px 12px;margin-top:6px;" onclick="copyAiReport()">📋 Copy Report</button>
   </div>`;
 }
