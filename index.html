@@ -254,7 +254,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1788273872639;
+const APP_BUILD = 1788608290772;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -7548,6 +7548,18 @@ function runSystemWatch(explainedBatches){
   const prev = snapshots[0] || null;
   const curr = captureDataSnapshot();
 
+  // 05/09/2026 (the 24-false-findings incident): a device that loads and runs the watch
+  // BEFORE its cloud pull finishes photographs stale local values — on 04/09 one device
+  // stored three stale snapshots within 2 minutes (12:37-12:39), and the 13:15 run compared
+  // healthy reality against that bad photo, producing ~24 false mismatch findings at once
+  // (full receipt replay proved every figure correct: 0/56 off). A device is "settled" only
+  // after 90s open AND a verified server contact in the last 30s (same signal as
+  // requireLiveCloud). Unsettled devices skip every rule that trusts their own photo of
+  // stock (1a/1c/1d, the receipt shadow) and never store a baseline snapshot; catalog
+  // checks and fresh-entry review still run — those don't depend on the photo being fresh.
+  const deviceSettled = (Date.now() - (window._appLoadedAt||0) > 90*1000)
+    && (Math.max(window._lastServerContact||0, lastSyncOkAt||0) > Date.now() - 30*1000);
+
   // A previous snapshot with NO quantities recorded at all is not a trustworthy "before"
   // picture for the quantities comparison specifically — it means the app captured it before
   // stock data had actually finished loading (e.g. during one of today's connection
@@ -7556,7 +7568,7 @@ function runSystemWatch(explainedBatches){
   // exactly the false-alarm pattern seen live on 2026-07-28. This affects ONLY the quantities
   // check below — socket-type-disappearance and fresh-entry review don't depend on quantities
   // being populated, so they still run normally off the same real previous snapshot.
-  const quantitiesComparable = !!(prev && Object.keys(prev.quantities||{}).length>0);
+  const quantitiesComparable = deviceSettled && !!(prev && Object.keys(prev.quantities||{}).length>0);
 
   if(prev){
     const sinceId = prev.ts, untilId = curr.ts + 1;
@@ -7616,7 +7628,7 @@ function runSystemWatch(explainedBatches){
     // the BB013 incident: the resurrection didn't just restore old stock, it erased the
     // incharge's processing entries). Only a deliberate Admin/Owner Reset empties these — and
     // a reset zeroes several logs at once, which is detected and reported as one event.
-    if(prev && prev.logCounts){
+    if(prev && prev.logCounts && deviceSettled){
       const shrunk = Object.keys(curr.logCounts||{}).filter(k => (curr.logCounts[k]||0) < (prev.logCounts[k]||0));
       const zeroed = shrunk.filter(k => (curr.logCounts[k]||0)===0);
       if(zeroed.length>=4){
@@ -7681,7 +7693,10 @@ function runSystemWatch(explainedBatches){
   }
 
   // Store the new snapshot; keep 7 days of 2-hourly history (84), bounded.
-  state.dataSnapshots = [curr, ...snapshots].slice(0, 84);
+  // Only a settled device may store a baseline — an unsettled photo poisoning this list is
+  // exactly what caused the 04/09 false-findings incident.
+  if(deviceSettled){ state.dataSnapshots = [curr, ...snapshots].slice(0, 84); }
+  else { console.warn('System Watch: snapshot NOT stored — device not settled/verified yet'); }
   // ============ RECEIPT SHADOW (migration S2, added 20/8) ============
   // The future stock system in rehearsal: derive every stock figure from the last snapshot
   // (opening balance) + ledger receipts since, and compare against the app's actual stored
@@ -7689,13 +7704,19 @@ function runSystemWatch(explainedBatches){
   // clean days of this running on live data is the gate for switching authority over.
   try {
     const resetJustDetected = findings.some(f=>f && (f.kind==='logs-reset'));
-    if(prev && prev.quantities && !resetJustDetected){
+    // 05/09/2026: the shadow now replays the ENTIRE ledger from genesis instead of starting
+    // from the last snapshot. The rolling baseline was the weak link — one stale snapshot
+    // (04/09, a device photographing pre-sync values) manufactured ~24 false mismatches in a
+    // single run. Genesis replay has no baseline to poison, is exactly the computation the
+    // migrated system will run for real, and was validated against the 05/09 backup: all 56
+    // watched figures reproduced exactly (0 mismatches). deviceSettled still gates it because
+    // the comparison target (this device's stored stock) can itself be a stale photo.
+    if(deviceSettled && !resetJustDetected){
       const currSnap = captureDataSnapshot();
       const famOf = k => k.split('|')[0];
-      const prevFams = new Set(Object.keys(prev.quantities).map(famOf));
       const currFams = new Set(Object.keys(currSnap.quantities).map(famOf));
-      const derived = shadowDeriveStocks(prev.quantities, prev.ts, state.ledger||[]);
-      const keys = new Set([...Object.keys(prev.quantities), ...Object.keys(currSnap.quantities), ...Object.keys(derived)]);
+      const derived = shadowDeriveStocks({}, 0, state.ledger||[]);
+      const keys = new Set([...Object.keys(currSnap.quantities), ...Object.keys(derived)]);
       let compared = 0, bad = 0;
       keys.forEach(key=>{
         const fam = famOf(key);
@@ -7706,7 +7727,7 @@ function runSystemWatch(explainedBatches){
         // noise rather than surface new problems. Re-enable here once that history is cleaned
         // up (an ADJ batch, same pattern as ADJ-4) ahead of migration.
         if(fam==='scrap') return;
-        if(!prevFams.has(fam) || !currFams.has(fam)) return; // partial-snapshot safety
+        if(!currFams.has(fam)) return; // partial-capture safety
         compared++;
         const actual = currSnap.quantities[key] ?? 0;
         const rec = derived[key] ?? 0;
@@ -7714,7 +7735,7 @@ function runSystemWatch(explainedBatches){
           bad++;
           findings.push(addSystemFinding('shadow-mismatch', 'shadow|'+key,
             `RECEIPT SHADOW: ${describeSnapshotKey(key)} — receipts say ${Math.round(rec)}, stored stock says ${actual}`,
-            `The rehearsal of the new receipt-based stock system disagrees with the stored number for this item. Starting from the ${new Date(prev.ts).toLocaleString()} snapshot (${prev.quantities[key] ?? 0} pcs) and applying every ledger receipt since, the receipts arrive at ${Math.round(rec)} — but the app's stored stock shows ${actual}. One of two things is true: a stock movement happened without writing a receipt (a code path that must be fixed before migration), or the stored stock was changed by something outside the normal workflow. Either way this is exactly what the shadow run exists to catch — report it to Claude with this finding.`,
+            `The rehearsal of the new receipt-based stock system disagrees with the stored number for this item. Replaying EVERY ledger receipt from the very beginning, the receipts arrive at ${Math.round(rec)} — but the app's stored stock shows ${actual}. One of two things is true: a stock movement happened without writing a receipt (a code path that must be fixed before migration), or the stored stock was changed by something outside the normal workflow. Either way this is exactly what the shadow run exists to catch — report it to Claude with this finding.`,
             'Dashboard'));
         }
       });
@@ -7935,6 +7956,7 @@ function runAutoFixCycle(){
   return logEntry;
 }
 
+window._appLoadedAt = window._appLoadedAt || Date.now();
 let autoFixCycleTimer = null;
 function startAutoFixCycle(){
   if(autoFixCycleTimer) return; // never start more than one interval, even if called again
