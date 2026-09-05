@@ -1,0 +1,2789 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Export Document Workflow</title>
+<style>
+  :root{
+    --navy:#0d2b52; --gold:#d4a13d; --green:#3f8f4f; --amber:#e0a324;
+    --orange:#e0762b; --purple:#7c5bc4; --teal:#2ab5a8; --blue:#2f7fd4;
+    --bg:#f4f6f9; --card:#ffffff; --border:#e2e6ec; --text:#1f2937; --muted:#6b7280;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);}
+  header{background:linear-gradient(120deg,var(--navy),#123a6b);color:#fff;padding:18px 24px;position:sticky;top:0;z-index:10;box-shadow:0 2px 8px rgba(0,0,0,.15);}
+  header h1{margin:0;font-size:1.3rem;letter-spacing:.5px;}
+  header .sub{font-size:.78rem;color:#cfe0f7;margin-top:3px;}
+  .wrap{max-width:1080px;margin:0 auto;padding:20px 16px 80px;}
+
+  .mode-banner{background:#eef3fa;border:1px solid #c7d9f0;color:#0d2b52;padding:10px 16px;border-radius:8px;font-size:.82rem;margin-bottom:16px;}
+
+  /* ---------- Top section tabs ---------- */
+  .top-tabs{display:flex;gap:8px;margin-bottom:18px;}
+  .top-tab{background:#fff;border:1px solid var(--border);color:var(--muted);padding:9px 18px;border-radius:8px;font-size:.86rem;font-weight:600;cursor:pointer;}
+  .top-tab.active{background:var(--navy);color:#fff;border-color:var(--navy);}
+
+  /* ---------- Expenses / provider ledger ---------- */
+  .provider-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.05);}
+  .provider-card:hover{border-color:var(--navy);}
+  .provider-card .pname{font-weight:700;color:var(--navy);font-size:1rem;}
+  .provider-card .ptype{font-size:.78rem;color:var(--muted);margin-top:2px;}
+  .provider-card .balance{font-size:1rem;font-weight:700;}
+  .balance.owe{color:#c0392b;}
+  .balance.clear{color:var(--green);}
+  .ledger-summary{display:flex;gap:24px;background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px 20px;margin-bottom:18px;flex-wrap:wrap;}
+  .ledger-summary .stat{}
+  .ledger-summary .stat .label{font-size:.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;}
+  .ledger-summary .stat .value{font-size:1.2rem;font-weight:700;color:var(--navy);}
+  .ledger-table{width:100%;border-collapse:collapse;font-size:.85rem;background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:hidden;}
+  .ledger-table th{background:#f1f4f8;padding:9px 10px;text-align:left;font-size:.72rem;color:var(--muted);text-transform:uppercase;}
+  .ledger-table td{padding:9px 10px;border-top:1px solid var(--border);}
+  .ledger-table .amt-charge{color:#c0392b;text-align:right;}
+  .ledger-table .amt-payment{color:var(--green);text-align:right;}
+  .ledger-table .amt-balance{text-align:right;font-weight:600;}
+  .txn-form{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px;margin-top:18px;}
+  .txn-form h3{margin:0 0 12px;font-size:.95rem;color:var(--navy);}
+
+  /* ---------- List view ---------- */
+  .add-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:20px;box-shadow:0 1px 3px rgba(0,0,0,.05);}
+  .add-card h2{margin:0 0 12px;font-size:1rem;color:var(--navy);}
+  .add-row{display:flex;gap:10px;flex-wrap:wrap;}
+  .add-row input{flex:1;min-width:160px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-size:.9rem;}
+  .add-row button{background:var(--navy);color:#fff;border:none;padding:10px 18px;border-radius:8px;font-size:.9rem;cursor:pointer;font-weight:600;}
+  .add-row button:disabled{opacity:.5;cursor:not-allowed;}
+
+  .search{margin-bottom:16px;}
+  .search input{width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-size:.9rem;}
+
+  .shipment-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.05);}
+  .shipment-card:hover{border-color:var(--navy);}
+  .shipment-card .ref{font-weight:700;color:var(--navy);font-size:1rem;}
+  .shipment-card .cust{font-size:.82rem;color:var(--muted);margin-top:2px;}
+  .shipment-card .right{display:flex;align-items:center;gap:14px;}
+  .progress-wrap{width:100px;}
+  .progress-bar{background:#e9edf3;border-radius:6px;height:8px;overflow:hidden;}
+  .progress-fill{height:100%;background:var(--green);transition:width .3s;}
+  .progress-label{font-size:.72rem;color:var(--muted);text-align:right;margin-top:3px;}
+  .del-btn{background:none;border:none;color:#c0392b;font-size:1.1rem;cursor:pointer;padding:2px 6px;}
+  .empty{text-align:center;color:var(--muted);padding:40px 10px;font-size:.9rem;}
+
+  /* ---------- Detail / wizard view ---------- */
+  .back-btn{background:none;border:none;color:var(--navy);font-size:.88rem;cursor:pointer;font-weight:600;padding:0 0 14px;}
+  .detail-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:18px;flex-wrap:wrap;gap:12px;}
+  .detail-head .ref{font-size:1.3rem;font-weight:700;color:var(--navy);}
+  .detail-head .cust{color:var(--muted);font-size:.9rem;}
+  .detail-progress{width:180px;}
+
+  .stage-nav{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin-bottom:22px;}
+  .stage-pill{border:1px solid var(--border);background:#fff;border-radius:10px;padding:10px 12px;cursor:pointer;display:flex;align-items:center;gap:8px;transition:.15s;}
+  .stage-pill:hover{border-color:var(--navy);}
+  .stage-pill.active{border-color:var(--navy);background:#eef3fa;box-shadow:0 0 0 2px rgba(13,43,82,.12);}
+  .stage-pill .num{width:22px;height:22px;border-radius:50%;color:#fff;display:flex;align-items:center;justify-content:center;font-size:.72rem;font-weight:700;flex-shrink:0;}
+  .stage-pill .name{font-size:.76rem;line-height:1.2;font-weight:600;}
+  .stage-pill .status{font-size:.68rem;color:var(--muted);margin-top:1px;}
+  .stage-pill.done .status{color:var(--green);}
+
+  .page-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:24px;box-shadow:0 1px 3px rgba(0,0,0,.05);}
+  .page-card h2{margin:0 0 2px;color:var(--navy);font-size:1.15rem;}
+  .page-card .page-sub{font-size:.8rem;color:var(--muted);margin-bottom:20px;}
+  .section-title{font-size:.78rem;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);font-weight:700;margin:22px 0 10px;border-bottom:1px solid var(--border);padding-bottom:6px;}
+  .section-title:first-of-type{margin-top:0;}
+
+  .field-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+  .field-grid.single{grid-template-columns:1fr;}
+  .field{display:flex;flex-direction:column;gap:4px;}
+  .field label{font-size:.76rem;color:var(--muted);font-weight:600;}
+  .field input, .field select, .field textarea{padding:9px 11px;border:1px solid var(--border);border-radius:6px;font-size:.88rem;font-family:inherit;}
+  .field textarea{resize:vertical;min-height:70px;}
+
+  .items-table{width:100%;border-collapse:collapse;margin-bottom:10px;font-size:.84rem;}
+  .items-table th{background:#f1f4f8;padding:7px 8px;text-align:left;font-size:.72rem;color:var(--muted);}
+  .items-table td{padding:4px;}
+  .items-table input{width:100%;padding:7px 9px;border:1px solid var(--border);border-radius:5px;font-size:.84rem;}
+  .items-table .rm{color:#c0392b;background:none;border:none;cursor:pointer;font-size:1rem;}
+  .add-item-btn{background:#eef2f7;border:1px dashed var(--border);color:var(--navy);padding:7px 14px;border-radius:6px;font-size:.8rem;cursor:pointer;margin-bottom:6px;}
+
+  .page-actions{display:flex;justify-content:space-between;align-items:center;margin-top:26px;padding-top:18px;border-top:1px solid var(--border);}
+  .page-actions .save-group{display:flex;gap:10px;}
+  .page-actions button{padding:10px 20px;border-radius:8px;font-size:.86rem;cursor:pointer;font-weight:600;border:none;}
+  .btn-save{background:#eef1f5;color:var(--text);}
+  .btn-print{background:var(--green);color:#fff;}
+  .btn-nextstage{background:var(--navy);color:#fff;}
+
+  .status-msg{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--navy);color:#fff;padding:10px 18px;border-radius:20px;font-size:.82rem;opacity:0;transition:opacity .3s;pointer-events:none;z-index:200;max-width:80vw;text-align:center;}
+  .status-msg.show{opacity:1;}
+  .status-msg.error{background:#c0392b;}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Export Document Workflow</h1>
+  <div class="sub" id="headerSub">Fill each stage's form to generate its document</div>
+</header>
+
+<div class="wrap" id="app"></div>
+
+<div id="statusMsg" class="status-msg"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import {
+  getFirestore, collection, doc, addDoc, setDoc, updateDoc, deleteDoc,
+  onSnapshot, query, orderBy, serverTimestamp, getDocs, writeBatch
+} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+// Storage (Firebase Storage) intentionally not used — that requires the Blaze billing plan.
+// File uploads (Loading Sheet, B/L Copy, CO Copy) are instead stored directly inside the
+// shipment's Firestore document, capped small enough to fit Firestore's 1 MB per-document limit.
+
+// ---- Firebase config: replace with your project's config ----
+// (GitHub's secret scanner may flag this key - it's a public client config, safe to dismiss)
+const firebaseConfig = {
+  apiKey: "AIzaSyDvbck1_RQCMsQ_SSbhE0Ml_QH0oObxsbU",
+  authDomain: "project-dfe9d48e-1faf-4236-b5c.firebaseapp.com",
+  projectId: "project-dfe9d48e-1faf-4236-b5c",
+  storageBucket: "project-dfe9d48e-1faf-4236-b5c.firebasestorage.app",
+  messagingSenderId: "682886232449",
+  appId: "1:682886232449:web:6dbce5542312399cecd080"
+};
+const CONFIG_IS_PLACEHOLDER = firebaseConfig.apiKey === "YOUR_API_KEY";
+
+const fbApp = initializeApp(firebaseConfig);
+const db = getFirestore(fbApp);
+const auth = getAuth(fbApp);
+let authReady = false;
+let authUser = null; // Firebase Auth user object once signed in, else null (shows login screen)
+/* =========================================================================
+   STORAGE LAYER
+   Currently: browser localStorage, so you can build/test without Firebase.
+   Later: swap this block for Firestore calls — the shipment object shape
+   (ref, customer, header, items, stages, documents, createdAt) stays the
+   same, so the rest of the app (rendering, forms, printing) doesn't change.
+   Just replace localAdd/localUpdate/localDelete/localList + the render
+   subscription at the bottom with addDoc/updateDoc/deleteDoc/onSnapshot,
+   same as the earlier Firebase version of this file.
+   ========================================================================= */
+// ================= FIRESTORE COLLECTIONS =================
+const SHIP_COL = "exportShipments";
+const PROVIDER_COL = "expenseProviders";
+const TXN_COL = "expenseTxns";
+const CONSIGNEE_COL = "consignees";
+const CTXN_COL = "consigneeTxns";
+const CATALOG_COL = "itemCatalog";
+const SETTINGS_DOC_ID = "main";
+
+const PROVIDER_TYPES = ["Clearing Agent", "Freight Forwarder / Shipping Line", "Trucking / Transport", "Port / Terminal", "Bank Charges", "Other"];
+
+// In-memory caches, kept live by the onSnapshot listeners set up at the bottom of this script.
+// Every render reads from these directly and synchronously — writes go straight to Firestore,
+// and the matching listener fires (near-instantly, via Firestore's local cache) to refresh them,
+// which then re-renders. This keeps every existing render/calculation function unchanged.
+let txnsCache = [];
+let consigneeTxnsCache = [];
+let catalogCache = [];
+let settingsCache = {};
+
+// ---- Shipments ----
+async function localAdd(data){
+  const docRef = await addDoc(collection(db, SHIP_COL), { ...data, createdAt: serverTimestamp() });
+  return docRef.id;
+}
+async function localUpdate(id, updates){
+  // Firestore natively supports "documents.s1" / "stages.s1" dot-path keys as partial merges,
+  // exactly matching how this app already builds its update objects.
+  await updateDoc(doc(db, SHIP_COL, id), updates);
+}
+async function localDelete(id){
+  await deleteDoc(doc(db, SHIP_COL, id));
+}
+
+// ---- Service providers + expense ledger ----
+async function addProviderRecord(data){
+  const docRef = await addDoc(collection(db, PROVIDER_COL), { ...data, createdAt: serverTimestamp() });
+  return docRef.id;
+}
+async function deleteProviderRecord(id){ await deleteDoc(doc(db, PROVIDER_COL, id)); }
+
+function listTxns(){ return txnsCache; }
+async function addTxnRecord(data){
+  const docRef = await addDoc(collection(db, TXN_COL), { ...data, createdAt: serverTimestamp() });
+  return docRef.id;
+}
+async function deleteTxnRecord(id){ await deleteDoc(doc(db, TXN_COL, id)); }
+function txnsForProvider(providerId){
+  return listTxns().filter(t => t.providerId === providerId).sort((a,b) => new Date(a.date) - new Date(b.date));
+}
+function providerBalance(providerId){
+  return txnsForProvider(providerId).reduce((bal,t) => bal + (t.type==="charge" ? Number(t.amount||0) : -Number(t.amount||0)), 0);
+}
+
+// ---- Consignees (buyers) receivable ledger ----
+async function addConsigneeRecord(data){
+  const docRef = await addDoc(collection(db, CONSIGNEE_COL), { ...data, createdAt: serverTimestamp() });
+  return docRef.id;
+}
+async function deleteConsigneeRecord(id){ await deleteDoc(doc(db, CONSIGNEE_COL, id)); }
+
+function listConsigneeTxns(){ return consigneeTxnsCache; }
+async function addConsigneeTxnRecord(data){
+  const docRef = await addDoc(collection(db, CTXN_COL), { ...data, createdAt: serverTimestamp() });
+  return docRef.id;
+}
+async function deleteConsigneeTxnRecord(id){ await deleteDoc(doc(db, CTXN_COL, id)); }
+
+// ---- Reusable settings (exporter addresses per entity, bank details) — one shared document ----
+function getSettings(){ return settingsCache || {}; }
+async function saveSettings(obj){
+  await setDoc(doc(db, "appSettings", SETTINGS_DOC_ID), obj);
+}
+function rememberReusables(headerData, extraData){
+  const st = getSettings();
+  st.exporterAddresses = st.exporterAddresses || {};
+  st.bank = st.bank || {};
+  st.lastHeader = st.lastHeader || {};
+  if(headerData.exporterEntity && headerData.exporterAddress){
+    st.exporterAddresses[headerData.exporterEntity] = headerData.exporterAddress;
+  }
+  if(extraData.issuerEntity && extraData.issuerAddress){
+    st.exporterAddresses[extraData.issuerEntity] = extraData.issuerAddress;
+  }
+  // remember last-used values for fields that repeat across shipments (final destination intentionally NOT remembered)
+  ["portOfDischarge","paymentTerms","currency","incoterm","portOfLoading"].forEach(k => {
+    if(headerData[k]) st.lastHeader[k] = headerData[k];
+  });
+  // bank details belong to whichever entity issued THIS document — Saif Al Sahra for s10/s11, otherwise the shipment's shipper
+  const bankEntity = extraData.issuerEntity || headerData.exporterEntity;
+  ["bankBeneficiary","bankName","accountNo","swiftCode","bankAddress","branchCode"].forEach(k => {
+    if(extraData[k]){
+      st.bank[k] = extraData[k];
+      if(bankEntity){
+        st.bankByEntity = st.bankByEntity || {};
+        st.bankByEntity[bankEntity] = st.bankByEntity[bankEntity] || {};
+        st.bankByEntity[bankEntity][k] = extraData[k];
+      }
+    }
+  });
+  saveSettings(st); // fire-and-forget; settingsCache updates via onSnapshot moments later
+  // save buyer address back onto the consignee record so it's known next time
+  const s = shipments.find(x => x.id === currentShipId);
+  if(s && headerData.buyerAddress){
+    const cons = consignees.find(c => c.id === s.consigneeId)
+      || consignees.find(c => c.name.toLowerCase() === (s.customer||"").toLowerCase());
+    if(cons && !cons.address){
+      updateDoc(doc(db, CONSIGNEE_COL, cons.id), { address: headerData.buyerAddress });
+    }
+  }
+}
+
+// ---- Item catalog: product master list, auto-learned from packing lists & invoices ----
+function listCatalog(){ return catalogCache; }
+async function upsertCatalogItem(data){
+  if(!data.description) return;
+  const existing = catalogCache.find(c => c.description.toLowerCase() === data.description.toLowerCase());
+  if(existing){
+    const updates = {};
+    ["hsCode","uom","unitPacked","lengthIn","widthIn","heightIn","netWeightPerCtn","grossWeightPerCtn","unitPrice"].forEach(k => {
+      if(data[k]) updates[k] = data[k];
+    });
+    if(Object.keys(updates).length) await updateDoc(doc(db, CATALOG_COL, existing.id), updates);
+  } else {
+    await addDoc(collection(db, CATALOG_COL), {
+      description: data.description,
+      hsCode: data.hsCode || "96039000",
+      uom: data.uom || "Pcs",
+      unitPacked: data.unitPacked || "",
+      lengthIn: data.lengthIn || "",
+      widthIn: data.widthIn || "",
+      heightIn: data.heightIn || "",
+      netWeightPerCtn: data.netWeightPerCtn || "",
+      grossWeightPerCtn: data.grossWeightPerCtn || "",
+      unitPrice: data.unitPrice || "",
+      createdAt: serverTimestamp()
+    });
+  }
+}
+async function deleteCatalogItem(id){ await deleteDoc(doc(db, CATALOG_COL, id)); }
+function findCatalogItem(description){
+  return listCatalog().find(c => c.description.toLowerCase() === String(description||"").toLowerCase());
+}
+function txnsForConsignee(consigneeId){
+  return listConsigneeTxns().filter(t => t.consigneeId === consigneeId).sort((a,b) => new Date(a.date) - new Date(b.date));
+}
+// For consignees: 'invoice' = we billed them (increases what they owe us), 'receipt' = they paid us (decreases it)
+function consigneeBalance(consigneeId){
+  return txnsForConsignee(consigneeId).reduce((bal,t) => bal + (t.type==="invoice" ? Number(t.amount||0) : -Number(t.amount||0)), 0);
+}
+// Currency-aware display helpers (transactions can be PKR, USD, AED...)
+function sumByCurrency(txns, type){
+  const map = {};
+  txns.filter(t => t.type === type).forEach(t => {
+    const cur = t.currency || "PKR";
+    map[cur] = (map[cur]||0) + Number(t.amount||0);
+  });
+  const parts = Object.entries(map).map(([cur,amt]) => cur + " " + amt.toLocaleString());
+  return parts.length ? parts.join(" · ") : "0";
+}
+function balanceByCurrency(txns){
+  const map = {};
+  txns.forEach(t => {
+    const cur = t.currency || "PKR";
+    map[cur] = (map[cur]||0) + (t.type==="invoice"||t.type==="charge" ? Number(t.amount||0) : -Number(t.amount||0));
+  });
+  const parts = Object.entries(map).filter(([,amt]) => amt !== 0).map(([cur,amt]) => cur + " " + amt.toLocaleString());
+  return parts.length ? parts.join(" · ") : "Settled";
+}
+function whatsappReminder(consigneeId){
+  const c = consignees.find(x => x.id === consigneeId);
+  if(!c) return;
+  let phone = String(c.contact||"").replace(/[^\d+]/g,"");
+  if(!phone){
+    phone = prompt("Enter WhatsApp number with country code (e.g. 9715xxxxxxxx):") || "";
+    phone = phone.replace(/[^\d+]/g,"");
+    if(!phone) return;
+  }
+  phone = phone.replace(/^\+/,"");
+  const bal = balanceByCurrency(txnsForConsignee(consigneeId));
+  const msg = `Assalam o Alaikum ${c.name},\n\nThis is a payment reminder from Royal Plastics & Household.\nOutstanding balance: ${bal}\n\nPlease arrange payment at your earliest convenience. JazakAllah.`;
+  window.open("https://wa.me/" + phone + "?text=" + encodeURIComponent(msg), "_blank");
+}
+
+const EXPORTERS = ["Royal Plastics & Household", "Babji Traders", "Babji Manufacturing"];
+const SAIF_ENTITY = "Saif Al Sahra Trading LLC";
+const SETTINGS_ENTITIES = [...EXPORTERS, SAIF_ENTITY]; // shown in Data tab so Saif Al Sahra also gets its own address+bank block
+
+const HEADER_FIELDS = [
+  { name:"exporterEntity", label:"Shipper", type:"select", options:SETTINGS_ENTITIES, default:EXPORTERS[0] },
+  { name:"exporterAddress", label:"Shipper Address", type:"text" },
+  { name:"buyerAddress", label:"Buyer Address", type:"text" },
+  { name:"consignee", label:"Consignee", type:"text" },
+  { name:"portOfLoading", label:"Port of Loading", type:"text", default:"Karachi, Pakistan" },
+  { name:"portOfDischarge", label:"Port of Discharge", type:"text" },
+  { name:"finalDestination", label:"Final Destination", type:"text" },
+  { name:"currency", label:"Currency", type:"text", default:"USD" },
+  { name:"incoterm", label:"Incoterm", type:"select", options:["FOB","CIF","CNF","EXW","FCA"], default:"FOB" },
+  { name:"paymentTerms", label:"Payment Terms", type:"text" },
+];
+
+// Matches the shipper bank details block used on real printed documents
+const BANK_FIELDS = [
+  {name:"bankBeneficiary", label:"Account Title", type:"text"},
+  {name:"swiftCode", label:"Swift Code", type:"text"},
+  {name:"bankName", label:"Bank Name", type:"text"},
+  {name:"bankAddress", label:"Bank Address", type:"text"},
+  {name:"accountNo", label:"IBAN #", type:"text"},
+  {name:"branchCode", label:"Branch Code", type:"text"},
+];
+
+const STAGES = [
+  { key:"s1", num:1, label:"Proforma Invoice", short:"Proforma Invoice", color:"var(--navy)", hasItems:true,
+    extraFields:[
+      {name:"invoiceNo",label:"Ref Number",type:"text"},
+      {name:"invoiceDate",label:"Invoice Date",type:"date"},
+      ...BANK_FIELDS,
+    ]},
+  { key:"s2", num:2, label:"Loading Sheet", short:"Loading Sheet", color:"var(--green)", hasItems:false, fileUpload:true,
+    extraFields:[]},
+  { key:"s3", num:3, label:"Packing List", short:"Packing List", color:"var(--green)", hasItems:false, packingItems:true,
+    extraFields:[
+      {name:"packingStatus",label:"Status",type:"select",options:["Final","Draft / Provisional — not yet finalized"],default:"Final"},
+      {name:"packingDate",label:"Packing Date",type:"date"},
+      {name:"containerNo",label:"Container Number",type:"text"},
+      {name:"containerType",label:"Container Type",type:"select",options:["1 X 20 FT CONTAINER","1 X 20 HQ CONTAINER","1 X 40 FT CONTAINER","1 X 40 HQ CONTAINER","LCL"]},
+    ]},
+  { key:"s4", num:4, label:"Commercial Invoice (Customer)", short:"Comm. Invoice (Customer)", color:"var(--amber)", optional:true, hasItems:true,
+    extraFields:[
+      {name:"invoiceNo",label:"Invoice No",type:"text"},
+      {name:"invoiceDate",label:"Invoice Date",type:"date"},
+      ...BANK_FIELDS,
+    ]},
+  { key:"s5", num:5, label:"Commercial Invoice (Bank)", short:"Comm. Invoice (Bank)", color:"var(--amber)", hasItems:true,
+    extraFields:[
+      {name:"invoiceNo",label:"Invoice No",type:"text"},
+      {name:"invoiceDate",label:"Invoice Date",type:"date"},
+      {name:"lcNumber",label:"L/C Number",type:"text"},
+      {name:"lcDate",label:"L/C Date",type:"date"},
+      ...BANK_FIELDS,
+    ]},
+  { key:"s6", num:6, label:"Commercial Invoice with SS Number", short:"Comm. Invoice (SS No.)", color:"var(--orange)", hasItems:true,
+    extraFields:[
+      {name:"invoiceNo",label:"Invoice No",type:"text"},
+      {name:"invoiceDate",label:"Invoice Date",type:"date"},
+      {name:"ssNumber",label:"SS Number",type:"text"},
+      {name:"ssDate",label:"SS Date",type:"date"},
+    ]},
+  { key:"s7", num:7, label:"Contract", short:"Contract", color:"var(--purple)", optional:true, hasItems:false,
+    extraFields:[
+      {name:"contractNo",label:"Contract No",type:"text"},
+      {name:"contractDate",label:"Contract Date",type:"date"},
+      {name:"termsText",label:"Terms & Conditions",type:"textarea"},
+    ]},
+  { key:"s10", num:10, label:"Proforma Invoice (Saif Al Sahra)", short:"Proforma (Saif Al Sahra)", color:"var(--teal)", hasItems:true,
+    extraFields:[
+      {name:"issuerEntity",label:"Issued By (Shipper)",type:"text",default:SAIF_ENTITY},
+      {name:"issuerAddress",label:"Issuer Address",type:"text"},
+      {name:"invoiceNo",label:"Ref Number",type:"text"},
+      {name:"invoiceDate",label:"Invoice Date",type:"date"},
+      {name:"buyerOverride",label:"Buyer Name (end customer)",type:"text"},
+      ...BANK_FIELDS,
+    ]},
+  { key:"s11", num:11, label:"Tax Invoice (Saif Al Sahra)", short:"Tax Invoice (Saif Al Sahra)", color:"var(--blue)", hasItems:true,
+    extraFields:[
+      {name:"issuerEntity",label:"Issued By (Shipper)",type:"text",default:SAIF_ENTITY},
+      {name:"issuerAddress",label:"Issuer Address",type:"text"},
+      {name:"invoiceNo",label:"Invoice No",type:"text"},
+      {name:"invoiceDate",label:"Invoice Date",type:"date"},
+      {name:"buyerOverride",label:"Buyer Name (end customer)",type:"text"},
+      {name:"ntn",label:"TRN",type:"text"},
+      {name:"salesTaxNo",label:"VAT Number",type:"text"},
+      {name:"taxRate",label:"Tax Rate (%)",type:"text"},
+      ...BANK_FIELDS,
+    ]},
+  { key:"s12", num:12, label:"B/L Copy", short:"B/L Copy", color:"var(--purple)", hasItems:false, fileUpload:true,
+    extraFields:[]},
+  { key:"s13", num:13, label:"Certificate of Origin Copy", short:"CO Copy", color:"var(--teal)", hasItems:false, fileUpload:true,
+    extraFields:[]},
+];
+
+// Every invoice-type document gets an optional "Additional Charge" line (freight, handling, bank fee, etc.)
+// that appears as its own row on the printed invoice and adds into the total shown to the customer.
+["s1","s4","s5","s6","s10","s11"].forEach(key => {
+  const st = STAGES.find(x => x.key === key);
+  if(st) st.extraFields = [...st.extraFields,
+    {name:"extraChargeLabel", label:"Additional Charge — description (optional)", type:"text"},
+    {name:"extraChargeAmount", label:"Additional Charge — amount", type:"text"},
+  ];
+});
+
+let shipments = [];
+let providers = [];
+let consignees = [];
+let view = "list";          // 'list' | 'detail' | 'expenses' | 'ledger' | 'consignees' | 'consigneeLedger'
+let currentShipId = null;
+let currentStageKey = "s1";
+let currentProviderId = null;
+let currentConsigneeId = null;
+let quickFormOpen = null; // null | 'expense' | 'consignee' — inline forms on the shipment detail page
+let modalItemRows = [];
+let packingItemRows = [];
+let customFieldRows = []; // ad-hoc {label, value} pairs for anything non-standard on a document
+let packingCbmOverridden = false; // true once the user hand-edits the grand-total CBM field
+let packingCbmSavedOverride = null; // the last saved override value, if any
+let pendingUploadFile = null; // { name, dataUrl } waiting to be saved with the stage
+
+function toast(msg, isError){
+  const el = document.getElementById("statusMsg");
+  el.textContent = msg;
+  el.classList.toggle("error", !!isError);
+  el.classList.add("show");
+  setTimeout(()=>el.classList.remove("show"), isError ? 4000 : 2000);
+}
+function fmtDate(iso){
+  if(!iso) return "";
+  const d = new Date(iso);
+  if(isNaN(d)) return "";
+  return d.toLocaleDateString("en-GB", { day:"2-digit", month:"short" });
+}
+function escapeHtml(str){
+  return String(str==null?"":str).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function emptyStages(){
+  const obj = {};
+  STAGES.forEach(s => obj[s.key] = { done:false, completedAt:null });
+  return obj;
+}
+// UAE shipments route via Saif Al Sahra: their proforma (s10) comes FIRST, then all other documents, tax invoice last.
+// Direct exports to other countries skip the Saif Al Sahra invoices (s10, s11) => 9 stages.
+function stagesForShipment(s){
+  if(s && s.routing === "direct"){
+    return STAGES.filter(st => st.key !== "s10" && st.key !== "s11");
+  }
+  const s10 = STAGES.find(st => st.key === "s10");
+  return [s10, ...STAGES.filter(st => st.key !== "s10")];
+}
+// Sequential invoice numbers, shared across the whole app. Starting number adjustable in Company Settings.
+function incrementTrailingNumber(str){
+  const m = String(str||"").match(/^(.*?)(\d+)(\s*)$/);
+  if(!m) return str; // no trailing digits found — can't auto-increment, return unchanged
+  const nextNum = String(Number(m[2]) + 1).padStart(m[2].length, "0");
+  return m[1] + nextNum + m[3];
+}
+function nextInvoiceNo(){
+  const st = getSettings();
+  const current = st.invoiceNext || (st.invoiceCounter ? String(st.invoiceCounter) : "1");
+  st.invoiceNext = incrementTrailingNumber(current);
+  saveSettings(st);
+  return current;
+}
+// Preview the number that WOULD be assigned next, without consuming it — used to show a
+// suggestion on real invoice documents before they're actually saved.
+function peekNextInvoiceNo(){
+  const st = getSettings();
+  return st.invoiceNext || (st.invoiceCounter ? String(st.invoiceCounter) : "1");
+}
+// Stages whose invoice number matters for accounting/tax records — the sequential counter is
+// only ever consumed here, and only the first time each such document is actually saved.
+// Proforma documents (s1, s10) are quotations, not real invoices, so they never draw from it.
+const REAL_INVOICE_STAGES = ["s4","s5","s6","s11"];
+function emptyItem(){ return { description:"", hsCode:"", qty:"", unit:"", unitPrice:"" }; }
+function emptyPackingItem(){ return { hsCode:"96039000", description:"", uom:"Pcs", unitPacked:"", packingType:"Carton", totalPacked:"", qty:"", totalCBM:"", lengthIn:"", widthIn:"", heightIn:"", netWeightPerCtn:"", grossWeightPerCtn:"" }; }
+// Build packing list rows from the invoice items + catalog knowledge, so nothing is typed twice
+function derivePackingFromItems(s){
+  const src = (s.items || []).filter(it => (it.description||"").trim());
+  if(src.length === 0) return [emptyPackingItem()];
+  return src.map(it => {
+    const cat = findCatalogItem(it.description) || {};
+    const unitPacked = cat.unitPacked || "";
+    const qty = parseFloat(it.qty) || 0;
+    const perCtn = parseFloat(unitPacked) || 0;
+    // Cartons round UP (can't ship a fraction of a carton) — but the actual quantity shipped
+    // stays exactly what was invoiced, not cartons × per-carton (which would overstate it,
+    // since the last carton of an uneven order is only partially full).
+    const totalPacked = (qty && perCtn) ? String(Math.ceil(qty / perCtn)) : "";
+    return {
+      hsCode: it.hsCode || cat.hsCode || "96039000",
+      description: it.description,
+      uom: it.unit || cat.uom || "Pcs",
+      unitPacked,
+      packingType: "Carton",
+      totalPacked,
+      qty: it.qty || "",
+      lengthIn: cat.lengthIn || "",
+      widthIn: cat.widthIn || "",
+      heightIn: cat.heightIn || "",
+      netWeightPerCtn: cat.netWeightPerCtn || "",
+      grossWeightPerCtn: cat.grossWeightPerCtn || ""
+    };
+  });
+}
+
+// Data now arrives live via Firestore onSnapshot listeners (set up at the bottom of this
+// script), which update shipments/providers/consignees/etc. and call renderApp() themselves.
+// This function is kept (same name) so every existing call site after a write still works —
+// it just re-renders with whatever's currently cached, which Firestore keeps fresh automatically.
+function refreshFromStorage(){
+  renderApp();
+}
+
+// ================= ROOT RENDER =================
+function renderApp(){
+  const app = document.getElementById("app");
+
+  if(CONFIG_IS_PLACEHOLDER){
+    document.getElementById("headerSub").textContent = "Setup required";
+    app.innerHTML = `<div class="mode-banner" style="background:#fff4e5;border-color:#e0a324;color:#7a5200;">⚠ Firebase config is still the placeholder values in the script — nothing will work until you replace <code>firebaseConfig</code> near the top with your real project config.</div>`;
+    return;
+  }
+  if(!authUser){
+    document.getElementById("headerSub").textContent = "Sign in required";
+    app.innerHTML = renderLoginScreen();
+    return;
+  }
+
+  const banner = `<div class="mode-banner">☁ Connected — synced live across every device signed in to this app.</div>`;
+  const authBar = `<div style="display:flex;justify-content:flex-end;align-items:center;gap:10px;font-size:.78rem;color:var(--muted);margin-bottom:10px;">Signed in as <b>${escapeHtml(authUser.email||'')}</b> <button onclick="App.logout()" style="background:none;border:1px solid var(--border);border-radius:6px;padding:4px 12px;cursor:pointer;font-size:.76rem;color:var(--text);">Logout</button></div>`;
+  const tabs = `
+    <div class="top-tabs">
+      <button class="top-tab ${(view==='list'||view==='detail')?'active':''}" onclick="App.showShipmentsTab()">📦 Shipments</button>
+      <button class="top-tab ${view==='masterLedger'?'active':''}" onclick="App.showLedgerTab()">📒 Ledger</button>
+      <button class="top-tab ${(view==='expenses'||view==='ledger')?'active':''}" onclick="App.showExpensesTab()">💰 Expenses</button>
+      <button class="top-tab ${(view==='consignees'||view==='consigneeLedger')?'active':''}" onclick="App.showConsigneesTab()">👥 Consignees</button>
+      <button class="top-tab ${view==='catalog'?'active':''}" onclick="App.showCatalogTab()">🏷️ Items</button>
+      <button class="top-tab ${view==='data'?'active':''}" onclick="App.showDataTab()">🛠️ Data</button>
+    </div>`;
+
+  if(view === "list"){
+    document.getElementById("headerSub").textContent = "Fill each stage's form to generate its document";
+    app.innerHTML = banner + authBar + tabs + renderListView();
+  } else if(view === "detail"){
+    const s = shipments.find(x => x.id === currentShipId);
+    if(!s){ view = "list"; renderApp(); return; }
+    document.getElementById("headerSub").textContent = s.ref + (s.customer ? " — " + s.customer : "");
+    app.innerHTML = banner + authBar + tabs + renderDetailView(s);
+  } else if(view === "masterLedger"){
+    document.getElementById("headerSub").textContent = "All expense and consignee transactions in one place";
+    app.innerHTML = banner + authBar + tabs + renderMasterLedgerView();
+  } else if(view === "expenses"){
+    document.getElementById("headerSub").textContent = "Service provider expense ledgers";
+    app.innerHTML = banner + authBar + tabs + renderExpensesView();
+  } else if(view === "ledger"){
+    const p = providers.find(x => x.id === currentProviderId);
+    if(!p){ view = "expenses"; renderApp(); return; }
+    document.getElementById("headerSub").textContent = p.name + " — ledger";
+    app.innerHTML = banner + authBar + tabs + renderLedgerView(p);
+  } else if(view === "consignees"){
+    document.getElementById("headerSub").textContent = "Consignee / buyer receivable ledgers";
+    app.innerHTML = banner + authBar + tabs + renderConsigneesView();
+  } else if(view === "consigneeLedger"){
+    const c = consignees.find(x => x.id === currentConsigneeId);
+    if(!c){ view = "consignees"; renderApp(); return; }
+    document.getElementById("headerSub").textContent = c.name + " — ledger";
+    app.innerHTML = banner + authBar + tabs + renderConsigneeLedgerView(c);
+  } else if(view === "catalog"){
+    document.getElementById("headerSub").textContent = "Product master list — auto-fills packing lists and invoices";
+    app.innerHTML = banner + authBar + tabs + renderCatalogView();
+  } else if(view === "data"){
+    document.getElementById("headerSub").textContent = "Import old Excel records · backup & restore";
+    app.innerHTML = banner + authBar + tabs + renderDataView();
+  }
+}
+// ================= LOGIN SCREEN =================
+function renderLoginScreen(){
+  return `
+    <div style="max-width:380px;margin:60px auto;background:#fff;border:1px solid var(--border);border-radius:12px;padding:28px;box-shadow:0 1px 3px rgba(0,0,0,.05);">
+      <h2 style="margin:0 0 4px;color:var(--navy);font-size:1.2rem;">Sign in</h2>
+      <div style="font-size:.82rem;color:var(--muted);margin-bottom:20px;">Export Document Workflow — authorized access only</div>
+      <div style="margin-bottom:14px;">
+        <label style="font-size:.76rem;color:var(--muted);font-weight:600;">Email</label>
+        <input id="loginEmail" type="text" placeholder="you@royalplastics.local" autocomplete="username"
+          style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-size:.9rem;margin-top:4px;box-sizing:border-box;"
+          onkeydown="if(event.key==='Enter') App.loginSubmit()">
+      </div>
+      <div style="margin-bottom:8px;">
+        <label style="font-size:.76rem;color:var(--muted);font-weight:600;">Password</label>
+        <input id="loginPassword" type="password" autocomplete="current-password"
+          style="width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-size:.9rem;margin-top:4px;box-sizing:border-box;"
+          onkeydown="if(event.key==='Enter') App.loginSubmit()">
+      </div>
+      <div id="loginError" style="color:#c0392b;font-size:.8rem;min-height:18px;margin-bottom:10px;"></div>
+      <button onclick="App.loginSubmit()" style="width:100%;background:var(--navy);color:#fff;border:none;padding:11px;border-radius:8px;font-size:.92rem;font-weight:600;cursor:pointer;">Sign In</button>
+      <div style="font-size:.74rem;color:var(--muted);margin-top:16px;">Don't have an account? Ask whoever manages this app to add you in the Firebase Console (Authentication → Users).</div>
+    </div>`;
+}
+async function loginSubmit(){
+  const emailEl = document.getElementById("loginEmail");
+  const passEl = document.getElementById("loginPassword");
+  const errEl = document.getElementById("loginError");
+  const email = emailEl.value.trim();
+  const password = passEl.value;
+  errEl.textContent = "";
+  if(!email || !password){ errEl.textContent = "Enter both email and password."; return; }
+  try{
+    await signInWithEmailAndPassword(auth, email, password);
+    // onAuthStateChanged picks this up and re-renders into the app automatically
+  }catch(err){
+    console.error(err);
+    const friendly = ["auth/invalid-credential","auth/wrong-password","auth/user-not-found","auth/invalid-email"].includes(err.code)
+      ? "Incorrect email or password."
+      : err.message;
+    errEl.textContent = friendly;
+  }
+}
+function logout(){
+  signOut(auth);
+}
+
+function showShipmentsTab(){ view = "list"; currentShipId = null; renderApp(); }
+function showLedgerTab(){ view = "masterLedger"; renderApp(); }
+function showCatalogTab(){ view = "catalog"; renderApp(); }
+function showDataTab(){ view = "data"; renderApp(); }
+function showExpensesTab(){ view = "expenses"; currentProviderId = null; renderApp(); }
+function showConsigneesTab(){ view = "consignees"; currentConsigneeId = null; renderApp(); }
+
+// ================= LIST VIEW =================
+// ================= MASTER LEDGER (all providers + all consignees at once) =================
+function renderMasterLedgerView(){
+  const filter = (document.getElementById("ledgerSearchBox")?.value || "").trim().toLowerCase();
+
+  const allExpenseTxns = listTxns().sort((a,b) => new Date(b.date) - new Date(a.date));
+  const allConsigneeTxns = listConsigneeTxns().sort((a,b) => new Date(b.date) - new Date(a.date));
+
+  const totalPayables = providers.reduce((sum,p) => sum + Math.max(providerBalance(p.id),0), 0);
+  const totalReceivables = consignees.reduce((sum,c) => sum + Math.max(consigneeBalance(c.id),0), 0);
+
+  const expenseRows = allExpenseTxns
+    .map(t => ({ ...t, providerName: (providers.find(p=>p.id===t.providerId)||{}).name || '—' }))
+    .filter(t => !filter || t.providerName.toLowerCase().includes(filter) || (t.shipmentRef||'').toLowerCase().includes(filter) || (t.description||'').toLowerCase().includes(filter))
+    .map(t => `
+      <tr>
+        <td>${escapeHtml(t.date||'')}</td>
+        <td>${escapeHtml(t.providerName)}</td>
+        <td>${escapeHtml(t.shipmentRef||'')}</td>
+        <td>${escapeHtml(t.description||'')}</td>
+        <td class="${t.type==='charge'?'amt-charge':'amt-payment'}">${t.type==='charge'?'Charge':'Payment'}: PKR ${Number(t.amount||0).toLocaleString()}</td>
+        <td><button class="del-btn" onclick="App.deleteTxn('${t.id}')">✕</button></td>
+      </tr>`).join("");
+
+  const consigneeRows = allConsigneeTxns
+    .map(t => ({ ...t, consigneeName: (consignees.find(c=>c.id===t.consigneeId)||{}).name || '—' }))
+    .filter(t => !filter || t.consigneeName.toLowerCase().includes(filter) || (t.shipmentRef||'').toLowerCase().includes(filter) || (t.description||'').toLowerCase().includes(filter))
+    .map(t => `
+      <tr>
+        <td>${escapeHtml(t.date||'')}</td>
+        <td>${escapeHtml(t.consigneeName)}</td>
+        <td>${escapeHtml(t.shipmentRef||'')}</td>
+        <td>${escapeHtml(t.description||'')}</td>
+        <td class="${t.type==='invoice'?'amt-charge':'amt-payment'}">${t.type==='invoice'?'Invoice':'Receipt'}: ${(t.currency||'PKR')} ${Number(t.amount||0).toLocaleString()}</td>
+        <td><button class="del-btn" onclick="App.deleteConsigneeTxn('${t.id}')">✕</button></td>
+      </tr>`).join("");
+
+  return `
+    <div class="ledger-summary">
+      <div class="stat"><div class="label">Total Payables Outstanding</div><div class="value" style="color:#c0392b">PKR ${totalPayables.toLocaleString()}</div></div>
+      <div class="stat"><div class="label">Total Receivables Outstanding</div><div class="value" style="color:#c0392b">PKR ${totalReceivables.toLocaleString()}</div></div>
+      <div class="stat"><div class="label">Net Position</div><div class="value" style="color:${(totalReceivables-totalPayables)>=0?'#3f8f4f':'#c0392b'}">PKR ${(totalReceivables-totalPayables).toLocaleString()}</div></div>
+    </div>
+
+    <div class="search">
+      <input id="ledgerSearchBox" type="text" placeholder="Filter by party, shipment ref, or description..." oninput="App.render()">
+    </div>
+    <div style="margin-bottom:14px;"><button class="btn-nextstage" style="padding:8px 16px;border:none;border-radius:8px;font-size:.82rem;font-weight:600;cursor:pointer;background:var(--green);color:#fff;" onclick="App.exportLedgerExcel('master')">⬇ Export Excel</button></div>
+
+    <div class="section-title">Expenses Ledger — Service Providers</div>
+    ${expenseRows ? `
+    <table class="ledger-table" style="margin-bottom:24px;">
+      <thead><tr><th>Date</th><th>Provider</th><th>Shipment</th><th>Description</th><th>Amount</th><th></th></tr></thead>
+      <tbody>${expenseRows}</tbody>
+    </table>` : `<div class="empty">No expense transactions yet.</div>`}
+
+    <div class="section-title">Receivables Ledger — Consignees</div>
+    ${consigneeRows ? `
+    <table class="ledger-table">
+      <thead><tr><th>Date</th><th>Consignee</th><th>Shipment</th><th>Description</th><th>Amount</th><th></th></tr></thead>
+      <tbody>${consigneeRows}</tbody>
+    </table>` : `<div class="empty">No consignee transactions yet.</div>`}`;
+}
+
+function renderListView(){
+  const filter = (document.getElementById("searchBox")?.value || "").trim().toLowerCase();
+  const filtered = shipments.filter(s =>
+    !filter || (s.ref||"").toLowerCase().includes(filter) || (s.customer||"").toLowerCase().includes(filter)
+  );
+
+  const cards = filtered.length === 0
+    ? `<div class="empty">No shipments yet. Add one above to get started.</div>`
+    : filtered.map(s => {
+        const applicable = stagesForShipment(s);
+        const stages = s.stages || emptyStages();
+        const doneCount = applicable.filter(st => stages[st.key]?.done).length;
+        const pct = Math.round((doneCount / applicable.length) * 100);
+        const nextSt = applicable.find(st => !stages[st.key]?.done);
+        const nextLabel = nextSt ? `Next: ${nextSt.short}` : "✓ All documents done";
+        const routeBadge = s.routing === "direct"
+          ? `<span style="font-size:.7rem;background:#eef2f7;color:#6b7280;padding:2px 8px;border-radius:10px;margin-left:8px;">Direct Export</span>`
+          : `<span style="font-size:.7rem;background:#e6f4ea;color:#3f8f4f;padding:2px 8px;border-radius:10px;margin-left:8px;">Via Saif Al Sahra (UAE)</span>`;
+        return `
+        <div class="shipment-card" onclick="App.openShipment('${s.id}')">
+          <div>
+            <div class="ref">${escapeHtml(s.ref || '(no ref)')}${routeBadge}</div>
+            <div class="cust">${escapeHtml(s.customer || '')} <span style="color:${nextSt?'var(--orange)':'var(--green)'};font-weight:600;">· ${escapeHtml(nextLabel)}</span></div>
+          </div>
+          <div class="right">
+            <div class="progress-wrap">
+              <div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div>
+              <div class="progress-label">${doneCount}/${applicable.length} documents</div>
+            </div>
+            <button class="del-btn" title="Duplicate shipment" style="color:var(--navy);" onclick="event.stopPropagation(); App.duplicateShipment('${s.id}')">⧉</button>
+            <button class="del-btn" onclick="event.stopPropagation(); App.deleteShipment('${s.id}','${escapeHtml(s.ref||'')}')">✕</button>
+          </div>
+        </div>`;
+      }).join("");
+
+  return `
+    <div class="add-card">
+      <h2>New Shipment</h2>
+      <div class="add-row">
+        <input id="newRef" type="text" value="${escapeHtml(nextRefSuggestion())}" placeholder="Shipment / Invoice Ref (e.g. EXP-2026-014)">
+        <input id="newCustomer" type="text" list="consigneeNames" placeholder="Customer — the real end buyer, not Saif Al Sahra" autocomplete="off">
+        <datalist id="consigneeNames">
+          ${consignees.filter(c => !c.name.toLowerCase().includes("saif al sahr")).map(c => `<option value="${escapeHtml(c.name)}">`).join("")}
+        </datalist>
+        <select id="newRouting" style="flex:1;min-width:200px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-size:.9rem;">
+          <option value="uae">Via Saif Al Sahra (UAE) — 11 documents</option>
+          <option value="direct">Direct Export (other country) — 9 documents</option>
+        </select>
+        <button id="addBtn" onclick="App.addShipment()">Add Shipment</button>
+      </div>
+      <div style="font-size:.78rem;color:var(--muted);margin-top:8px;">Customer = the real paying buyer (used for the receivable ledger and the Saif Al Sahra invoice). For UAE-routed shipments, Saif Al Sahra is the redistributor, not the customer — it appears automatically as the Buyer on your own documents, so don't enter it here.${consignees.length === 0 ? ' Add your customers on the 👥 Consignees tab first.' : ''}</div>
+    </div>
+    <div class="search">
+      <input id="searchBox" type="text" placeholder="Search by reference or customer..." oninput="App.render()">
+    </div>
+    <div id="list">${cards}</div>`;
+}
+
+function addShipment(){
+  const refEl = document.getElementById("newRef");
+  const custEl = document.getElementById("newCustomer");
+  const routingEl = document.getElementById("newRouting");
+  const ref = refEl.value.trim();
+  const customer = custEl.value.trim();
+  if(!ref){ toast("Enter a shipment reference", true); return; }
+  if(customer.toLowerCase().includes("saif al sahr")){
+    if(!confirm('Customer is set to Saif Al Sahra — but that\'s the UAE redistributor, not the paying buyer. Enter the real end customer instead?\n\nClick Cancel to fix it, or OK to continue anyway.')) return;
+  }
+  try{
+    const header = {};
+    HEADER_FIELDS.forEach(f => header[f.name] = f.default || "");
+    const settings = getSettings();
+    // pre-fill exporter address from settings (last used for that entity)
+    if(settings.exporterAddresses && settings.exporterAddresses[header.exporterEntity]){
+      header.exporterAddress = settings.exporterAddresses[header.exporterEntity];
+    }
+    // pre-fill repeat fields from last shipment (final destination intentionally left blank)
+    const lastHeader = settings.lastHeader || {};
+    ["portOfDischarge","paymentTerms","currency","incoterm","portOfLoading"].forEach(k => {
+      if(!header[k] && lastHeader[k]) header[k] = lastHeader[k];
+    });
+    // pre-fill buyer address from the consignee record
+    const matchedConsignee = consignees.find(c => c.name.toLowerCase() === customer.toLowerCase());
+    if(matchedConsignee && matchedConsignee.address){
+      header.buyerAddress = matchedConsignee.address;
+    }
+    if(routingEl.value === "uae"){
+      header.finalDestination = header.finalDestination || "UAE";
+      header.consignee = header.consignee || header.exporterEntity; // UAE: shipper is consignee ("to order"); buyer is Saif Al Sahra
+      header.portOfDischarge = header.portOfDischarge || "Jebel Ali, UAE";
+    } else {
+      header.consignee = header.consignee || customer;
+    }
+    localAdd({
+      ref, customer, header,
+      routing: routingEl.value,
+      consigneeId: matchedConsignee ? matchedConsignee.id : null,
+      items: [emptyItem()],
+      stages: emptyStages(),
+      documents: {}
+    });
+    refEl.value = ""; custEl.value = "";
+    toast("Shipment added");
+    refreshFromStorage();
+  }catch(err){
+    console.error(err);
+    toast("Error adding shipment: " + err.message, true);
+  }
+}
+
+function deleteShipment(shipId, ref){
+  if(!confirm(`Delete shipment "${ref}"? This cannot be undone.`)) return;
+  localDelete(shipId);
+  toast("Shipment deleted");
+  refreshFromStorage();
+}
+
+// Suggest the next reference by incrementing the trailing number of the most recent ref
+function nextRefSuggestion(){
+  if(shipments.length === 0) return "";
+  const suggestion = incrementTrailingNumber(shipments[0].ref || "");
+  return suggestion === (shipments[0].ref || "") ? "" : suggestion;
+}
+
+function duplicateShipment(shipId){
+  const src = shipments.find(x => x.id === shipId);
+  if(!src) return;
+  const suggested = nextRefSuggestion() || (src.ref + "-COPY");
+  const newRef = prompt("New shipment reference:", suggested);
+  if(!newRef || !newRef.trim()) return;
+  localAdd({
+    ref: newRef.trim(),
+    customer: src.customer || "",
+    header: { ...(src.header || {}) },
+    routing: src.routing || "uae",
+    consigneeId: src.consigneeId || null,
+    items: (src.items || [emptyItem()]).map(it => ({...it})),
+    packingItems: (src.packingItems || []).map(it => ({...it})),
+    stages: emptyStages(),
+    documents: {}
+  });
+  toast("Shipment duplicated — documents reset, items & details copied");
+  refreshFromStorage();
+}
+
+function openShipment(shipId){
+  currentShipId = shipId;
+  const s = shipments.find(x => x.id === shipId);
+  const applicable = stagesForShipment(s);
+  const stages = s?.stages || emptyStages();
+  const firstIncomplete = applicable.find(st => !stages[st.key]?.done);
+  currentStageKey = firstIncomplete ? firstIncomplete.key : applicable[0].key;
+  quickFormOpen = null;
+  view = "detail";
+  renderApp();
+}
+function backToList(){ view = "list"; currentShipId = null; quickFormOpen = null; renderApp(); }
+
+function editShipmentCustomer(shipId){
+  const s = shipments.find(x => x.id === shipId);
+  if(!s) return;
+  const newName = prompt("Customer (real end buyer) name:", s.customer || "");
+  if(newName === null) return;
+  const trimmed = newName.trim();
+  const matched = consignees.find(c => c.name.toLowerCase() === trimmed.toLowerCase());
+  localUpdate(shipId, { customer: trimmed, consigneeId: matched ? matched.id : null });
+  toast("Customer updated");
+  refreshFromStorage();
+}
+
+// ================= EXPENSES: PROVIDER LIST =================
+function renderExpensesView(){
+  const cards = providers.length === 0
+    ? `<div class="empty">No service providers yet. Add one below (clearing agent, shipping line, trucker, etc.).</div>`
+    : providers.map(p => {
+        const bal = providerBalance(p.id);
+        const balClass = bal > 0 ? "owe" : "clear";
+        const balText = bal > 0 ? `Owe: PKR ${bal.toLocaleString()}` : (bal < 0 ? `Advance: PKR ${Math.abs(bal).toLocaleString()}` : "Settled");
+        return `
+        <div class="provider-card" onclick="App.openLedger('${p.id}')">
+          <div>
+            <div class="pname">${escapeHtml(p.name)}</div>
+            <div class="ptype">${escapeHtml(p.type)}</div>
+          </div>
+          <div class="right" style="display:flex;align-items:center;gap:14px;">
+            <div class="balance ${balClass}">${balText}</div>
+            <button class="del-btn" onclick="event.stopPropagation(); App.deleteProvider('${p.id}','${escapeHtml(p.name)}')">✕</button>
+          </div>
+        </div>`;
+      }).join("");
+
+  const typeOptions = PROVIDER_TYPES.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join("");
+
+  return `
+    <div class="add-card">
+      <h2>Add Service Provider</h2>
+      <div class="add-row">
+        <input id="newProviderName" type="text" placeholder="Provider Name (e.g. Al-Barkat Clearing Agency)">
+        <select id="newProviderType" style="flex:1;min-width:160px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-size:.9rem;">${typeOptions}</select>
+        <input id="newProviderContact" type="text" placeholder="Contact (optional)">
+        <button id="addProviderBtn" onclick="App.addProvider()">Add Provider</button>
+      </div>
+    </div>
+    <div id="providerList">${cards}</div>`;
+}
+
+function addProvider(){
+  const nameEl = document.getElementById("newProviderName");
+  const typeEl = document.getElementById("newProviderType");
+  const contactEl = document.getElementById("newProviderContact");
+  const name = nameEl.value.trim();
+  if(!name){ toast("Enter a provider name", true); return; }
+  addProviderRecord({ name, type: typeEl.value, contact: contactEl.value.trim() });
+  nameEl.value = ""; contactEl.value = "";
+  toast("Provider added");
+  refreshFromStorage();
+}
+function deleteProvider(id, name){
+  if(!confirm(`Delete provider "${name}"? Its ledger entries will also be removed.`)) return;
+  listTxns().filter(t => t.providerId === id).forEach(t => deleteTxnRecord(t.id));
+  deleteProviderRecord(id);
+  toast("Provider deleted");
+  refreshFromStorage();
+}
+function openLedger(providerId){
+  currentProviderId = providerId;
+  view = "ledger";
+  renderApp();
+}
+function backToExpenses(){ view = "expenses"; currentProviderId = null; renderApp(); }
+
+// ================= EXPENSES: PROVIDER LEDGER =================
+function renderLedgerView(p){
+  const txns = txnsForProvider(p.id);
+  let running = 0;
+  const rows = txns.map(t => {
+    running += (t.type==="charge" ? Number(t.amount||0) : -Number(t.amount||0));
+    return `
+      <tr>
+        <td>${escapeHtml(t.date||'')}</td>
+        <td>${escapeHtml(t.description||'')}</td>
+        <td>${escapeHtml(t.shipmentRef||'')}</td>
+        <td class="amt-charge">${t.type==="charge" ? "PKR "+Number(t.amount||0).toLocaleString() : ""}</td>
+        <td class="amt-payment">${t.type==="payment" ? "PKR "+Number(t.amount||0).toLocaleString() : ""}</td>
+        <td class="amt-balance">PKR ${running.toLocaleString()}</td>
+        <td><button class="del-btn" onclick="App.deleteTxn('${t.id}')">✕</button></td>
+      </tr>`;
+  }).join("");
+
+  const totalCharges = txns.filter(t=>t.type==="charge").reduce((s,t)=>s+Number(t.amount||0),0);
+  const totalPayments = txns.filter(t=>t.type==="payment").reduce((s,t)=>s+Number(t.amount||0),0);
+  const balance = totalCharges - totalPayments;
+
+  const shipmentOptions = `<option value="">— none —</option>` + shipments.map(s => `<option value="${escapeHtml(s.ref)}">${escapeHtml(s.ref)}</option>`).join("");
+
+  return `
+    <button class="back-btn" onclick="App.backToExpenses()">← All Providers</button>
+    <div class="detail-head">
+      <div>
+        <div class="ref">${escapeHtml(p.name)}</div>
+        <div class="cust">${escapeHtml(p.type)}${p.contact ? ' · ' + escapeHtml(p.contact) : ''}</div>
+      </div>
+      <div><button style="padding:8px 16px;border:none;border-radius:8px;font-size:.82rem;font-weight:600;cursor:pointer;background:var(--green);color:#fff;" onclick="App.exportLedgerExcel('provider')">⬇ Export Excel</button></div>
+    </div>
+
+    <div class="ledger-summary">
+      <div class="stat"><div class="label">Total Charges</div><div class="value">PKR ${totalCharges.toLocaleString()}</div></div>
+      <div class="stat"><div class="label">Total Paid</div><div class="value">PKR ${totalPayments.toLocaleString()}</div></div>
+      <div class="stat"><div class="label">Balance ${balance>0?'(Owed)':'(Settled/Advance)'}</div><div class="value" style="color:${balance>0?'#c0392b':'#3f8f4f'}">PKR ${balance.toLocaleString()}</div></div>
+    </div>
+
+    ${txns.length === 0 ? `<div class="empty">No transactions yet.</div>` : `
+    <table class="ledger-table">
+      <thead><tr><th>Date</th><th>Description</th><th>Shipment</th><th>Charge</th><th>Paid</th><th>Balance</th><th></th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`}
+
+    <div class="txn-form">
+      <h3>Add Transaction</h3>
+      <div class="field-grid">
+        <div class="field"><label>Type</label>
+          <select id="txnType"><option value="charge">Charge (they billed us)</option><option value="payment">Payment (we paid them)</option></select>
+        </div>
+        <div class="field"><label>Date</label><input id="txnDate" type="date"></div>
+        <div class="field"><label>Amount (PKR)</label><input id="txnAmount" type="text" inputmode="numeric" pattern="[0-9]*" placeholder="0"></div>
+        <div class="field"><label>Related Shipment (optional)</label><select id="txnShipment">${shipmentOptions}</select></div>
+        <div class="field" style="grid-column:1/-1;"><label>Description</label><input id="txnDesc" type="text" placeholder="e.g. Customs clearance charges, B/L fee, trucking to port..."></div>
+      </div>
+      <div class="page-actions" style="border-top:none;margin-top:12px;padding-top:0;">
+        <div></div>
+        <div class="save-group"><button class="btn-nextstage" onclick="App.addTxn('${p.id}')">Add Transaction</button></div>
+      </div>
+    </div>`;
+}
+
+function addTxn(providerId){
+  const type = document.getElementById("txnType").value;
+  const date = document.getElementById("txnDate").value;
+  const amount = document.getElementById("txnAmount").value;
+  const shipmentRef = document.getElementById("txnShipment").value;
+  const description = document.getElementById("txnDesc").value.trim();
+  if(!amount || isNaN(Number(amount)) || Number(amount) <= 0){ toast("Enter a valid amount", true); return; }
+  if(!description){ toast("Enter a description", true); return; }
+  addTxnRecord({ providerId, type, date: date || new Date().toISOString().slice(0,10), amount: Number(amount), shipmentRef, description });
+  toast("Transaction added");
+  refreshFromStorage();
+  view = "ledger";
+  renderApp();
+}
+function deleteTxn(id){
+  if(!confirm("Delete this transaction?")) return;
+  deleteTxnRecord(id);
+  toast("Transaction deleted");
+  refreshFromStorage();
+}
+
+// ================= CONSIGNEES: LIST =================
+function renderConsigneesView(){
+  const cards = consignees.length === 0
+    ? `<div class="empty">No consignees yet. Add a buyer below to start tracking what they owe you.</div>`
+    : consignees.map(c => {
+        const bal = consigneeBalance(c.id);
+        const balClass = bal > 0 ? "owe" : "clear";
+        const balText = bal > 0 ? `Receivable: PKR ${bal.toLocaleString()}` : (bal < 0 ? `Advance received: PKR ${Math.abs(bal).toLocaleString()}` : "Settled");
+        return `
+        <div class="provider-card" onclick="App.openConsigneeLedger('${c.id}')">
+          <div>
+            <div class="pname">${escapeHtml(c.name)}</div>
+            <div class="ptype">${escapeHtml(c.address||'')}${c.contact ? ' · ' + escapeHtml(c.contact) : ''}</div>
+          </div>
+          <div class="right" style="display:flex;align-items:center;gap:14px;">
+            <div class="balance ${balClass}">${balText}</div>
+            <button class="del-btn" onclick="event.stopPropagation(); App.deleteConsignee('${c.id}','${escapeHtml(c.name)}')">✕</button>
+          </div>
+        </div>`;
+      }).join("");
+
+  return `
+    <div class="add-card">
+      <h2>Add Consignee</h2>
+      <div class="add-row">
+        <input id="newConsigneeName" type="text" placeholder="Consignee / Buyer Name">
+        <input id="newConsigneeAddress" type="text" placeholder="Address (optional)">
+        <input id="newConsigneeContact" type="text" placeholder="Contact (optional)">
+        <button id="addConsigneeBtn" onclick="App.addConsignee()">Add Consignee</button>
+      </div>
+    </div>
+    <div id="consigneeList">${cards}</div>`;
+}
+
+function addConsignee(){
+  const nameEl = document.getElementById("newConsigneeName");
+  const addrEl = document.getElementById("newConsigneeAddress");
+  const contactEl = document.getElementById("newConsigneeContact");
+  const name = nameEl.value.trim();
+  if(!name){ toast("Enter a consignee name", true); return; }
+  addConsigneeRecord({ name, address: addrEl.value.trim(), contact: contactEl.value.trim() });
+  nameEl.value = ""; addrEl.value = ""; contactEl.value = "";
+  toast("Consignee added");
+  refreshFromStorage();
+}
+function deleteConsignee(id, name){
+  if(!confirm(`Delete consignee "${name}"? Its ledger entries will also be removed.`)) return;
+  listConsigneeTxns().filter(t => t.consigneeId === id).forEach(t => deleteConsigneeTxnRecord(t.id));
+  deleteConsigneeRecord(id);
+  toast("Consignee deleted");
+  refreshFromStorage();
+}
+function openConsigneeLedger(consigneeId){
+  currentConsigneeId = consigneeId;
+  view = "consigneeLedger";
+  renderApp();
+}
+function backToConsignees(){ view = "consignees"; currentConsigneeId = null; renderApp(); }
+
+// ================= ITEM CATALOG =================
+function renderCatalogView(){
+  const items = listCatalog();
+  const rows = items.length === 0
+    ? `<div class="empty">No items yet. Add products below, or they'll be learned automatically when you save a packing list or invoice.</div>`
+    : `<div style="overflow-x:auto;"><table class="ledger-table">
+        <thead><tr><th>Description</th><th>HS Code</th><th>UOM</th><th>Units/Ctn</th><th>L×W×H (in)</th><th>Net/Ctn (kg)</th><th>Gross/Ctn (kg)</th><th>Unit Price</th><th></th></tr></thead>
+        <tbody>${items.map(c => `
+          <tr>
+            <td>${escapeHtml(c.description)}</td>
+            <td>${escapeHtml(c.hsCode)}</td>
+            <td>${escapeHtml(c.uom)}</td>
+            <td>${escapeHtml(c.unitPacked)}</td>
+            <td>${(c.lengthIn||c.widthIn||c.heightIn) ? `${escapeHtml(c.lengthIn)}×${escapeHtml(c.widthIn)}×${escapeHtml(c.heightIn)}` : ''}</td>
+            <td>${escapeHtml(c.netWeightPerCtn)}</td>
+            <td>${escapeHtml(c.grossWeightPerCtn)}</td>
+            <td>${escapeHtml(c.unitPrice)}</td>
+            <td><button class="del-btn" onclick="App.removeCatalogItem('${c.id}','${escapeHtml(c.description)}')">✕</button></td>
+          </tr>`).join("")}</tbody>
+      </table></div>`;
+
+  return `
+    <div class="add-card">
+      <h2>Add Product</h2>
+      <div class="add-row" style="flex-wrap:wrap;">
+        <input id="catDesc" type="text" placeholder="Item Description (e.g. Standard Dust Mop 60 cm with Frame)" style="min-width:260px;">
+        <input id="catHs" type="text" placeholder="HS Code" value="96039000" style="max-width:110px;">
+        <input id="catUom" type="text" placeholder="UOM" value="Pcs" style="max-width:70px;">
+        <input id="catUnitPacked" type="text" placeholder="Units/Carton" style="max-width:100px;">
+        <input id="catLength" type="text" placeholder="L in" style="max-width:70px;">
+        <input id="catWidth" type="text" placeholder="W in" style="max-width:70px;">
+        <input id="catHeight" type="text" placeholder="H in" style="max-width:70px;">
+        <input id="catNetWt" type="text" placeholder="Net kg/Ctn" style="max-width:100px;">
+        <input id="catGrossWt" type="text" placeholder="Gross kg/Ctn" style="max-width:100px;">
+        <input id="catPrice" type="text" placeholder="Unit Price" style="max-width:90px;">
+        <button onclick="App.addCatalogItem()">Add Item</button>
+      </div>
+      <div style="font-size:.78rem;color:var(--muted);margin-top:8px;">These auto-fill packing list and invoice rows when you pick the item by name — CBM is calculated automatically from L×W×H. The catalog also learns automatically from every packing list you save.</div>
+    </div>
+    ${rows}`;
+}
+function addCatalogItem(){
+  const desc = document.getElementById("catDesc").value.trim();
+  if(!desc){ toast("Enter an item description", true); return; }
+  upsertCatalogItem({
+    description: desc,
+    hsCode: document.getElementById("catHs").value.trim(),
+    uom: document.getElementById("catUom").value.trim(),
+    unitPacked: document.getElementById("catUnitPacked").value.trim(),
+    lengthIn: document.getElementById("catLength").value.trim(),
+    widthIn: document.getElementById("catWidth").value.trim(),
+    heightIn: document.getElementById("catHeight").value.trim(),
+    netWeightPerCtn: document.getElementById("catNetWt").value.trim(),
+    grossWeightPerCtn: document.getElementById("catGrossWt").value.trim(),
+    unitPrice: document.getElementById("catPrice").value.trim()
+  });
+  toast("Item saved");
+  renderApp();
+}
+function removeCatalogItem(id, name){
+  if(!confirm(`Remove "${name}" from the item catalog?`)) return;
+  deleteCatalogItem(id);
+  toast("Item removed");
+  renderApp();
+}
+
+// When an item is picked from the catalog datalist, fill the row's known values
+function packingCatalogFill(i){
+  syncPackingRowsFromDom();
+  const row = packingItemRows[i];
+  if(!row) return;
+  const cat = findCatalogItem(row.description);
+  if(!cat) return;
+  if(cat.hsCode) row.hsCode = cat.hsCode;
+  if(cat.uom) row.uom = cat.uom;
+  if(cat.unitPacked) row.unitPacked = cat.unitPacked;
+  if(cat.lengthIn) row.lengthIn = cat.lengthIn;
+  if(cat.widthIn) row.widthIn = cat.widthIn;
+  if(cat.heightIn) row.heightIn = cat.heightIn;
+  if(cat.netWeightPerCtn) row.netWeightPerCtn = cat.netWeightPerCtn;
+  if(cat.grossWeightPerCtn) row.grossWeightPerCtn = cat.grossWeightPerCtn;
+  document.getElementById("packingEditorWrap").innerHTML = renderPackingItemsEditor();
+}
+function itemCatalogFill(i){
+  syncItemRowsFromDom();
+  const row = modalItemRows[i];
+  if(!row) return;
+  const cat = findCatalogItem(row.description);
+  if(!cat) return;
+  if(cat.hsCode) row.hsCode = cat.hsCode;
+  if(cat.uom) row.unit = cat.uom;
+  if(cat.unitPrice) row.unitPrice = cat.unitPrice;
+  document.getElementById("itemsEditorWrap").innerHTML = renderItemsEditor();
+}
+
+// ================= DATA TAB: BACKUP / RESTORE + EXCEL IMPORT =================
+// Collections backed up/restored as a set (settings is a single doc, handled separately below).
+const BACKUP_COLLECTIONS = [
+  { key: "shipments", col: SHIP_COL },
+  { key: "providers", col: PROVIDER_COL },
+  { key: "txns", col: TXN_COL },
+  { key: "consignees", col: CONSIGNEE_COL },
+  { key: "consigneeTxns", col: CTXN_COL },
+  { key: "catalog", col: CATALOG_COL },
+];
+let importState = null; // { rows, headers, target, partyId }
+
+function renderDataView(){
+  const providerOptions = providers.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join("");
+  const consigneeOptions = consignees.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join("");
+
+  let mappingBlock = "";
+  if(importState && importState.rows){
+    const headerOpts = `<option value="">— not in file —</option>` + importState.headers.map((h,i) => `<option value="${i}">${escapeHtml(h || 'Column ' + (i+1))}</option>`).join("");
+    const isCatalog = importState.target === "catalog";
+    const previewRows = importState.rows.slice(0, 5).map(r =>
+      `<tr>${importState.headers.map((_,i) => `<td style="font-size:.76rem;">${escapeHtml(r[i] != null ? String(r[i]) : '')}</td>`).join("")}</tr>`).join("");
+
+    const ledgerMappings = `
+      <div class="field"><label>Date column</label><select id="mapDate">${headerOpts}</select></div>
+      <div class="field"><label>Description column</label><select id="mapDesc">${headerOpts}</select></div>
+      <div class="field"><label>Shipment Ref column (optional)</label><select id="mapShip">${headerOpts}</select></div>
+      <div class="field"><label>${importState.target==='consignee' ? 'Invoice / Debit' : 'Charge / Debit'} column</label><select id="mapDebit">${headerOpts}</select></div>
+      <div class="field"><label>${importState.target==='consignee' ? 'Receipt / Credit' : 'Payment / Credit'} column</label><select id="mapCredit">${headerOpts}</select></div>
+      <div class="field"><label>Currency of amounts</label><select id="mapCurrency"><option>PKR</option><option>USD</option><option>AED</option></select></div>`;
+
+    const catalogMappings = `
+      <div class="field"><label>Description column</label><select id="mapDesc">${headerOpts}</select></div>
+      <div class="field"><label>HS Code column</label><select id="mapHs">${headerOpts}</select></div>
+      <div class="field"><label>UOM column</label><select id="mapUom">${headerOpts}</select></div>
+      <div class="field"><label>Units/Carton column</label><select id="mapUnitPacked">${headerOpts}</select></div>
+      <div class="field"><label>Length (in) column</label><select id="mapLength">${headerOpts}</select></div>
+      <div class="field"><label>Width (in) column</label><select id="mapWidth">${headerOpts}</select></div>
+      <div class="field"><label>Height (in) column</label><select id="mapHeight">${headerOpts}</select></div>
+      <div class="field"><label>Net Weight/Carton (kg) column</label><select id="mapNetWt">${headerOpts}</select></div>
+      <div class="field"><label>Gross Weight/Carton (kg) column</label><select id="mapGrossWt">${headerOpts}</select></div>
+      <div class="field"><label>Unit Price column</label><select id="mapPrice">${headerOpts}</select></div>`;
+
+    mappingBlock = `
+      <div class="section-title">Step 3 — Match the columns</div>
+      <div style="overflow-x:auto;margin-bottom:12px;">
+        <table class="ledger-table"><thead><tr>${importState.headers.map(h => `<th>${escapeHtml(h||'')}</th>`).join("")}</tr></thead>
+        <tbody>${previewRows}</tbody></table>
+      </div>
+      <div class="field-grid">${isCatalog ? catalogMappings : ledgerMappings}</div>
+      <div class="page-actions" style="border-top:none;padding-top:0;margin-top:14px;">
+        <div style="font-size:.78rem;color:var(--muted);">${importState.rows.length} data rows found</div>
+        <div class="save-group"><button class="btn-nextstage" onclick="App.runImport()">Import Now</button></div>
+      </div>`;
+  }
+
+  return `
+    <div class="add-card">
+      <h2>🏢 Shipper Details — filled once, used on every document</h2>
+      ${SETTINGS_ENTITIES.map((e,i) => {
+        const st = getSettings();
+        const addr = (st.exporterAddresses||{})[e] || "";
+        const bank = (st.bankByEntity||{})[e] || st.bank || {};
+        return `
+        <div class="section-title">${escapeHtml(e)}</div>
+        <div class="field-grid">
+          <div class="field" style="grid-column:1/-1;"><label>Address</label><input id="setExpAddr${i}" type="text" value="${escapeHtml(addr)}"></div>
+          <div class="field"><label>Account Title</label><input id="setBen${i}" type="text" value="${escapeHtml(bank.bankBeneficiary||'')}"></div>
+          <div class="field"><label>Swift Code</label><input id="setSwift${i}" type="text" value="${escapeHtml(bank.swiftCode||'')}"></div>
+          <div class="field"><label>Bank Name</label><input id="setBank${i}" type="text" value="${escapeHtml(bank.bankName||'')}"></div>
+          <div class="field"><label>Bank Address</label><input id="setBankAddr${i}" type="text" value="${escapeHtml(bank.bankAddress||'')}"></div>
+          <div class="field"><label>IBAN #</label><input id="setAcct${i}" type="text" value="${escapeHtml(bank.accountNo||'')}"></div>
+          <div class="field"><label>Branch Code</label><input id="setBranch${i}" type="text" value="${escapeHtml(bank.branchCode||'')}"></div>
+        </div>`;
+      }).join("")}
+      <div class="section-title">Invoice Numbering</div>
+      <div class="field-grid">
+        <div class="field"><label>Next Invoice No (auto-assigned to each new shipment — letters/prefix OK, e.g. "BT 5017")</label><input id="setInvoiceCounter" type="text" value="${escapeHtml(getSettings().invoiceNext || String(getSettings().invoiceCounter||1))}"></div>
+      </div>
+      <div class="page-actions" style="border-top:none;padding-top:0;margin-top:14px;">
+        <div></div>
+        <div class="save-group"><button class="btn-nextstage" onclick="App.saveCompanySettings()">Save Settings</button></div>
+      </div>
+    </div>
+
+    <div class="add-card">
+      <h2>💾 Backup & Restore</h2>
+      <div style="font-size:.82rem;color:var(--muted);margin-bottom:12px;">Data now lives in the cloud and syncs across every device. Still worth taking a backup occasionally in case of accidental deletes.</div>
+      <div class="add-row">
+        <button onclick="App.downloadBackup()" style="background:var(--green);">⬇ Download Full Backup (JSON)</button>
+        <label style="background:var(--navy);color:#fff;padding:10px 18px;border-radius:8px;font-size:.9rem;font-weight:600;cursor:pointer;">
+          ⬆ Restore from Backup<input type="file" accept=".json" style="display:none;" onchange="App.restoreBackup(this)">
+        </label>
+      </div>
+    </div>
+
+    <div class="add-card">
+      <h2>📤 Import Old Records from Excel</h2>
+      <div class="section-title">Step 1 — What are you importing?</div>
+      <div class="field-grid">
+        <div class="field"><label>Import into</label>
+          <select id="importTarget" onchange="App.importTargetChanged()">
+            <option value="">— select —</option>
+            <option value="provider">Service Provider ledger (expenses)</option>
+            <option value="consignee">Consignee ledger (receivables)</option>
+            <option value="catalog">Item catalog (products)</option>
+          </select>
+        </div>
+        <div class="field" id="importPartyWrap" style="display:none;">
+          <label id="importPartyLabel">Party</label>
+          <select id="importParty"></select>
+        </div>
+      </div>
+      <div class="section-title">Step 2 — Upload the Excel file</div>
+      <input type="file" accept=".xlsx,.xls,.csv" onchange="App.importFileSelected(this)" style="font-size:.85rem;">
+      <div style="font-size:.76rem;color:var(--muted);margin-top:6px;">First row should be column headings. One sheet per file (the first sheet is read).</div>
+      ${mappingBlock}
+    </div>`;
+}
+
+function saveCompanySettings(){
+  const st = getSettings();
+  st.exporterAddresses = st.exporterAddresses || {};
+  st.bankByEntity = st.bankByEntity || {};
+  SETTINGS_ENTITIES.forEach((e,i) => {
+    const addr = document.getElementById("setExpAddr"+i).value.trim();
+    if(addr) st.exporterAddresses[e] = addr;
+    st.bankByEntity[e] = {
+      bankBeneficiary: document.getElementById("setBen"+i).value.trim(),
+      bankName: document.getElementById("setBank"+i).value.trim(),
+      bankAddress: document.getElementById("setBankAddr"+i).value.trim(),
+      accountNo: document.getElementById("setAcct"+i).value.trim(),
+      branchCode: document.getElementById("setBranch"+i).value.trim(),
+      swiftCode: document.getElementById("setSwift"+i).value.trim()
+    };
+  });
+  const invoiceText = document.getElementById("setInvoiceCounter").value.trim();
+  if(invoiceText){ st.invoiceNext = invoiceText; delete st.invoiceCounter; }
+  saveSettings(st);
+  toast("Shipper details saved — documents will pre-fill from these");
+}
+
+function importTargetChanged(){
+  const target = document.getElementById("importTarget").value;
+  const wrap = document.getElementById("importPartyWrap");
+  const sel = document.getElementById("importParty");
+  const label = document.getElementById("importPartyLabel");
+  if(target === "provider"){
+    wrap.style.display = "";
+    label.textContent = "Which provider's ledger?";
+    sel.innerHTML = providers.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join("") || `<option value="">— add providers first —</option>`;
+  } else if(target === "consignee"){
+    wrap.style.display = "";
+    label.textContent = "Which consignee's ledger?";
+    sel.innerHTML = consignees.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join("") || `<option value="">— add consignees first —</option>`;
+  } else {
+    wrap.style.display = "none";
+  }
+  if(importState){ importState.target = target; }
+}
+
+function importFileSelected(inputEl){
+  const target = document.getElementById("importTarget").value;
+  if(!target){ toast("Select what you're importing first (Step 1)", true); inputEl.value=""; return; }
+  const partyEl = document.getElementById("importParty");
+  const partyId = (target === "catalog") ? null : (partyEl && partyEl.value);
+  if(target !== "catalog" && !partyId){ toast("Select the party whose ledger this is", true); inputEl.value=""; return; }
+  const file = inputEl.files && inputEl.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try{
+      const wb = XLSX.read(e.target.result, { type:"array" });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const aoa = XLSX.utils.sheet_to_json(sheet, { header:1, raw:false, defval:"" });
+      if(aoa.length < 2){ toast("File has no data rows", true); return; }
+      importState = { headers: aoa[0].map(h => String(h)), rows: aoa.slice(1).filter(r => r.some(c => String(c).trim() !== "")), target, partyId };
+      renderApp();
+      toast("File read — match the columns in Step 3");
+    }catch(err){
+      console.error(err);
+      toast("Could not read file: " + err.message, true);
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function importParseAmount(v){
+  const n = parseFloat(String(v).replace(/,/g,"").replace(/[^\d.\-]/g,""));
+  return isNaN(n) ? 0 : n;
+}
+function importParseDate(v){
+  const s = String(v).trim();
+  if(!s) return "";
+  const d = new Date(s);
+  if(!isNaN(d)) return d.toISOString().slice(0,10);
+  return s; // keep original text if unparseable
+}
+
+function runImport(){
+  if(!importState || !importState.rows){ toast("Upload a file first", true); return; }
+  const col = id => {
+    const el = document.getElementById(id);
+    return el && el.value !== "" ? parseInt(el.value,10) : null;
+  };
+  let count = 0;
+  try{
+    if(importState.target === "catalog"){
+      const cDesc = col("mapDesc");
+      if(cDesc === null){ toast("Description column is required", true); return; }
+      importState.rows.forEach(r => {
+        const description = String(r[cDesc]||"").trim();
+        if(!description) return;
+        upsertCatalogItem({
+          description,
+          hsCode: col("mapHs")!==null ? String(r[col("mapHs")]||"").trim() : "",
+          uom: col("mapUom")!==null ? String(r[col("mapUom")]||"").trim() : "",
+          unitPacked: col("mapUnitPacked")!==null ? String(r[col("mapUnitPacked")]||"").trim() : "",
+          lengthIn: col("mapLength")!==null ? String(r[col("mapLength")]||"").trim() : "",
+          widthIn: col("mapWidth")!==null ? String(r[col("mapWidth")]||"").trim() : "",
+          heightIn: col("mapHeight")!==null ? String(r[col("mapHeight")]||"").trim() : "",
+          netWeightPerCtn: col("mapNetWt")!==null ? String(r[col("mapNetWt")]||"").trim() : "",
+          grossWeightPerCtn: col("mapGrossWt")!==null ? String(r[col("mapGrossWt")]||"").trim() : "",
+          unitPrice: col("mapPrice")!==null ? String(r[col("mapPrice")]||"").trim() : ""
+        });
+        count++;
+      });
+    } else {
+      const cDate = col("mapDate"), cDesc = col("mapDesc"), cShip = col("mapShip"), cDebit = col("mapDebit"), cCredit = col("mapCredit");
+      const currency = document.getElementById("mapCurrency").value;
+      if(cDebit === null && cCredit === null){ toast("Map at least the debit or credit column", true); return; }
+      const isConsignee = importState.target === "consignee";
+      importState.rows.forEach(r => {
+        const date = cDate !== null ? importParseDate(r[cDate]) : "";
+        const description = cDesc !== null ? String(r[cDesc]||"").trim() : "Imported";
+        const shipmentRef = cShip !== null ? String(r[cShip]||"").trim() : "";
+        const debit = cDebit !== null ? importParseAmount(r[cDebit]) : 0;
+        const credit = cCredit !== null ? importParseAmount(r[cCredit]) : 0;
+        if(debit > 0){
+          if(isConsignee) addConsigneeTxnRecord({ consigneeId: importState.partyId, type:"invoice", date, amount:debit, currency, shipmentRef, description, imported:true });
+          else addTxnRecord({ providerId: importState.partyId, type:"charge", date, amount:debit, shipmentRef, description, imported:true });
+          count++;
+        }
+        if(credit > 0){
+          if(isConsignee) addConsigneeTxnRecord({ consigneeId: importState.partyId, type:"receipt", date, amount:credit, currency, shipmentRef, description, imported:true });
+          else addTxnRecord({ providerId: importState.partyId, type:"payment", date, amount:credit, shipmentRef, description, imported:true });
+          count++;
+        }
+      });
+    }
+    importState = null;
+    refreshFromStorage();
+    view = "data";
+    renderApp();
+    toast(`Imported ${count} records`);
+  }catch(err){
+    console.error(err);
+    toast("Import error: " + err.message, true);
+  }
+}
+
+// ---------- Backup / Restore ----------
+function downloadBackup(){
+  const backup = {
+    app: "ExportDocWorkflow", exportedAt: new Date().toISOString(),
+    data: {
+      shipments, providers, txns: txnsCache, consignees, consigneeTxns: consigneeTxnsCache,
+      catalog: catalogCache, settings: settingsCache
+    }
+  };
+  const blob = new Blob([JSON.stringify(backup)], { type:"application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "ExportDocWorkflow_backup_" + new Date().toISOString().slice(0,10) + ".json";
+  document.body.appendChild(a); a.click(); a.remove();
+  toast("Backup downloaded");
+}
+async function restoreBackup(inputEl){
+  const file = inputEl.files && inputEl.files[0];
+  if(!file) return;
+  if(!confirm("Restoring will REPLACE all current cloud data with the backup, for everyone using this app. Larger backups can take a minute. Continue?")){ inputEl.value=""; return; }
+  const reader = new FileReader();
+  reader.onload = async (e) => {
+    try{
+      const backup = JSON.parse(e.target.result);
+      if(!backup.data){ toast("Not a valid backup file", true); return; }
+      toast("Restoring — please wait...");
+      const keyToCollection = { shipments: SHIP_COL, providers: PROVIDER_COL, txns: TXN_COL, consignees: CONSIGNEE_COL, consigneeTxns: CTXN_COL, catalog: CATALOG_COL };
+      for(const [dataKey, col] of Object.entries(keyToCollection)){
+        const records = backup.data[dataKey];
+        if(!Array.isArray(records)) continue;
+        // wipe everything currently in this collection first
+        const existingSnap = await getDocs(collection(db, col));
+        let batch = writeBatch(db), opCount = 0;
+        for(const d of existingSnap.docs){
+          batch.delete(d.ref);
+          if(++opCount >= 450){ await batch.commit(); batch = writeBatch(db); opCount = 0; }
+        }
+        if(opCount > 0) await batch.commit();
+        // re-create from the backup, keeping original IDs so cross-references (providerId, consigneeId, shipmentRef) stay intact
+        batch = writeBatch(db); opCount = 0;
+        for(const rec of records){
+          const { id, ...fields } = rec;
+          const ref = id ? doc(db, col, id) : doc(collection(db, col));
+          batch.set(ref, fields);
+          if(++opCount >= 450){ await batch.commit(); batch = writeBatch(db); opCount = 0; }
+        }
+        if(opCount > 0) await batch.commit();
+      }
+      if(backup.data.settings){
+        await setDoc(doc(db, "appSettings", SETTINGS_DOC_ID), backup.data.settings);
+      }
+      toast("Backup restored");
+    }catch(err){
+      console.error(err);
+      toast("Restore failed: " + err.message, true);
+    }
+  };
+  reader.readAsText(file);
+}
+
+// ---------- Excel export of ledgers ----------
+function exportLedgerExcel(kind){
+  try{
+    let aoa = [], name = "ledger";
+    if(kind === "provider" && currentProviderId){
+      const p = providers.find(x => x.id === currentProviderId);
+      name = "Expenses_" + p.name.replace(/\W+/g,"_");
+      aoa = [["Date","Description","Shipment","Charge","Payment"]];
+      let bal = 0;
+      txnsForProvider(p.id).forEach(t => {
+        aoa.push([t.date||"", t.description||"", t.shipmentRef||"", t.type==="charge"?Number(t.amount||0):"", t.type==="payment"?Number(t.amount||0):""]);
+      });
+    } else if(kind === "consignee" && currentConsigneeId){
+      const c = consignees.find(x => x.id === currentConsigneeId);
+      name = "Receivables_" + c.name.replace(/\W+/g,"_");
+      aoa = [["Date","Description","Shipment","Currency","Invoice","Receipt"]];
+      txnsForConsignee(c.id).forEach(t => {
+        aoa.push([t.date||"", t.description||"", t.shipmentRef||"", t.currency||"PKR", t.type==="invoice"?Number(t.amount||0):"", t.type==="receipt"?Number(t.amount||0):""]);
+      });
+    } else {
+      name = "Master_Ledger";
+      aoa = [["Ledger","Date","Party","Shipment","Description","Type","Currency","Amount"]];
+      listTxns().forEach(t => {
+        const p = providers.find(x => x.id === t.providerId);
+        aoa.push(["Expenses", t.date||"", p?p.name:"", t.shipmentRef||"", t.description||"", t.type, "PKR", Number(t.amount||0)]);
+      });
+      listConsigneeTxns().forEach(t => {
+        const c = consignees.find(x => x.id === t.consigneeId);
+        aoa.push(["Receivables", t.date||"", c?c.name:"", t.shipmentRef||"", t.description||"", t.type, t.currency||"PKR", Number(t.amount||0)]);
+      });
+    }
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Ledger");
+    XLSX.writeFile(wb, name + ".xlsx");
+  }catch(err){
+    console.error(err);
+    toast("Export error: " + err.message, true);
+  }
+}
+
+// ================= CONSIGNEES: LEDGER =================
+function renderConsigneeLedgerView(c){
+  const txns = txnsForConsignee(c.id);
+  let running = 0;
+  const rows = txns.map(t => {
+    running += (t.type==="invoice" ? Number(t.amount||0) : -Number(t.amount||0));
+    return `
+      <tr>
+        <td>${escapeHtml(t.date||'')}</td>
+        <td>${escapeHtml(t.description||'')}</td>
+        <td>${escapeHtml(t.shipmentRef||'')}</td>
+        <td class="amt-charge">${t.type==="invoice" ? (t.currency||"PKR")+" "+Number(t.amount||0).toLocaleString() : ""}</td>
+        <td class="amt-payment">${t.type==="receipt" ? (t.currency||"PKR")+" "+Number(t.amount||0).toLocaleString() : ""}</td>
+        <td class="amt-balance">PKR ${running.toLocaleString()}</td>
+        <td><button class="del-btn" onclick="App.deleteConsigneeTxn('${t.id}')">✕</button></td>
+      </tr>`;
+  }).join("");
+
+  const totalInvoiced = txns.filter(t=>t.type==="invoice").reduce((s,t)=>s+Number(t.amount||0),0);
+  const totalReceived = txns.filter(t=>t.type==="receipt").reduce((s,t)=>s+Number(t.amount||0),0);
+  const balance = totalInvoiced - totalReceived;
+
+  const shipmentOptions = `<option value="">— none —</option>` + shipments.map(s => `<option value="${escapeHtml(s.ref)}">${escapeHtml(s.ref)}</option>`).join("");
+
+  return `
+    <button class="back-btn" onclick="App.backToConsignees()">← All Consignees</button>
+    <div class="detail-head">
+      <div>
+        <div class="ref">${escapeHtml(c.name)}</div>
+        <div class="cust">${escapeHtml(c.address||'')}${c.contact ? ' · ' + escapeHtml(c.contact) : ''}</div>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button style="padding:8px 16px;border:none;border-radius:8px;font-size:.82rem;font-weight:600;cursor:pointer;background:var(--green);color:#fff;" onclick="App.exportLedgerExcel('consignee')">⬇ Export Excel</button>
+        <button style="padding:8px 16px;border:none;border-radius:8px;font-size:.82rem;font-weight:600;cursor:pointer;background:#25D366;color:#fff;" onclick="App.whatsappReminder('${c.id}')">📱 WhatsApp Reminder</button>
+      </div>
+    </div>
+
+    <div class="ledger-summary">
+      <div class="stat"><div class="label">Total Invoiced</div><div class="value">${sumByCurrency(txns,"invoice")}</div></div>
+      <div class="stat"><div class="label">Total Received</div><div class="value">${sumByCurrency(txns,"receipt")}</div></div>
+      <div class="stat"><div class="label">Balance ${balance>0?'(Receivable)':'(Settled/Advance)'}</div><div class="value" style="color:${balance>0?'#c0392b':'#3f8f4f'}">${balanceByCurrency(txns)}</div></div>
+    </div>
+
+    ${txns.length === 0 ? `<div class="empty">No transactions yet.</div>` : `
+    <table class="ledger-table">
+      <thead><tr><th>Date</th><th>Description</th><th>Shipment</th><th>Invoiced</th><th>Received</th><th>Balance</th><th></th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`}
+
+    <div class="txn-form">
+      <h3>Add Transaction</h3>
+      <div class="field-grid">
+        <div class="field"><label>Type</label>
+          <select id="ctxnType"><option value="invoice">Invoice (we billed them)</option><option value="receipt">Receipt (payment received)</option></select>
+        </div>
+        <div class="field"><label>Date</label><input id="ctxnDate" type="date"></div>
+        <div class="field"><label>Amount (PKR)</label><input id="ctxnAmount" type="text" inputmode="numeric" pattern="[0-9]*" placeholder="0"></div>
+        <div class="field"><label>Related Shipment (optional)</label><select id="ctxnShipment">${shipmentOptions}</select></div>
+        <div class="field" style="grid-column:1/-1;"><label>Description</label><input id="ctxnDesc" type="text" placeholder="e.g. Commercial invoice EXP-2026-014, T/T received..."></div>
+      </div>
+      <div class="page-actions" style="border-top:none;margin-top:12px;padding-top:0;">
+        <div></div>
+        <div class="save-group"><button class="btn-nextstage" onclick="App.addConsigneeTxn('${c.id}')">Add Transaction</button></div>
+      </div>
+    </div>`;
+}
+
+function addConsigneeTxn(consigneeId){
+  const type = document.getElementById("ctxnType").value;
+  const date = document.getElementById("ctxnDate").value;
+  const amount = document.getElementById("ctxnAmount").value;
+  const shipmentRef = document.getElementById("ctxnShipment").value;
+  const description = document.getElementById("ctxnDesc").value.trim();
+  if(!amount || isNaN(Number(amount)) || Number(amount) <= 0){ toast("Enter a valid amount", true); return; }
+  if(!description){ toast("Enter a description", true); return; }
+  addConsigneeTxnRecord({ consigneeId, type, date: date || new Date().toISOString().slice(0,10), amount: Number(amount), shipmentRef, description });
+  toast("Transaction added");
+  refreshFromStorage();
+  view = "consigneeLedger";
+  renderApp();
+}
+function deleteConsigneeTxn(id){
+  if(!confirm("Delete this transaction?")) return;
+  deleteConsigneeTxnRecord(id);
+  toast("Transaction deleted");
+  refreshFromStorage();
+}
+
+// ================= DETAIL / WIZARD VIEW =================
+function renderDetailView(s){
+  const applicable = stagesForShipment(s);
+  const stages = s.stages || emptyStages();
+  const doneCount = applicable.filter(st => stages[st.key]?.done).length;
+  const pct = Math.round((doneCount / applicable.length) * 100);
+  const routeBadge = s.routing === "direct"
+    ? `<span style="font-size:.72rem;background:#eef2f7;color:#6b7280;padding:3px 10px;border-radius:10px;vertical-align:middle;margin-left:8px;">Direct Export</span>`
+    : `<span style="font-size:.72rem;background:#e6f4ea;color:#3f8f4f;padding:3px 10px;border-radius:10px;vertical-align:middle;margin-left:8px;">Via Saif Al Sahra (UAE)</span>`;
+
+  const navPills = applicable.map((st, idx) => {
+    const d = stages[st.key] || {};
+    const savedDoc = (s.documents && s.documents[st.key]) || {};
+    const isDraftPacking = st.key === "s3" && d.done && savedDoc.packingStatus && savedDoc.packingStatus.startsWith("Draft");
+    const statusText = isDraftPacking ? '⚠ Draft' : (d.done ? '✓ Generated' : (st.optional ? 'Optional' : 'Pending'));
+    return `
+      <div class="stage-pill ${st.key===currentStageKey?'active':''} ${d.done?'done':''}" onclick="App.selectStage('${st.key}')">
+        <div class="num" style="background:${st.color}">${idx+1}</div>
+        <div>
+          <div class="name">${escapeHtml(st.short)}</div>
+          <div class="status" ${isDraftPacking ? 'style="color:#c0392b;font-weight:700;"' : ''}>${statusText}</div>
+        </div>
+      </div>`;
+  }).join("");
+
+  return `
+    <button class="back-btn" onclick="App.backToList()">← All Shipments</button>
+    <div class="detail-head">
+      <div>
+        <div class="ref">${escapeHtml(s.ref)}${routeBadge}</div>
+        <div class="cust">${escapeHtml(s.customer||'')} <button style="border:none;background:none;color:var(--navy);cursor:pointer;font-size:.78rem;text-decoration:underline;" onclick="App.editShipmentCustomer('${s.id}')">edit</button></div>
+      </div>
+      <div class="detail-progress">
+        <div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div>
+        <div class="progress-label">${doneCount}/${applicable.length} documents generated</div>
+      </div>
+    </div>
+    <div class="stage-nav">${navPills}</div>
+    <div id="pageCard">${renderStagePage(s, currentStageKey)}</div>
+    <div id="financialsCard">${renderShipmentFinancials(s)}</div>`;
+}
+
+function renderShipmentFinancials(s){
+  const expenseTxns = listTxns().filter(t => t.shipmentRef === s.ref);
+  const consigneeTxns = listConsigneeTxns().filter(t => t.shipmentRef === s.ref);
+
+  const totalCharges = expenseTxns.filter(t=>t.type==="charge").reduce((sum,t)=>sum+Number(t.amount||0),0);
+  const totalPaidOut = expenseTxns.filter(t=>t.type==="payment").reduce((sum,t)=>sum+Number(t.amount||0),0);
+  const totalInvoiced = consigneeTxns.filter(t=>t.type==="invoice").reduce((sum,t)=>sum+Number(t.amount||0),0);
+  const totalReceived = consigneeTxns.filter(t=>t.type==="receipt").reduce((sum,t)=>sum+Number(t.amount||0),0);
+
+  // Invoice value from Commercial Invoice (Bank), falling back to Customer invoice, then Proforma
+  const invDoc = (s.documents && (s.documents.s5 || s.documents.s4 || s.documents.s1)) || null;
+  const invCurrency = (s.header && s.header.currency) || "USD";
+  const invoiceValue = invDoc && invDoc.items
+    ? invDoc.items.reduce((sum,it) => sum + (parseFloat(it.qty)||0)*(parseFloat(it.unitPrice)||0), 0) + (parseFloat(invDoc.extraChargeAmount)||0)
+    : 0;
+  const marginStat = invoiceValue > 0 ? `
+      <div class="stat"><div class="label">Invoice Value</div><div class="value">${escapeHtml(invCurrency)} ${invoiceValue.toLocaleString()}</div></div>
+      <div class="stat"><div class="label">Margin (invoice − PKR expenses)</div><div class="value">${escapeHtml(invCurrency)} ${invoiceValue.toLocaleString()} − PKR ${totalCharges.toLocaleString()}</div></div>` : "";
+
+  const expenseRows = expenseTxns.map(t => {
+    const prov = providers.find(p => p.id === t.providerId);
+    return `<tr><td>${escapeHtml(t.date||'')}</td><td>${escapeHtml(prov ? prov.name : '—')}</td><td>${escapeHtml(t.description||'')}</td>
+      <td class="${t.type==='charge'?'amt-charge':'amt-payment'}">${t.type==='charge'?'Charge':'Payment'}: PKR ${Number(t.amount||0).toLocaleString()}</td></tr>`;
+  }).join("");
+  const consigneeRows = consigneeTxns.map(t => {
+    const cons = consignees.find(c => c.id === t.consigneeId);
+    return `<tr><td>${escapeHtml(t.date||'')}</td><td>${escapeHtml(cons ? cons.name : '—')}</td><td>${escapeHtml(t.description||'')}</td>
+      <td class="${t.type==='invoice'?'amt-charge':'amt-payment'}">${t.type==='invoice'?'Invoice':'Receipt'}: ${(t.currency||'PKR')} ${Number(t.amount||0).toLocaleString()}</td></tr>`;
+  }).join("");
+
+  const providerOptions = providers.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join("");
+  const consigneeOptions = consignees.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join("");
+
+  const expenseForm = quickFormOpen === 'expense' ? `
+    <div class="txn-form">
+      <h3>Add Expense for ${escapeHtml(s.ref)}</h3>
+      ${providers.length===0 ? `<div class="empty">No service providers yet — add one on the Expenses tab first.</div>` : `
+      <div class="field-grid">
+        <div class="field"><label>Provider</label><select id="qeProvider">${providerOptions}</select></div>
+        <div class="field"><label>Type</label><select id="qeType"><option value="charge">Charge</option><option value="payment">Payment</option></select></div>
+        <div class="field"><label>Date</label><input id="qeDate" type="date"></div>
+        <div class="field"><label>Amount (PKR)</label><input id="qeAmount" type="text" inputmode="numeric" pattern="[0-9]*"></div>
+        <div class="field" style="grid-column:1/-1"><label>Description</label><input id="qeDesc" type="text" placeholder="e.g. Customs clearance charges"></div>
+      </div>
+      <div class="page-actions" style="border-top:none;margin-top:12px;padding-top:0;">
+        <div></div>
+        <div class="save-group">
+          <button class="btn-cancel" onclick="App.closeQuickForms()">Cancel</button>
+          <button class="btn-nextstage" onclick="App.quickAddExpenseSubmit('${escapeHtml(s.ref)}')">Add</button>
+        </div>
+      </div>`}
+    </div>` : "";
+
+  const consigneeForm = quickFormOpen === 'consignee' ? `
+    <div class="txn-form">
+      <h3>Add Consignee Entry for ${escapeHtml(s.ref)}</h3>
+      ${consignees.length===0 ? `<div class="empty">No consignees yet — add one on the Consignees tab first.</div>` : `
+      <div class="field-grid">
+        <div class="field"><label>Consignee</label><select id="qcConsignee">${consigneeOptions}</select></div>
+        <div class="field"><label>Type</label><select id="qcType"><option value="invoice">Invoice</option><option value="receipt">Receipt</option></select></div>
+        <div class="field"><label>Date</label><input id="qcDate" type="date"></div>
+        <div class="field"><label>Amount (PKR)</label><input id="qcAmount" type="text" inputmode="numeric" pattern="[0-9]*"></div>
+        <div class="field" style="grid-column:1/-1"><label>Description</label><input id="qcDesc" type="text" placeholder="e.g. Commercial invoice, T/T received"></div>
+      </div>
+      <div class="page-actions" style="border-top:none;margin-top:12px;padding-top:0;">
+        <div></div>
+        <div class="save-group">
+          <button class="btn-cancel" onclick="App.closeQuickForms()">Cancel</button>
+          <button class="btn-nextstage" onclick="App.quickAddConsigneeSubmit('${escapeHtml(s.ref)}')">Add</button>
+        </div>
+      </div>`}
+    </div>` : "";
+
+  return `
+    <div class="section-title">Shipment Financials</div>
+    <div class="ledger-summary">
+      <div class="stat"><div class="label">Expenses Charged</div><div class="value">PKR ${totalCharges.toLocaleString()}</div></div>
+      <div class="stat"><div class="label">Expenses Paid</div><div class="value">PKR ${totalPaidOut.toLocaleString()}</div></div>
+      <div class="stat"><div class="label">Invoiced to Consignee</div><div class="value">PKR ${totalInvoiced.toLocaleString()}</div></div>
+      <div class="stat"><div class="label">Received from Consignee</div><div class="value">PKR ${totalReceived.toLocaleString()}</div></div>
+      ${marginStat}
+    </div>
+
+    ${(expenseTxns.length || consigneeTxns.length) ? `
+    <table class="ledger-table" style="margin-bottom:14px;">
+      <thead><tr><th>Date</th><th>Party</th><th>Description</th><th>Amount</th></tr></thead>
+      <tbody>${expenseRows}${consigneeRows}</tbody>
+    </table>` : `<div class="empty">No expenses or consignee entries linked to this shipment yet.</div>`}
+
+    <div style="display:flex;gap:10px;margin-bottom:6px;">
+      <button class="btn-nextstage" onclick="App.openQuickExpenseForm()">+ Add Expense</button>
+      <button class="btn-nextstage" onclick="App.openQuickConsigneeForm()">+ Add Consignee Entry</button>
+    </div>
+    ${expenseForm}${consigneeForm}`;
+}
+
+function openQuickExpenseForm(){ quickFormOpen = 'expense'; renderApp(); }
+function openQuickConsigneeForm(){ quickFormOpen = 'consignee'; renderApp(); }
+function closeQuickForms(){ quickFormOpen = null; renderApp(); }
+
+function quickAddExpenseSubmit(ref){
+  const providerId = document.getElementById("qeProvider").value;
+  const type = document.getElementById("qeType").value;
+  const date = document.getElementById("qeDate").value;
+  const amount = document.getElementById("qeAmount").value;
+  const description = document.getElementById("qeDesc").value.trim();
+  if(!amount || isNaN(Number(amount)) || Number(amount) <= 0){ toast("Enter a valid amount", true); return; }
+  if(!description){ toast("Enter a description", true); return; }
+  addTxnRecord({ providerId, type, date: date || new Date().toISOString().slice(0,10), amount: Number(amount), shipmentRef: ref, description });
+  toast("Expense added");
+  quickFormOpen = null;
+  refreshFromStorage();
+}
+function quickAddConsigneeSubmit(ref){
+  const consigneeId = document.getElementById("qcConsignee").value;
+  const type = document.getElementById("qcType").value;
+  const date = document.getElementById("qcDate").value;
+  const amount = document.getElementById("qcAmount").value;
+  const description = document.getElementById("qcDesc").value.trim();
+  if(!amount || isNaN(Number(amount)) || Number(amount) <= 0){ toast("Enter a valid amount", true); return; }
+  if(!description){ toast("Enter a description", true); return; }
+  addConsigneeTxnRecord({ consigneeId, type, date: date || new Date().toISOString().slice(0,10), amount: Number(amount), shipmentRef: ref, description });
+  toast("Consignee entry added");
+  quickFormOpen = null;
+  refreshFromStorage();
+}
+
+function smartDefault(f, s, header, stage){
+  const settings = getSettings();
+  if(f.name === "invoiceNo"){
+    if(!(stage && REAL_INVOICE_STAGES.includes(stage.key))) return s.ref; // Proforma docs: free, never wasted
+    return s.invoiceNo || peekNextInvoiceNo(); // real invoice: reuse the shipment's number once drawn, else preview it
+  }
+  if(f.name === "certNo" || f.name === "contractNo" || f.name === "blNo") return s.ref;
+  if(["packingDate","certDate","blDate","contractDate"].includes(f.name)) return new Date().toISOString().slice(0,10);
+  if(f.name === "issuerAddress") return (settings.exporterAddresses||{})[SAIF_ENTITY] || "";
+  if(f.name === "buyerOverride") return s.customer || "";
+  if(["bankBeneficiary","bankName","accountNo","swiftCode","bankAddress","branchCode"].includes(f.name)){
+    // Saif Al Sahra documents (s10/s11) use Saif Al Sahra's own bank; other stages use the shipment's shipper entity
+    const isSaifDoc = stage && stage.extraFields.some(x => x.name === "issuerEntity");
+    const entity = isSaifDoc ? SAIF_ENTITY : header.exporterEntity;
+    const perEntity = (settings.bankByEntity||{})[entity] || {};
+    return perEntity[f.name] || (settings.bank||{})[f.name] || "";
+  }
+  if(f.name === "shipperName") return header.exporterEntity || "";
+  return f.default || "";
+}
+
+function renderStagePage(s, stageKey){
+  const stage = STAGES.find(x => x.key === stageKey);
+  const header = { ...(s.header || {}) };
+  // fill gaps from reusable settings + consignee record + routing (finalDestination intentionally left manual)
+  const settings = getSettings();
+  const lastHeader = settings.lastHeader || {};
+  if(!header.exporterAddress && settings.exporterAddresses && settings.exporterAddresses[header.exporterEntity]){
+    header.exporterAddress = settings.exporterAddresses[header.exporterEntity];
+  }
+  if(!header.buyerAddress){
+    const mc = consignees.find(c => c.id === s.consigneeId)
+      || consignees.find(c => c.name.toLowerCase() === (s.customer||"").toLowerCase());
+    if(mc && mc.address) header.buyerAddress = mc.address;
+  }
+  if(s.routing !== "direct"){
+    // UAE routing: the shipper is the consignee. Also migrates shipments saved under the
+    // old default (where "Saif Al Sahra" sat in this slot) — Saif Al Sahra is the buyer now.
+    if(!header.consignee || header.consignee === "Saif Al Sahra") header.consignee = header.exporterEntity || "";
+  } else if(!header.consignee){
+    header.consignee = s.customer || "";
+  }
+  if(!header.portOfDischarge && s.routing !== "direct"){
+    header.portOfDischarge = "Jebel Ali, UAE";
+  }
+  ["portOfDischarge","paymentTerms","currency","incoterm","portOfLoading"].forEach(k => {
+    if(!header[k] && lastHeader[k]) header[k] = lastHeader[k];
+  });
+  const savedDoc = (s.documents && s.documents[stageKey]) || {};
+  modalItemRows = (savedDoc.items && savedDoc.items.length ? savedDoc.items : s.items) || [emptyItem()];
+  modalItemRows = modalItemRows.map(it => ({...it}));
+  packingItemRows = (savedDoc.packingItems && savedDoc.packingItems.length ? savedDoc.packingItems : (s.packingItems && s.packingItems.length ? s.packingItems : derivePackingFromItems(s)));
+  packingItemRows = packingItemRows.map(it => ({...it}));
+  // Per-row override flags: if a saved doc predates these flags, infer them — a stored Qty or
+  // Total CBM that differs from the computed default was a manual override, so keep respecting it.
+  packingItemRows.forEach(it => {
+    const tp = parseFloat(it.totalPacked)||0;
+    const L = parseFloat(it.lengthIn)||0, W = parseFloat(it.widthIn)||0, H = parseFloat(it.heightIn)||0;
+    const cbmPerCtn = (L*W*H) * 0.000016387064;
+    if(it._cbmTouched === undefined){
+      const autoCbm = (cbmPerCtn*tp) ? (cbmPerCtn*tp).toFixed(2) : "";
+      it._cbmTouched = (it.totalCBM !== undefined && it.totalCBM !== "" && String(it.totalCBM) !== autoCbm);
+    }
+    if(it._qtyTouched === undefined){
+      const autoQty = ((parseFloat(it.unitPacked)||0) * tp) || "";
+      it._qtyTouched = (it.qty !== undefined && it.qty !== "" && String(it.qty) !== String(autoQty));
+    }
+  });
+  customFieldRows = (savedDoc.customFields || []).map(f => ({...f}));
+  packingCbmOverridden = (savedDoc.totalCBM != null && savedDoc.totalCBM !== "");
+  packingCbmSavedOverride = savedDoc.totalCBM;
+  pendingUploadFile = null;
+
+  const isSaifDoc = stage.extraFields.some(f => f.name === "issuerEntity");
+  // Buyer Address is the END customer's address. It only belongs on the Saif Al Sahra docs
+  // (shown next to Buyer Name there). On UAE manufacturer docs the buyer is Saif Al Sahra, so hide it.
+  const hideBuyerAddress = isSaifDoc || s.routing !== "direct";
+  const headerFieldsHtml = HEADER_FIELDS
+    .filter(f => !(isSaifDoc && (f.name === "exporterEntity" || f.name === "exporterAddress")))
+    .filter(f => !(hideBuyerAddress && f.name === "buyerAddress"))
+    .map(f => `
+    <div class="field"><label>${f.label}</label>${fieldInput(f, header[f.name])}</div>`).join("");
+  const saifNote = isSaifDoc ? `<div style="font-size:.78rem;color:var(--muted);margin:-4px 0 14px;">This document is issued by Saif Al Sahra — see "Issued By" below. (The manufacturing Shipper above doesn't apply here and isn't shown.)</div>` : "";
+  const extraFieldsHtml = stage.extraFields.map(f => {
+    const val = savedDoc[f.name] != null && savedDoc[f.name] !== "" ? savedDoc[f.name] : smartDefault(f, s, header, stage);
+    let html = `<div class="field"><label>${f.label}</label>${fieldInput(f, val)}</div>`;
+    if(isSaifDoc && f.name === "buyerOverride"){
+      // Buyer Address sits right next to Buyer Name here (still saved into the shared header, via data-headerfield)
+      html += `<div class="field"><label>Buyer Address</label><input type="text" data-headerfield="buyerAddress" value="${escapeHtml(header.buyerAddress||'')}"></div>`;
+    }
+    return html;
+  }).join("");
+
+  let itemsBlock = "";
+  if(stage.hasItems){
+    itemsBlock = `
+    <div class="section-title">Items</div>
+    <div id="itemsEditorWrap">${renderItemsEditor()}</div>`;
+  } else if(stage.packingItems){
+    itemsBlock = `
+    <div class="section-title">Packing Items</div>
+    <div id="packingEditorWrap">${renderPackingItemsEditor()}</div>`;
+  } else if(stage.fileUpload){
+    const existing = savedDoc.fileName ? `
+      <div style="margin-bottom:10px;font-size:.86rem;">
+        📎 Uploaded: <b>${escapeHtml(savedDoc.fileName)}</b>
+        <button class="btn-save" style="margin-left:10px;padding:5px 12px;" onclick="App.downloadStageFile('${stageKey}')">Download</button>
+      </div>` : `<div style="margin-bottom:10px;font-size:.84rem;color:var(--muted);">No file uploaded yet.</div>`;
+    itemsBlock = `
+    <div class="section-title">${escapeHtml(stage.label)} File</div>
+    ${existing}
+    <input type="file" id="stageFileInput" accept=".pdf,.jpg,.jpeg,.png,.xlsx,.xls,.csv" onchange="App.stageFileSelected(this)" style="font-size:.85rem;">
+    <div style="font-size:.76rem;color:var(--muted);margin-top:6px;">Upload the ${escapeHtml(stage.label.toLowerCase())} (scanned PDF, photo, or Excel/CSV). Keep it under ~200 KB — a low-res photo or a compressed PDF works well; large hi-res scans usually won't fit.</div>`;
+  }
+
+  const remarksAndCustomBlock = !stage.fileUpload ? `
+      <div class="section-title">Remarks</div>
+      <div class="field-grid single" id="remarksSection">
+        <div class="field"><textarea data-field="remarks" style="min-height:70px;">${escapeHtml(savedDoc.remarks||'')}</textarea></div>
+      </div>
+
+      <div class="section-title">Additional Fields <span style="font-weight:400;color:var(--muted);text-transform:none;letter-spacing:0;">— for anything non-standard, not covered above</span></div>
+      <div id="customFieldsWrap">${renderCustomFieldsEditor()}</div>` : "";
+
+  const applicable = stagesForShipment(s);
+  const stageIdx = applicable.findIndex(x => x.key === stageKey);
+  const nextStage = applicable[stageIdx+1];
+
+  return `
+    <div class="page-card">
+      <h2>${stageIdx+1}. ${stage.label}</h2>
+      <div class="page-sub">${escapeHtml(s.ref)}${s.customer ? ' — ' + escapeHtml(s.customer) : ''}</div>
+
+      <div class="section-title">Shipment Details</div>
+      ${saifNote}
+      <div class="field-grid" id="headerFields">${headerFieldsHtml}</div>
+
+      ${stage.extraFields.length ? `
+      <div class="section-title">${escapeHtml(stage.short)} Details</div>
+      <div class="field-grid" id="extraFields">${extraFieldsHtml}</div>` : ""}
+
+      ${itemsBlock}
+      ${remarksAndCustomBlock}
+
+      <div class="page-actions">
+        <div>${nextStage ? `<button class="btn-nextstage" onclick="App.saveStageData(false,'${nextStage.key}')">Save & Go to Next Document →</button>` : ''}</div>
+        <div class="save-group">
+          <button class="btn-save" onclick="App.saveStageData(false,null)">Save</button>
+          ${stage.fileUpload ? '' : `<button class="btn-print" onclick="App.saveStageData(true,null)">Save & Print</button>`}
+        </div>
+      </div>
+    </div>`;
+}
+
+function selectStage(stageKey){
+  currentStageKey = stageKey;
+  renderApp();
+}
+
+// ---------- field + items helpers ----------
+function fieldInput(f, value){
+  const val = value != null && value !== "" ? value : (f.default || "");
+  if(f.type === "select"){
+    const opts = f.options.map(o => `<option value="${escapeHtml(o)}" ${o===val?'selected':''}>${escapeHtml(o)}</option>`).join("");
+    const onchange = f.name === "exporterEntity" ? ` onchange="App.shipperChanged(this.value)"` : "";
+    return `<select data-field="${f.name}"${onchange}>${opts}</select>`;
+  }
+  if(f.type === "textarea"){
+    return `<textarea data-field="${f.name}">${escapeHtml(val)}</textarea>`;
+  }
+  return `<input type="${f.type}" data-field="${f.name}" value="${escapeHtml(val)}">`;
+}
+
+// When the shipper is switched on a document, reload its address + bank details from settings
+function shipperChanged(entity){
+  const st = getSettings();
+  const addrEl = document.querySelector('#headerFields [data-field="exporterAddress"]');
+  if(addrEl) addrEl.value = (st.exporterAddresses||{})[entity] || "";
+  const bank = (st.bankByEntity||{})[entity] || st.bank || {};
+  ["bankBeneficiary","bankName","accountNo","swiftCode","bankAddress","branchCode"].forEach(k => {
+    const el = document.querySelector('#extraFields [data-field="'+k+'"]');
+    if(el) el.value = bank[k] || "";
+  });
+  const shipperEl = document.querySelector('#extraFields [data-field="shipperName"]');
+  if(shipperEl) shipperEl.value = entity;
+  // On UAE shipments the shipper is the consignee — keep that in step when the shipper changes
+  // (only if the field still holds an auto-set company name; a hand-typed value is left alone).
+  const ship = shipments.find(x => x.id === currentShipId);
+  const consEl = document.querySelector('#headerFields [data-field="consignee"]');
+  if(ship && ship.routing !== "direct" && consEl && (!consEl.value || SETTINGS_ENTITIES.includes(consEl.value))){
+    consEl.value = entity;
+  }
+}
+
+function renderItemsEditor(){
+  const catalogOptions = listCatalog().map(c => `<option value="${escapeHtml(c.description)}">`).join("");
+  const rows = modalItemRows.map((it, i) => `
+    <tr>
+      <td><input data-item="description" data-idx="${i}" value="${escapeHtml(it.description)}" placeholder="Item description" list="catalogItemNames" autocomplete="off" onchange="App.itemCatalogFill(${i})"></td>
+      <td><input data-item="hsCode" data-idx="${i}" value="${escapeHtml(it.hsCode)}" placeholder="HS Code"></td>
+      <td><input data-item="qty" data-idx="${i}" value="${escapeHtml(it.qty)}" placeholder="Qty"></td>
+      <td><input data-item="unit" data-idx="${i}" value="${escapeHtml(it.unit)}" placeholder="Unit"></td>
+      <td><input data-item="unitPrice" data-idx="${i}" value="${escapeHtml(it.unitPrice)}" placeholder="Unit Price"></td>
+      <td><button class="rm" onclick="App.removeItemRow(${i})">✕</button></td>
+    </tr>`).join("");
+  return `
+    <datalist id="catalogItemNames">${catalogOptions}</datalist>
+    <table class="items-table">
+      <thead><tr><th>Description</th><th>HS Code</th><th>Qty</th><th>Unit</th><th>Unit Price</th><th></th></tr></thead>
+      <tbody id="itemsTbody">${rows}</tbody>
+    </table>
+    <button type="button" class="add-item-btn" onclick="App.addItemRow()">+ Add Item</button>`;
+}
+function syncItemRowsFromDom(){
+  document.querySelectorAll('[data-item]').forEach(el => {
+    const idx = parseInt(el.dataset.idx,10);
+    const key = el.dataset.item;
+    if(modalItemRows[idx]) modalItemRows[idx][key] = el.value;
+  });
+}
+function addItemRow(){
+  syncItemRowsFromDom();
+  modalItemRows.push(emptyItem());
+  document.getElementById("itemsEditorWrap").innerHTML = renderItemsEditor();
+}
+function removeItemRow(i){
+  syncItemRowsFromDom();
+  modalItemRows.splice(i,1);
+  if(modalItemRows.length===0) modalItemRows.push(emptyItem());
+  document.getElementById("itemsEditorWrap").innerHTML = renderItemsEditor();
+}
+
+// ---------- Packing list items (Babji Manufacturing format) ----------
+function renderPackingItemsEditor(){
+  const catalogOptions = listCatalog().map(c => `<option value="${escapeHtml(c.description)}">`).join("");
+  const rows = packingItemRows.map((it, i) => {
+    const totalPacked = parseFloat(it.totalPacked)||0;
+    const L = parseFloat(it.lengthIn)||0, W = parseFloat(it.widthIn)||0, H = parseFloat(it.heightIn)||0;
+    const cbmPerCtn = (L*W*H) * 0.000016387064; // cubic inches -> m3 (1 in3 = 16.387064 cm3)
+    const netPerCtn = parseFloat(it.netWeightPerCtn)||0, grossPerCtn = parseFloat(it.grossWeightPerCtn)||0;
+    const totalNet = netPerCtn * totalPacked;
+    const totalGross = grossPerCtn * totalPacked;
+    // Qty and Total CBM both default to a computed figure when never explicitly set, but stay
+    // fully editable — same pattern, since real-world packing sometimes needs a manual override
+    // (a partially-filled last carton, an actual measured volume that differs slightly, etc.).
+    const qtyDisplay = (it.qty !== undefined && it.qty !== "") ? it.qty : ((parseFloat(it.unitPacked)||0) * totalPacked || "");
+    const cbmDisplay = (it.totalCBM !== undefined && it.totalCBM !== "") ? it.totalCBM : ((cbmPerCtn * totalPacked) ? (cbmPerCtn*totalPacked).toFixed(2) : "");
+    return `
+    <tr>
+      <td><input data-pitem="hsCode" data-idx="${i}" value="${escapeHtml(it.hsCode)}" placeholder="HS Code" style="width:85px;"></td>
+      <td><input data-pitem="description" data-idx="${i}" value="${escapeHtml(it.description)}" placeholder="Item description" list="catalogPackingNames" autocomplete="off" onchange="App.packingCatalogFill(${i})" style="min-width:150px;"></td>
+      <td><input data-pitem="uom" data-idx="${i}" value="${escapeHtml(it.uom)}" placeholder="UOM" style="width:50px;"></td>
+      <td><input data-pitem="unitPacked" data-idx="${i}" value="${escapeHtml(it.unitPacked)}" placeholder="Unit Packed" style="width:75px;" oninput="App.packingRecalc()"></td>
+      <td><input data-pitem="packingType" data-idx="${i}" value="${escapeHtml(it.packingType)}" placeholder="Packing" style="width:70px;"></td>
+      <td><input data-pitem="totalPacked" data-idx="${i}" value="${escapeHtml(it.totalPacked)}" placeholder="Cartons" style="width:65px;" oninput="App.packingRecalc()"></td>
+      <td><input data-pitem="lengthIn" data-idx="${i}" value="${escapeHtml(it.lengthIn)}" placeholder="L in" style="width:60px;" oninput="App.packingRecalc()"></td>
+      <td><input data-pitem="widthIn" data-idx="${i}" value="${escapeHtml(it.widthIn)}" placeholder="W in" style="width:60px;" oninput="App.packingRecalc()"></td>
+      <td><input data-pitem="heightIn" data-idx="${i}" value="${escapeHtml(it.heightIn)}" placeholder="H in" style="width:60px;" oninput="App.packingRecalc()"></td>
+      <td style="font-size:.78rem;text-align:right;white-space:nowrap;" data-calc-cbmctn="${i}">${cbmPerCtn ? cbmPerCtn.toFixed(4) : ''}</td>
+      <td><input data-pitem="netWeightPerCtn" data-idx="${i}" value="${escapeHtml(it.netWeightPerCtn)}" placeholder="Net kg" style="width:65px;" oninput="App.packingRecalc()"></td>
+      <td><input data-pitem="grossWeightPerCtn" data-idx="${i}" value="${escapeHtml(it.grossWeightPerCtn)}" placeholder="Gross kg" style="width:70px;" oninput="App.packingRecalc()"></td>
+      <td><input data-pitem="qty" data-idx="${i}" value="${escapeHtml(qtyDisplay)}" placeholder="Actual qty" style="width:80px;" oninput="App.packingQtyRowEdited(${i})" onblur="App.packingRecalc()" title="Actual quantity shipped — matches the invoice, independent of carton rounding"></td>
+      <td><input data-pitem="totalCBM" data-idx="${i}" value="${escapeHtml(cbmDisplay)}" placeholder="Total CBM" style="width:75px;" oninput="App.packingCbmRowEdited(${i})" onblur="App.packingRecalc()" title="Defaults to CBM/Ctn × Cartons — editable if the actual figure differs"></td>
+      <td style="font-size:.78rem;text-align:right;white-space:nowrap;" data-calc-net="${i}">${totalNet ? totalNet.toFixed(1) : ''}</td>
+      <td style="font-size:.78rem;text-align:right;white-space:nowrap;" data-calc-gross="${i}">${totalGross ? totalGross.toFixed(1) : ''}</td>
+      <td><button class="rm" onclick="App.removePackingItemRow(${i})">✕</button></td>
+    </tr>`;
+  }).join("");
+
+  const totals = packingTotals();
+
+  return `
+    <datalist id="catalogPackingNames">${catalogOptions}</datalist>
+    <div style="overflow-x:auto;">
+    <table class="items-table">
+      <thead><tr><th>HS Code</th><th>Item Description</th><th>UOM</th><th>Unit Packed</th><th>Packing Type</th><th>Cartons</th><th>L (in)</th><th>W (in)</th><th>H (in)</th><th>CBM/Ctn</th><th>Net Wt/Ctn (kg)</th><th>Gross Wt/Ctn (kg)</th><th>Total Qty (UOM)</th><th>Total CBM</th><th>Total Net (kg)</th><th>Total Gross (kg)</th><th></th></tr></thead>
+      <tbody id="packingTbody">${rows}</tbody>
+      <tfoot><tr style="font-weight:700;background:#f1f4f8;">
+        <td colspan="5" style="text-align:right;padding:7px 8px;">Totals</td>
+        <td style="padding:7px 8px;" id="packingTotalPacked">${totals.packed.toLocaleString()}</td>
+        <td colspan="4"></td>
+        <td colspan="2"></td>
+        <td style="text-align:right;padding:7px 8px;" id="packingTotalUOM">${totals.uom.toLocaleString()}</td>
+        <td style="padding:2px 4px;"><input id="packingTotalCBM" value="${escapeHtml(packingCbmOverridden && packingCbmSavedOverride != null ? packingCbmSavedOverride : totals.cbm.toFixed(2))}" oninput="App.markCbmOverride()" style="width:75px;text-align:right;font-weight:700;border:1px solid var(--border);border-radius:5px;padding:5px 6px;font-size:.85rem;" title="Auto-sums from the rows above — edit directly to override the final figure"></td>
+        <td style="text-align:right;padding:7px 8px;" id="packingTotalNet">${totals.net.toFixed(1)}</td>
+        <td style="text-align:right;padding:7px 8px;" id="packingTotalGross">${totals.gross.toFixed(1)}</td>
+        <td></td>
+      </tr></tfoot>
+    </table>
+    </div>
+    <button type="button" class="add-item-btn" onclick="App.addPackingItemRow()">+ Add Item</button>
+    <button type="button" class="add-item-btn" onclick="App.recalcCartonsFromItems()" style="margin-left:8px;">↻ Recalculate Cartons (Qty ÷ Unit Packed)</button>`;
+}
+function packingTotals(){
+  let packed=0, uom=0, cbm=0, net=0, gross=0;
+  packingItemRows.forEach(it => {
+    const tp = parseFloat(it.totalPacked)||0;
+    const L = parseFloat(it.lengthIn)||0, W = parseFloat(it.widthIn)||0, H = parseFloat(it.heightIn)||0;
+    const cbmPerCtn = (L*W*H) * 0.000016387064; // cubic inches -> m3
+    const netPerCtn = parseFloat(it.netWeightPerCtn)||0, grossPerCtn = parseFloat(it.grossWeightPerCtn)||0;
+    packed += tp;
+    uom += parseFloat(it.qty) || ((parseFloat(it.unitPacked)||0) * tp);
+    cbm += parseFloat(it.totalCBM) || (cbmPerCtn*tp);
+    net += netPerCtn*tp;
+    gross += grossPerCtn*tp;
+  });
+  return { packed, uom, cbm, net, gross };
+}
+function syncPackingRowsFromDom(){
+  document.querySelectorAll('[data-pitem]').forEach(el => {
+    const idx = parseInt(el.dataset.idx,10);
+    const key = el.dataset.pitem;
+    if(packingItemRows[idx]) packingItemRows[idx][key] = el.value;
+  });
+}
+function packingRecalc(){
+  syncPackingRowsFromDom();
+  packingItemRows.forEach((it, i) => {
+    const tp = parseFloat(it.totalPacked)||0;
+    const L = parseFloat(it.lengthIn)||0, W = parseFloat(it.widthIn)||0, H = parseFloat(it.heightIn)||0;
+    const cbmPerCtn = (L*W*H) * 0.000016387064; // cubic inches -> m3
+    const netPerCtn = parseFloat(it.netWeightPerCtn)||0, grossPerCtn = parseFloat(it.grossWeightPerCtn)||0;
+    const cbmCtnEl = document.querySelector(`[data-calc-cbmctn="${i}"]`);
+    const netEl = document.querySelector(`[data-calc-net="${i}"]`);
+    const grossEl = document.querySelector(`[data-calc-gross="${i}"]`);
+    if(cbmCtnEl) cbmCtnEl.textContent = cbmPerCtn ? cbmPerCtn.toFixed(4) : '';
+    if(netEl) netEl.textContent = (netPerCtn*tp) ? (netPerCtn*tp).toFixed(1) : '';
+    if(grossEl) grossEl.textContent = (grossPerCtn*tp) ? (grossPerCtn*tp).toFixed(1) : '';
+    // Live-fill the editable Qty and Total CBM defaults too (previously these only filled on a
+    // full re-render, leaving them blank when other fields changed). Skip rows the user has
+    // hand-edited, and never fight the field the user is currently typing in.
+    const cbmInput = document.querySelector(`[data-pitem="totalCBM"][data-idx="${i}"]`);
+    if(cbmInput && !it._cbmTouched && cbmInput !== document.activeElement){
+      const autoCbm = (cbmPerCtn*tp) ? (cbmPerCtn*tp).toFixed(2) : "";
+      cbmInput.value = autoCbm;
+      it.totalCBM = autoCbm;
+    }
+    const qtyInput = document.querySelector(`[data-pitem="qty"][data-idx="${i}"]`);
+    if(qtyInput && !it._qtyTouched && qtyInput !== document.activeElement){
+      const autoQty = ((parseFloat(it.unitPacked)||0) * tp) || "";
+      qtyInput.value = autoQty;
+      it.qty = String(autoQty);
+    }
+  });
+  const totals = packingTotals();
+  const tp = document.getElementById("packingTotalPacked");
+  const tu = document.getElementById("packingTotalUOM");
+  const tc = document.getElementById("packingTotalCBM");
+  const tn = document.getElementById("packingTotalNet");
+  const tg = document.getElementById("packingTotalGross");
+  if(tp) tp.textContent = totals.packed.toLocaleString();
+  if(tu) tu.textContent = totals.uom.toLocaleString();
+  if(tc && !packingCbmOverridden) tc.value = totals.cbm.toFixed(2);
+  if(tn) tn.textContent = totals.net.toFixed(1);
+  if(tg) tg.textContent = totals.gross.toFixed(1);
+}
+// User hand-edited the grand-total CBM field — stop auto-overwriting it as rows change,
+// until this document is reopened fresh (which resets the flag).
+function markCbmOverride(){
+  packingCbmOverridden = true;
+}
+// Per-row versions: typing directly in a row's Total CBM or Qty marks it as a manual override.
+// Clearing the field hands it back to auto-calc (refills on blur).
+function packingCbmRowEdited(i){
+  const it = packingItemRows[i];
+  if(it) it._cbmTouched = (document.querySelector(`[data-pitem="totalCBM"][data-idx="${i}"]`)||{}).value !== "";
+  packingRecalc();
+}
+function packingQtyRowEdited(i){
+  const it = packingItemRows[i];
+  if(it) it._qtyTouched = (document.querySelector(`[data-pitem="qty"][data-idx="${i}"]`)||{}).value !== "";
+  packingRecalc();
+}
+// Recompute each row's Cartons from the invoice quantity ÷ Unit Packed — use this any time
+// Unit Packed gets corrected after the packing list was first generated, since Cartons doesn't
+// auto-update on its own (it's an editable field, not a live formula).
+function recalcCartonsFromItems(){
+  syncPackingRowsFromDom();
+  const s = shipments.find(x => x.id === currentShipId);
+  if(!s){ toast("Open a shipment first", true); return; }
+  let changed = 0;
+  packingItemRows.forEach(row => {
+    const invItem = (s.items||[]).find(it => (it.description||"").trim().toLowerCase() === (row.description||"").trim().toLowerCase());
+    const qty = invItem ? parseFloat(invItem.qty)||0 : 0;
+    const perCtn = parseFloat(row.unitPacked)||0;
+    if(qty && perCtn){
+      row.totalPacked = String(Math.ceil(qty / perCtn));
+      row.qty = invItem.qty;
+      changed++;
+    }
+  });
+  document.getElementById("packingEditorWrap").innerHTML = renderPackingItemsEditor();
+  if(changed === 0){
+    toast("Couldn't match any rows to invoice items — check item descriptions match, and Unit Packed is filled in.", true);
+  } else {
+    toast(`Recalculated cartons for ${changed} item${changed===1?'':'s'}`);
+  }
+}
+function addPackingItemRow(){
+  syncPackingRowsFromDom();
+  packingItemRows.push(emptyPackingItem());
+  document.getElementById("packingEditorWrap").innerHTML = renderPackingItemsEditor();
+}
+function removePackingItemRow(i){
+  syncPackingRowsFromDom();
+  packingItemRows.splice(i,1);
+  if(packingItemRows.length===0) packingItemRows.push(emptyPackingItem());
+  document.getElementById("packingEditorWrap").innerHTML = renderPackingItemsEditor();
+}
+
+// ---------- Additional/custom fields (ad-hoc label+value pairs for non-standard entries) ----------
+function emptyCustomField(){ return { label:"", value:"" }; }
+function renderCustomFieldsEditor(){
+  if(customFieldRows.length === 0) customFieldRows = [emptyCustomField()];
+  const rows = customFieldRows.map((f,i) => `
+    <div style="display:flex;gap:10px;margin-bottom:8px;align-items:center;">
+      <input data-customfield="label" data-idx="${i}" value="${escapeHtml(f.label)}" placeholder="Field name (e.g. Screw Type)" style="flex:1;padding:9px 11px;border:1px solid var(--border);border-radius:6px;font-size:.86rem;">
+      <input data-customfield="value" data-idx="${i}" value="${escapeHtml(f.value)}" placeholder="Value (e.g. Italy screw hole)" style="flex:1;padding:9px 11px;border:1px solid var(--border);border-radius:6px;font-size:.86rem;">
+      <button type="button" class="rm" onclick="App.removeCustomFieldRow(${i})">✕</button>
+    </div>`).join("");
+  return `<div id="customFieldRowsInner">${rows}</div>
+    <button type="button" class="add-item-btn" onclick="App.addCustomFieldRow()">+ Add Field</button>`;
+}
+function syncCustomFieldsFromDom(){
+  document.querySelectorAll('[data-customfield]').forEach(el => {
+    const idx = parseInt(el.dataset.idx,10);
+    const key = el.dataset.customfield;
+    if(customFieldRows[idx]) customFieldRows[idx][key] = el.value;
+  });
+}
+function addCustomFieldRow(){
+  syncCustomFieldsFromDom();
+  customFieldRows.push(emptyCustomField());
+  document.getElementById("customFieldsWrap").innerHTML = renderCustomFieldsEditor();
+}
+function removeCustomFieldRow(i){
+  syncCustomFieldsFromDom();
+  customFieldRows.splice(i,1);
+  if(customFieldRows.length===0) customFieldRows.push(emptyCustomField());
+  document.getElementById("customFieldsWrap").innerHTML = renderCustomFieldsEditor();
+}
+
+// ---------- Loading sheet file upload ----------
+function stageFileSelected(inputEl){
+  const file = inputEl.files && inputEl.files[0];
+  if(!file) return;
+  const MAX_RAW = 200 * 1024; // ~200 KB raw per file — a shipment can hold up to 3 such files
+                                // (Loading Sheet, B/L Copy, CO Copy) plus all its other data within
+                                // Firestore's 1 MB per-document limit, so each file stays small.
+  if(file.size > MAX_RAW){
+    toast(`File too large (max ~200 KB). Try a lower-res photo/scan, or compress the PDF — plenty of free tools do this in seconds.`, true);
+    inputEl.value = "";
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    pendingUploadFile = { name: file.name, dataUrl: reader.result };
+    toast("File ready — click Save to store it");
+  };
+  reader.onerror = () => toast("Could not read file", true);
+  reader.readAsDataURL(file);
+}
+function downloadStageFile(stageKey){
+  const s = shipments.find(x => x.id === currentShipId);
+  const savedDoc = s && s.documents && s.documents[stageKey];
+  if(!savedDoc || !savedDoc.fileDataUrl){ toast("No file stored", true); return; }
+  const a = document.createElement("a");
+  a.href = savedDoc.fileDataUrl;
+  a.download = savedDoc.fileName || "uploaded-document";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+// ---------- Save ----------
+async function saveStageData(shouldPrint, goToStageKey){
+  if(!currentShipId) return;
+  const s = shipments.find(x => x.id === currentShipId);
+  const stage = STAGES.find(x => x.key === currentStageKey);
+  if(!s || !stage) return;
+
+  syncItemRowsFromDom();
+  if(stage.packingItems) syncPackingRowsFromDom();
+  if(!stage.fileUpload) syncCustomFieldsFromDom();
+
+  const headerData = {};
+  document.querySelectorAll('#headerFields [data-field]').forEach(el => headerData[el.dataset.field] = el.value);
+  // Some pages hide certain shared fields (Shipper on Saif Al Sahra docs, Buyer Address on UAE
+  // manufacturer docs). Carry those forward from the saved header so saving here never wipes them.
+  HEADER_FIELDS.forEach(f => {
+    if(!(f.name in headerData) && s.header && s.header[f.name] != null) headerData[f.name] = s.header[f.name];
+  });
+  // Fields rendered outside #headerFields (e.g. Buyer Address paired next to Buyer Name) still belong to the shared header
+  document.querySelectorAll('[data-headerfield]').forEach(el => headerData[el.dataset.headerfield] = el.value);
+  const extraData = {};
+  if(document.getElementById("extraFields")){
+    document.querySelectorAll('#extraFields [data-field]').forEach(el => extraData[el.dataset.field] = el.value);
+  }
+  // Remarks textarea lives in its own section, not #extraFields
+  document.querySelectorAll('#remarksSection [data-field]').forEach(el => extraData[el.dataset.field] = el.value);
+
+  try{
+    const docData = { ...extraData };
+    if(!stage.fileUpload) docData.customFields = customFieldRows.filter(f => f.label || f.value);
+    const updates = { header: headerData };
+
+    // Real invoice numbering: draw the shipment's ONE invoice number from the sequential counter
+    // the first time ANY real invoice document (not a Proforma) is saved for it, then every other
+    // real-invoice document in this same shipment reuses that same number. This is what stops
+    // Proforma-only deals from ever burning a real invoice number.
+    if(REAL_INVOICE_STAGES.includes(currentStageKey) && !s.invoiceNo){
+      const drawn = nextInvoiceNo();
+      s.invoiceNo = drawn;
+      updates.invoiceNo = drawn;
+    }
+
+    if(stage.packingItems){
+      docData.packingItems = packingItemRows;
+      updates.packingItems = packingItemRows; // shared at shipment level so it can pre-fill next time
+      const cbmFooterEl = document.getElementById("packingTotalCBM");
+      if(cbmFooterEl) docData.totalCBM = cbmFooterEl.value;
+    } else if(stage.fileUpload){
+      const prevDoc = (s.documents && s.documents[currentStageKey]) || {};
+      if(pendingUploadFile){
+        docData.fileName = pendingUploadFile.name;
+        docData.fileDataUrl = pendingUploadFile.dataUrl;
+      } else if(prevDoc.fileName){
+        docData.fileName = prevDoc.fileName;
+        docData.fileDataUrl = prevDoc.fileDataUrl;
+      } else {
+        toast(`Upload the ${stage.label.toLowerCase()} file before saving`, true);
+        return;
+      }
+    } else {
+      docData.items = modalItemRows;
+      updates.items = modalItemRows;
+    }
+
+    updates[`documents.${currentStageKey}`] = docData;
+    updates[`stages.${currentStageKey}`] = { done:true, completedAt: new Date().toISOString() };
+    await localUpdate(currentShipId, updates);
+    rememberReusables(headerData, extraData);
+
+    // Catalog auto-learn
+    if(stage.packingItems){
+      packingItemRows.forEach(it => upsertCatalogItem({
+        description: it.description, hsCode: it.hsCode, uom: it.uom,
+        unitPacked: it.unitPacked, lengthIn: it.lengthIn, widthIn: it.widthIn, heightIn: it.heightIn,
+        netWeightPerCtn: it.netWeightPerCtn, grossWeightPerCtn: it.grossWeightPerCtn
+      }));
+    } else if(stage.hasItems){
+      modalItemRows.forEach(it => upsertCatalogItem({
+        description: it.description, hsCode: it.hsCode, uom: it.unit, unitPrice: it.unitPrice
+      }));
+    }
+
+    // Auto-post receivable: Commercial Invoice (Bank) total goes to the consignee's ledger
+    if(currentStageKey === "s5"){
+      const total = modalItemRows.reduce((sum,it) => sum + (parseFloat(it.qty)||0)*(parseFloat(it.unitPrice)||0), 0) + (parseFloat(extraData.extraChargeAmount)||0);
+      const cons = consignees.find(c => c.id === s.consigneeId)
+        || consignees.find(c => c.name.toLowerCase() === (s.customer||"").toLowerCase());
+      if(total > 0 && cons){
+        const autoKey = s.id + "_s5";
+        // replace any previous auto entry for this shipment's invoice (re-saves shouldn't double-post)
+        listConsigneeTxns().filter(t => t.autoKey === autoKey).forEach(t => deleteConsigneeTxnRecord(t.id));
+        addConsigneeTxnRecord({
+          consigneeId: cons.id, type: "invoice",
+          date: extraData.invoiceDate || new Date().toISOString().slice(0,10),
+          amount: total, currency: headerData.currency || "USD",
+          shipmentRef: s.ref, autoKey,
+          description: "Auto: Commercial Invoice " + (extraData.invoiceNo || s.ref)
+        });
+        toast("Saved — invoice total posted to " + cons.name + "'s ledger");
+      }
+    }
+
+    pendingUploadFile = null;
+    if(!(currentStageKey === "s5")) toast(shouldPrint ? "Saved — opening print view" : "Saved");
+    if(shouldPrint) printDocument(stage, headerData, docData, s.ref, s.customer, s.routing);
+    if(goToStageKey){ currentStageKey = goToStageKey; }
+    refreshFromStorage();
+  }catch(err){
+    console.error(err);
+    if(String(err.message||"").toLowerCase().includes("longer than") || String(err.message||"").toLowerCase().includes("exceeds the maximum")){
+      toast("This shipment's data is too large to save (Firestore's 1MB-per-document limit) — likely too many files attached. Try removing or compressing one of the uploaded files.", true);
+    } else {
+      toast("Error saving document: " + err.message, true);
+    }
+  }
+}
+
+// ---------- Print rendering ----------
+function printDocument(stage, header, docData, ref, customer, routing){
+  if(stage.packingItems){
+    printPackingList(header, docData, ref, customer, routing);
+    return;
+  }
+  const itemsRows = stage.hasItems ? (docData.items||[]).map(it => {
+    const qty = parseFloat(it.qty)||0, price = parseFloat(it.unitPrice)||0;
+    const total = (qty*price) ? (qty*price).toFixed(2) : "";
+    return `<tr>
+      <td>${escapeHtml(it.description)}</td>
+      <td>${escapeHtml(it.hsCode)}</td>
+      <td style="text-align:right">${escapeHtml(it.qty)} ${escapeHtml(it.unit)}</td>
+      <td style="text-align:right">${it.unitPrice ? (header.currency||'')+' '+escapeHtml(it.unitPrice) : ''}</td>
+      <td style="text-align:right">${total ? (header.currency||'')+' '+total : ''}</td>
+    </tr>`;
+  }).join("") : "";
+
+  const extraChargeAmt = parseFloat(docData.extraChargeAmount) || 0;
+  const extraChargeRow = (stage.hasItems && extraChargeAmt) ? `<tr>
+      <td colspan="4" style="text-align:right;font-style:italic;">${escapeHtml(docData.extraChargeLabel || "Additional Charge")}</td>
+      <td style="text-align:right;font-style:italic;">${escapeHtml(header.currency||'')} ${extraChargeAmt.toFixed(2)}</td>
+    </tr>` : "";
+
+  const itemsSubtotal = stage.hasItems ? (docData.items||[]).reduce((sum,it) => sum + (parseFloat(it.qty)||0)*(parseFloat(it.unitPrice)||0), 0) : 0;
+  const grandTotal = itemsSubtotal + extraChargeAmt;
+
+  const itemsTable = stage.hasItems ? `
+    <table class="doc-items">
+      <thead><tr><th>Description</th><th>HS Code</th><th>Qty</th><th>Unit Price</th><th>Total</th></tr></thead>
+      <tbody>${itemsRows}${extraChargeRow}</tbody>
+      ${grandTotal ? `<tfoot><tr><td colspan="4" style="text-align:right;font-weight:700">Grand Total</td><td style="text-align:right;font-weight:700">${escapeHtml(header.currency||'')} ${grandTotal.toFixed(2)}</td></tr></tfoot>` : ""}
+    </table>` : "";
+
+  const extraRows = stage.extraFields.map(f => {
+    if(["issuerEntity","issuerAddress","buyerOverride","invoiceNo","bankBeneficiary","bankName","accountNo","swiftCode","bankAddress","branchCode","extraChargeLabel","extraChargeAmount"].includes(f.name)) return ""; // shown elsewhere (meta / bank block / items table)
+    const v = docData[f.name];
+    if(!v) return "";
+    return `<div class="doc-field"><span>${f.label}</span><b>${escapeHtml(v)}</b></div>`;
+  }).join("");
+
+  // Who the parties are depends on the leg this document belongs to:
+  //  - UAE routing, manufacturer-issued docs: Buyer = Saif Al Sahra (with their saved address),
+  //    Consignee = the shipper ("to order"). The end customer does not appear here.
+  //  - Saif Al Sahra-issued docs (s10/s11): Buyer = the end customer. No consignee line.
+  //  - Direct export: Buyer = the customer, Consignee = whatever is in the Consignee field.
+  const isSaifIssued = stage.extraFields.some(f => f.name === "issuerEntity");
+  const isUaeManufacturerDoc = routing !== "direct" && !isSaifIssued;
+  let buyerName, buyerAddress;
+  if(isUaeManufacturerDoc){
+    buyerName = SAIF_ENTITY;
+    buyerAddress = (getSettings().exporterAddresses||{})[SAIF_ENTITY] || "";
+  } else {
+    buyerName = docData.buyerOverride || customer || "";
+    buyerAddress = header.buyerAddress || "";
+  }
+  const showConsignee = !isSaifIssued;
+  const letterheadCompany = docData.issuerEntity || header.exporterEntity || "";
+  const letterheadAddress = docData.issuerAddress || header.exporterAddress || "";
+
+  const bankFieldDefs = [
+    {name:"bankBeneficiary", label:"Account Title"},
+    {name:"swiftCode", label:"Swift Code"},
+    {name:"bankName", label:"Bank Name"},
+    {name:"bankAddress", label:"Bank Address"},
+    {name:"accountNo", label:"IBAN #"},
+    {name:"branchCode", label:"Branch Code"},
+  ];
+  const bankRows = bankFieldDefs.map(f => docData[f.name] ? `<div class="doc-field"><span>${f.label}:</span><b>${escapeHtml(docData[f.name])}</b></div>` : "").join("");
+  const bankBlock = bankRows ? `
+    <div class="section-label">Shipper Bank Details</div>
+    <div class="doc-fields">${bankRows}</div>` : "";
+
+  const remarksPrintBlock = docData.remarks ? `
+    <div class="section-label">Remarks</div>
+    <div style="font-size:.85rem;white-space:pre-wrap;">${escapeHtml(docData.remarks)}</div>` : "";
+  const customPrintRows = (docData.customFields||[]).filter(f => f.label && f.value)
+    .map(f => `<div class="doc-field"><span>${escapeHtml(f.label)}:</span><b>${escapeHtml(f.value)}</b></div>`).join("");
+  const customFieldsPrintBlock = customPrintRows ? `
+    <div class="section-label">Additional Info</div>
+    <div class="doc-fields">${customPrintRows}</div>` : "";
+
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${escapeHtml(stage.label)} - ${escapeHtml(ref)}</title>
+  <style>
+    body{font-family:Arial,Helvetica,sans-serif;color:#111;padding:30px;max-width:800px;margin:0 auto;}
+    .doc-header{display:flex;justify-content:space-between;border-bottom:3px solid #0d2b52;padding-bottom:14px;margin-bottom:20px;}
+    .doc-header h1{font-size:1.3rem;color:#0d2b52;margin:0;}
+    .doc-header .company{font-weight:700;font-size:1.05rem;}
+    .doc-header .addr{font-size:.8rem;color:#555;max-width:280px;}
+    .doc-meta{display:flex;justify-content:space-between;margin-bottom:18px;font-size:.85rem;}
+    .doc-meta .invno{margin-top:4px;}
+    .parties{display:flex;gap:24px;margin-bottom:18px;}
+    .party{flex:1;font-size:.85rem;}
+    .party h4{margin:0 0 4px;color:#0d2b52;font-size:.78rem;text-transform:uppercase;letter-spacing:.5px;}
+    .party .addr-line{color:#555;margin-top:2px;}
+    .party .addr-missing{color:#999;font-style:italic;margin-top:2px;}
+    .doc-fields{display:flex;flex-wrap:wrap;gap:10px 26px;margin-bottom:18px;}
+    .doc-field{font-size:.85rem;display:flex;gap:6px;}
+    .doc-field span{color:#666;}
+    .section-label{font-size:.72rem;text-transform:uppercase;letter-spacing:.5px;color:#888;font-weight:700;margin:18px 0 8px;border-top:1px solid #ddd;padding-top:12px;}
+    table.doc-items{width:100%;border-collapse:collapse;margin-bottom:20px;font-size:.85rem;}
+    table.doc-items th{background:#0d2b52;color:#fff;padding:8px;text-align:left;}
+    table.doc-items td{padding:7px 8px;border-bottom:1px solid #ddd;}
+    .signatures{display:flex;justify-content:space-between;margin-top:60px;}
+    .sig{width:200px;border-top:1px solid #333;padding-top:6px;font-size:.8rem;text-align:center;color:#555;}
+    @media print{ body{padding:10mm;} }
+  </style></head>
+  <body>
+    <div class="doc-header">
+      <div>
+        <div class="company">${escapeHtml(letterheadCompany)}</div>
+        <div class="addr">${escapeHtml(letterheadAddress)}</div>
+      </div>
+      <div><h1>${escapeHtml(stage.label)}</h1></div>
+    </div>
+    <div class="doc-meta">
+      <div>
+        <div><b>Ref:</b> ${escapeHtml(ref)}</div>
+        ${(() => {
+          const invField = stage.extraFields.find(f => f.name === "invoiceNo");
+          const invLabel = invField ? invField.label : "Invoice No";
+          if(!docData.invoiceNo) return "";
+          if(invLabel === "Ref Number" && docData.invoiceNo === ref) return ""; // avoid showing the same ref twice
+          return `<div class="invno"><b>${escapeHtml(invLabel)}:</b> ${escapeHtml(docData.invoiceNo)}</div>`;
+        })()}
+      </div>
+      <div><b>Date:</b> ${escapeHtml(docData.invoiceDate||docData.contractDate||docData.blDate||docData.certDate||docData.loadingDate||docData.packingDate||'')}</div>
+    </div>
+    <div class="parties">
+      <div class="party"><h4>Buyer</h4><div>${escapeHtml(buyerName)}</div>${buyerAddress ? `<div class="addr-line">${escapeHtml(buyerAddress)}</div>` : `<div class="addr-missing">No address on file</div>`}</div>
+      ${showConsignee ? `<div class="party"><h4>Consignee</h4>${escapeHtml(header.consignee||'')}</div>` : ''}
+    </div>
+    <div class="doc-fields">
+      <div class="doc-field"><span>Port of Loading:</span><b>${escapeHtml(header.portOfLoading||'')}</b></div>
+      <div class="doc-field"><span>Port of Discharge:</span><b>${escapeHtml(header.portOfDischarge||'')}</b></div>
+      <div class="doc-field"><span>Final Destination:</span><b>${escapeHtml(header.finalDestination||'')}</b></div>
+      ${extraRows}
+    </div>
+    ${itemsTable}
+    ${remarksPrintBlock}
+    ${customFieldsPrintBlock}
+    <div class="section-label">Terms</div>
+    <div class="doc-fields">
+      <div class="doc-field"><span>Incoterm:</span><b>${escapeHtml(header.incoterm||'')}</b></div>
+      <div class="doc-field"><span>Payment Terms:</span><b>${escapeHtml(header.paymentTerms||'')}</b></div>
+    </div>
+    <div class="signatures">
+      <div class="sig">Prepared By</div>
+      <div class="sig">Authorized Signatory</div>
+    </div>
+    ${bankBlock}
+  </body></html>`;
+
+  const w = window.open("", "_blank");
+  w.document.write(html);
+  w.document.close();
+  setTimeout(() => w.print(), 400);
+}
+
+// Packing list print — matches Babji Manufacturing layout
+function printPackingList(header, docData, ref, customer, routing){
+  const items = docData.packingItems || [];
+  // UAE routing: the packing list goes to Saif Al Sahra (the buyer on this leg).
+  const plBuyer = routing !== "direct" ? SAIF_ENTITY : (docData.buyerOverride || customer || "");
+  const plBuyerAddr = routing !== "direct" ? ((getSettings().exporterAddresses||{})[SAIF_ENTITY] || "") : (header.buyerAddress || "");
+  let totPacked=0, totUOM=0, totCBM=0, totNet=0, totGross=0;
+  const rows = items.map((it, i) => {
+    const tp = parseFloat(it.totalPacked)||0;
+    const uom = parseFloat(it.qty) || ((parseFloat(it.unitPacked)||0) * tp); // actual qty if set, else Cartons × Unit Packed
+    const L = parseFloat(it.lengthIn)||0, W = parseFloat(it.widthIn)||0, H = parseFloat(it.heightIn)||0;
+    const cbmPerCtn = (L*W*H) * 0.000016387064; // cubic inches -> m3
+    const netPerCtn = parseFloat(it.netWeightPerCtn)||0, grossPerCtn = parseFloat(it.grossWeightPerCtn)||0;
+    const cbm = parseFloat(it.totalCBM) || (cbmPerCtn*tp), net = netPerCtn*tp, gross = grossPerCtn*tp;
+    totPacked += tp; totUOM += uom; totCBM += cbm; totNet += net; totGross += gross;
+    return `<tr>
+      <td style="text-align:center">${i+1}</td>
+      <td style="text-align:center">${escapeHtml(it.hsCode)}</td>
+      <td>${escapeHtml(it.description)}</td>
+      <td style="text-align:center">${escapeHtml(it.uom)}</td>
+      <td style="text-align:center">${escapeHtml(it.unitPacked)}</td>
+      <td style="text-align:center">${escapeHtml(it.packingType)}</td>
+      <td style="text-align:center">${tp ? tp.toLocaleString() : ''}</td>
+      <td style="text-align:center">${uom ? uom.toLocaleString() : ''}</td>
+      <td style="text-align:center">${cbm ? cbm.toFixed(2) : ''}</td>
+      <td style="text-align:center">${net ? net.toFixed(1) : ''}</td>
+      <td style="text-align:center">${gross ? gross.toFixed(1) : ''}</td>
+    </tr>`;
+  }).join("");
+
+  const isDraft = docData.packingStatus && docData.packingStatus.startsWith("Draft");
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Packing List - ${escapeHtml(ref)}</title>
+  <style>
+    body{font-family:Arial,Helvetica,sans-serif;color:#111;padding:26px;max-width:1000px;margin:0 auto;position:relative;}
+    .company{text-align:center;}
+    .company h1{margin:0;font-size:1.5rem;letter-spacing:.5px;}
+    .company .addr{font-size:.72rem;font-weight:700;margin-top:4px;}
+    h2.doctitle{text-align:center;font-weight:400;font-size:1.25rem;margin:22px 0 18px;letter-spacing:1px;}
+    .meta{display:flex;justify-content:space-between;font-size:.8rem;margin-bottom:16px;}
+    .meta .block div{margin-bottom:3px;}
+    .meta b{text-decoration:underline;}
+    table{width:100%;border-collapse:collapse;font-size:.74rem;}
+    th,td{border:1px solid #333;padding:5px 5px;}
+    th{background:#f5f5f5;text-align:center;}
+    tfoot td{font-weight:700;}
+    .sig{margin-top:70px;width:280px;}
+    .sig .line{border-top:1px solid #333;text-align:center;padding-top:5px;font-size:.8rem;}
+    .section-label{font-size:.72rem;text-transform:uppercase;letter-spacing:.5px;color:#888;font-weight:700;margin:18px 0 8px;border-top:1px solid #ddd;padding-top:12px;}
+    .doc-fields{display:flex;flex-wrap:wrap;gap:10px 26px;}
+    .doc-field{font-size:.85rem;display:flex;gap:6px;}
+    .doc-field span{color:#666;}
+    .draft-banner{background:#fff4e5;border:2px solid #e0a324;color:#7a5200;text-align:center;font-weight:700;padding:8px;margin-bottom:16px;font-size:.85rem;letter-spacing:.5px;}
+    .draft-watermark{position:fixed;top:45%;left:50%;transform:translate(-50%,-50%) rotate(-30deg);font-size:5rem;font-weight:800;color:rgba(200,50,50,0.15);z-index:-1;white-space:nowrap;pointer-events:none;}
+    @media print{ body{padding:8mm;} .draft-watermark{position:fixed;} }
+  </style></head>
+  <body>
+    ${isDraft ? '<div class="draft-watermark">DRAFT — NOT FINAL</div>' : ''}
+    ${isDraft ? '<div class="draft-banner">⚠ DRAFT / PROVISIONAL — Packing not yet finalized. Figures subject to change.</div>' : ''}
+    <div class="company">
+      <h1>${escapeHtml(header.exporterEntity||'BABJI MANUFACTURING').toUpperCase()}</h1>
+      <div class="addr">${escapeHtml(header.exporterAddress||'')}</div>
+    </div>
+    <h2 class="doctitle">PACKING LIST</h2>
+    <div class="meta">
+      <div class="block">
+        <div><b>To/Buyer:</b></div>
+        <div>${escapeHtml(plBuyer)}</div>
+        <div><b>Address:</b></div>
+        <div>${escapeHtml(plBuyerAddr)}</div>
+      </div>
+      <div class="block">
+        <div><b>Loading Port:</b></div>
+        <div>${escapeHtml(header.portOfLoading||'')}</div>
+        <div><b>Destination Port:</b></div>
+        <div>${escapeHtml(header.portOfDischarge||'')}</div>
+      </div>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Sr.No</th><th>HS CODE</th><th>ITEM DESCRIPTION</th><th>UOM</th><th>Unit Packed</th><th>Packing Type</th><th>Total Qty (Packed)</th><th>Total Qty (UOM)</th><th>Total CBM</th><th>Net Wt (kg)</th><th>Gross Wt (kg)</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+      <tfoot>
+        <tr>
+          <td colspan="2" style="text-align:center">Container #<br>${escapeHtml(docData.containerNo||'')}</td>
+          <td colspan="4" style="text-align:center">Total ${escapeHtml(docData.containerType||'')}</td>
+          <td style="text-align:center">${totPacked.toLocaleString()}</td>
+          <td style="text-align:center">${totUOM.toLocaleString()}</td>
+          <td style="text-align:center">${(docData.totalCBM != null && docData.totalCBM !== "") ? escapeHtml(docData.totalCBM) : totCBM.toFixed(2)}</td>
+          <td style="text-align:center">${totNet.toFixed(1)}</td>
+          <td style="text-align:center">${totGross.toFixed(1)}</td>
+        </tr>
+      </tfoot>
+    </table>
+    ${docData.remarks ? `<div class="section-label">Remarks</div><div style="font-size:.85rem;white-space:pre-wrap;">${escapeHtml(docData.remarks)}</div>` : ''}
+    ${(docData.customFields||[]).filter(f=>f.label&&f.value).length ? `<div class="section-label">Additional Info</div><div class="doc-fields">${(docData.customFields||[]).filter(f=>f.label&&f.value).map(f=>`<div class="doc-field"><span>${escapeHtml(f.label)}:</span><b>${escapeHtml(f.value)}</b></div>`).join("")}</div>` : ''}
+    <div class="sig">
+      <div class="line">${escapeHtml(header.exporterEntity||'BABJI MANUFACTURING').toUpperCase()}</div>
+    </div>
+  </body></html>`;
+
+  const w = window.open("", "_blank");
+  w.document.write(html);
+  w.document.close();
+  setTimeout(() => w.print(), 400);
+}
+
+window.App = {
+  addShipment, deleteShipment, openShipment, backToList, selectStage,
+  saveStageData, addItemRow, removeItemRow, render: renderApp,
+  addPackingItemRow, removePackingItemRow, packingRecalc, recalcCartonsFromItems, markCbmOverride,
+  packingCbmRowEdited, packingQtyRowEdited,
+  addCustomFieldRow, removeCustomFieldRow,
+  stageFileSelected, downloadStageFile,
+  duplicateShipment, editShipmentCustomer,
+  showShipmentsTab, showLedgerTab, showExpensesTab, showConsigneesTab, showCatalogTab, showDataTab,
+  addCatalogItem, removeCatalogItem, packingCatalogFill, itemCatalogFill,
+  importTargetChanged, importFileSelected, runImport, saveCompanySettings,
+  downloadBackup, restoreBackup, exportLedgerExcel, whatsappReminder, shipperChanged,
+  addProvider, deleteProvider, openLedger, backToExpenses, addTxn, deleteTxn,
+  addConsignee, deleteConsignee, openConsigneeLedger, backToConsignees, addConsigneeTxn, deleteConsigneeTxn,
+  openQuickExpenseForm, openQuickConsigneeForm, closeQuickForms, quickAddExpenseSubmit, quickAddConsigneeSubmit,
+  loginSubmit, logout
+};
+
+// Surface any otherwise-silent write failure (e.g. Firestore security rules not set up yet)
+window.addEventListener("unhandledrejection", (event) => {
+  console.error("Unhandled error:", event.reason);
+  const msg = (event.reason && event.reason.message) ? event.reason.message : "something went wrong talking to the cloud";
+  toast("Error: " + msg, true);
+});
+
+// ================= FIREBASE BOOTSTRAP: AUTH + LIVE LISTENERS =================
+let activeListenerUnsubs = [];
+
+function attachLiveListeners(){
+  activeListenerUnsubs.push(onSnapshot(query(collection(db, SHIP_COL), orderBy("createdAt", "desc")), snap => {
+    shipments = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    renderApp();
+  }, err => { console.error(err); if(authUser) toast("Sync error (shipments): " + err.message, true); }));
+
+  activeListenerUnsubs.push(onSnapshot(collection(db, PROVIDER_COL), snap => {
+    providers = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a,b) => (b.createdAt?.toMillis?.()||0) - (a.createdAt?.toMillis?.()||0));
+    renderApp();
+  }, err => { console.error(err); if(authUser) toast("Sync error (providers): " + err.message, true); }));
+
+  activeListenerUnsubs.push(onSnapshot(collection(db, TXN_COL), snap => {
+    txnsCache = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    renderApp();
+  }, err => { console.error(err); if(authUser) toast("Sync error (expenses): " + err.message, true); }));
+
+  activeListenerUnsubs.push(onSnapshot(collection(db, CONSIGNEE_COL), snap => {
+    consignees = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .sort((a,b) => (b.createdAt?.toMillis?.()||0) - (a.createdAt?.toMillis?.()||0));
+    renderApp();
+  }, err => { console.error(err); if(authUser) toast("Sync error (consignees): " + err.message, true); }));
+
+  activeListenerUnsubs.push(onSnapshot(collection(db, CTXN_COL), snap => {
+    consigneeTxnsCache = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    renderApp();
+  }, err => { console.error(err); if(authUser) toast("Sync error (receivables): " + err.message, true); }));
+
+  activeListenerUnsubs.push(onSnapshot(collection(db, CATALOG_COL), snap => {
+    catalogCache = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    renderApp();
+  }, err => { console.error(err); if(authUser) toast("Sync error (catalog): " + err.message, true); }));
+
+  activeListenerUnsubs.push(onSnapshot(doc(db, "appSettings", SETTINGS_DOC_ID), snap => {
+    settingsCache = snap.exists() ? snap.data() : {};
+    renderApp();
+  }, err => { console.error(err); if(authUser) toast("Sync error (settings): " + err.message, true); }));
+}
+
+// Properly stop every live listener — called on logout so they don't linger and fail
+// against the now-signed-out session (which was showing a scary but harmless error).
+function detachLiveListeners(){
+  activeListenerUnsubs.forEach(unsub => { try{ unsub(); }catch(e){} });
+  activeListenerUnsubs = [];
+}
+
+if(CONFIG_IS_PLACEHOLDER){
+  renderApp(); // show the "replace firebaseConfig" banner immediately, no auth attempt
+} else {
+  onAuthStateChanged(auth, user => {
+    authUser = user;
+    if(!user){
+      authReady = false;
+      detachLiveListeners();
+      renderApp(); // shows the login screen
+      return;
+    }
+    authReady = true;
+    attachLiveListeners();
+    renderApp();
+  });
+}
+</script>
+</body>
+</html>
