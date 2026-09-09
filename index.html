@@ -198,6 +198,8 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
   <button class="tab" onclick="switchTab('BOM',this)">🔩 BOM</button>
   <button class="tab" onclick="switchTab('Ledger',this)">📒 Ledger</button>
   <button class="tab" onclick="switchTab('Sales',this)">💰 Sales</button>
+  <button class="tab" onclick="switchTab('Packing',this)">📦 Packing</button>
+  <button class="tab" onclick="switchTab('Dispatch',this)">🚚 Dispatch</button>
   <button class="tab" id="costingTab" onclick="switchTab('Costing',this)">📈 Costing</button>
   <button class="tab" id="adminTab" onclick="switchTab('Admin',this)">⚙️ Admin</button>
 </div>
@@ -214,6 +216,8 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
   <div id="tab-SocketDept" class="hidden"></div>
   <div id="tab-Inventory" class="hidden"></div>
   <div id="tab-Wastage" class="hidden"></div>
+  <div id="tab-Packing" class="hidden"></div>
+  <div id="tab-Dispatch" class="hidden"></div>
   <div id="tab-Materials" class="hidden"></div>
   <div id="tab-BOM" class="hidden"></div>
   <div id="tab-Ledger" class="hidden"></div>
@@ -254,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1788608290772;
+const APP_BUILD = 1788937699722;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -275,15 +279,20 @@ const SK = {
   correctionsLog:"wbt_corrections_log",   // Permanent record of every applied ghost-stock correction (8/7-8/8 stale-device incident and future ones)
   dataSnapshots:"wbt_data_snapshots",     // System Watch: timestamped record of every stock number, for detecting unexplained changes
   systemFindings:"wbt_system_findings",   // System Watch: permanent findings inbox with proof images, waits for the owner however long
-  wastageRecons:"wbt_wastage_recons"      // Physical wastage weigh-ins vs system availability — the anti-"off-book sale" reconciliation trail
+  wastageRecons:"wbt_wastage_recons",     // Physical wastage weigh-ins vs system availability — the anti-"off-book sale" reconciliation trail
+  colors:"wbt_colors",                    // Color catalog (packing module 09/09/2026) — shared so Brush/Socket per-color tracking can plug in later
+  boxTypes:"wbt_box_types",               // Box definitions per product: pcs per box + optional fixed color split
+  packedBoxes:"wbt_packed_boxes",         // Packed-box inventory (PK batches) awaiting dispatch — pcs family 'packed' in ledger/shadow
+  packingLog:"wbt_packing_log",           // Append-only log of every packing run
+  dispatches:"wbt_dispatches"             // Permanent dispatch records (gate pass, customer, vehicle) — voidable, never deleted
 };
 
 const DEFAULT_USERS = [
-  { id:1, name:"Admin",              password:"admin123",   role:"admin",      tabs:["Dashboard","Wood Finishing","Brush Dept","Socket Dept","Inventory","Wastage","Materials","BOM","Ledger","Sales"], voidPermissions:{} },
+  { id:1, name:"Admin",              password:"admin123",   role:"admin",      tabs:["Dashboard","Wood Finishing","Brush Dept","Socket Dept","Inventory","Wastage","Materials","BOM","Ledger","Sales","Packing","Dispatch"], voidPermissions:{} },
   { id:2, name:"Production Manager", password:"prod123",    role:"production", tabs:["Dashboard","Wood Finishing","Brush Dept","Socket Dept"], voidPermissions:{"Wood Finishing":{canVoid:true,maxVoids:2,canFlag:true}} },
   { id:3, name:"Store Keeper",       password:"store123",   role:"store",      tabs:["Inventory","Materials","BOM","Ledger"], voidPermissions:{} },
   { id:4, name:"Accountant",         password:"accounts123",role:"accountant", tabs:["Wastage","Sales"], voidPermissions:{"Wastage":{canVoid:false,maxVoids:0,canFlag:true},"Sales":{canVoid:false,maxVoids:0,canFlag:true}} },
-  { id:5, name:"Owner",              password:"owner123",   role:"owner",      tabs:["Dashboard","Wood Finishing","Brush Dept","Socket Dept","Inventory","Wastage","Materials","BOM","Ledger","Sales"], voidPermissions:{} },
+  { id:5, name:"Owner",              password:"owner123",   role:"owner",      tabs:["Dashboard","Wood Finishing","Brush Dept","Socket Dept","Inventory","Wastage","Materials","BOM","Ledger","Sales","Packing","Dispatch"], voidPermissions:{} },
 ];
 const PLANK_SIZES = ["12","24","36"];
 const WASTE_TYPES = ["Bhusa", "Patti", "Gitta"];
@@ -1403,6 +1412,11 @@ let state = {
   correctionsLog: ld(SK.correctionsLog, []),
   brushProcessingLog: ld(SK.brushProcessingLog, []),
   socketProcessingLog: ld(SK.socketProcessingLog, []),
+  colors: ld(SK.colors, []),
+  boxTypes: ld(SK.boxTypes, []),
+  packedBoxes: ld(SK.packedBoxes, []),
+  packingLog: ld(SK.packingLog, []),
+  dispatches: ld(SK.dispatches, []),
   saleModal: null,
   ledgerFilterFrom: '', ledgerFilterTo: '', ledgerFilterSection: 'all',
   ledgerFilterSize: 'all', ledgerFilterBatch: 'all', ledgerFilterDirection: 'all',
@@ -1450,6 +1464,9 @@ function saveAll(){
   sv(SK.dataSnapshots,state.dataSnapshots);
   sv(SK.systemFindings,state.systemFindings);
   sv(SK.socketProcessingLog,state.socketProcessingLog);
+  sv(SK.colors,state.colors); sv(SK.boxTypes,state.boxTypes);
+  sv(SK.packedBoxes,state.packedBoxes); sv(SK.packingLog,state.packingLog);
+  sv(SK.dispatches,state.dispatches);
   // Always sync: writes are per-record diffs (never whole-list overwrites), and Firestore's
   // offline persistence durably queues them if there's no connection right now.
   syncToFirestore();
@@ -1487,6 +1504,8 @@ function getNextBatchNo(prefix){
     ...(state.socketInventory||[]).map(b=>b.batchNo),
     ...(state.screwInventory||[]).map(b=>b.batchNo),
     ...(state.finishedBrushes||[]).map(b=>b.batchNo),
+    ...(state.packedBoxes||[]).map(b=>b.batchNo),
+    ...(state.packingLog||[]).map(b=>b.packBatchNo),
     ...Object.keys(state.batchGenealogy||{}),
   ];
   const re = new RegExp("^"+prefix+"(\\d+)$");
@@ -1573,6 +1592,8 @@ function renderTab(name){
   else if(name==="BOM") el.innerHTML=renderBOM();
   else if(name==="Ledger") el.innerHTML=renderLedger();
   else if(name==="Sales") el.innerHTML=renderSales();
+  else if(name==="Packing") el.innerHTML=renderPacking();
+  else if(name==="Dispatch") el.innerHTML=renderDispatch();
   else if(name==="Costing") el.innerHTML=renderCostAnalysis();
   else if(name==="Admin") el.innerHTML=renderAdminPanel();
 }
@@ -1588,6 +1609,7 @@ function renderDashboard(){
 
   // Owner adjustments are published to EVERY role's dashboard — sunlight is the control.
   let html=renderRecentAdjustmentsCardHTML();
+  html+=renderAdj9CardHTML(); // ADJ-9 one-time correction card (Owner only, auto-hides once applied)
   html+=renderAiReportCardHTML(); // Admin + Owner (moved here from Admin tab 01/09/2026)
 
   // Voided & flagged entries — always visible to Admin/Owner here, regardless of which
@@ -2716,7 +2738,12 @@ function recordBrushProcessing(){
   const preSnapshot = takeSnapshot(['finishedInventory','reworkStock','brushScrapLog','wastage','finishedBrushes','scrapInventory','ledger','brushProcessingLog']);
 
   // Deduct processed quantity from finished wood stock
-  state.finishedInventory = finished.map(f=>f.id===stock.id?{...f,qty:f.qty-total}:f).filter(f=>f.qty>0);
+  // 09/09/2026 (WB002 Jumbo incident): an emptied row is now kept at qty 0 instead of being
+  // deleted. The run that emptied WB002's Jumbo stock had every WRITE propagate but its one
+  // DELETE lost — deletes have no later write to self-heal, so the row resurrected at 639 on
+  // every other device. A zero-qty row is inert (all pickers/cards filter qty>0), converges
+  // like any set, and the periodic cleanup purges it once it's safely old news.
+  state.finishedInventory = finished.map(f=>f.id===stock.id?{...f,qty:f.qty-total}:f).filter(f=>f.qty>0 || f.id===stock.id);
 
   // Color / Regmal → rework stock (pending)
   if(color>0){
@@ -3055,7 +3082,7 @@ function recordSocketProcessing(){
   if(isNilProduct){
     const todayNil = new Date().toISOString().slice(0,10);
     const preSnapshotNil = takeSnapshot(['finishedBrushes','readyForSale','ledger','socketProcessingLog','batchGenealogy']);
-    state.finishedBrushes = brushes.map(b=>b.id===stock.id?{...b,qty:b.qty-qty}:b).filter(b=>b.qty>0);
+    state.finishedBrushes = brushes.map(b=>b.id===stock.id?{...b,qty:b.qty-qty}:b).filter(b=>b.qty>0 || b.id===stock.id); // keep zero row — see WB002 Jumbo incident note
     state.batchGenealogy = state.batchGenealogy||{};
     let fbNoNil = Object.keys(state.batchGenealogy).find(k=>{
       const g = state.batchGenealogy[k];
@@ -3115,7 +3142,7 @@ function recordSocketProcessing(){
   const preSnapshot = takeSnapshot(['finishedBrushes','socketInventory','screwInventory','readyForSale','ledger','socketProcessingLog','batchGenealogy']);
 
   // Deduct finished brushes stock
-  state.finishedBrushes = brushes.map(b=>b.id===stock.id?{...b,qty:b.qty-qty}:b).filter(b=>b.qty>0);
+  state.finishedBrushes = brushes.map(b=>b.id===stock.id?{...b,qty:b.qty-qty}:b).filter(b=>b.qty>0 || b.id===stock.id); // keep zero row — see WB002 Jumbo incident note
 
   // Deduct from the specifically selected socket batch
   state.socketInventory = (state.socketInventory||[]).map(s=>
@@ -3350,6 +3377,13 @@ mergeDuplicateClosedBatches();
       saveAll();
     }
   }
+  // Migration (09/09/2026): existing Admin/Owner user records get the new Packing tab once.
+  (state.users||[]).forEach(u=>{
+    if(u && (u.role==='admin' || u.role==='owner') && Array.isArray(u.tabs)){
+      if(!u.tabs.includes('Packing')) u.tabs = [...u.tabs, 'Packing'];
+      if(!u.tabs.includes('Dispatch')) u.tabs = [...u.tabs, 'Dispatch'];
+    }
+  });
   // Migration: rename "Production" tab to "Wood Finishing" in existing saved users
   let renamedTabs = false;
   state.users = state.users.map(u=>{
@@ -4252,7 +4286,9 @@ function _actEmptyPeriod(){
     rework:{ completedPcs:0, completedByCategory:{} },
     wastage:{ entries:0, totalKg:0, byType:{Bhusa:0,Patti:0,Gitta:0}, bySource:{} },
     wastageSales:{ count:0, kg:0, amountRs:0, byType:{} },
-    plankPurchases:{ entries:0, pcs:0, byVendor:{}, bySize:{} }
+    plankPurchases:{ entries:0, pcs:0, byVendor:{}, bySize:{} },
+    packing:{ runs:0, boxes:0, pcs:0, byProduct:{} },
+    dispatch:{ dispatches:0, boxes:0, pcs:0, byCustomer:{}, byProduct:{} }
   };
 }
 function _actAdd(obj, key, n){ obj[key] = +(((obj[key]||0) + (n||0)).toFixed(2)); }
@@ -4273,6 +4309,8 @@ function _actApplyWastage(p,w){ const ws=p.wastage; ws.entries++; _actAdd(ws,'to
   if(w.type==='BrushDeptWastage'){ _actAdd(p.brushDept,'keereWalaWastagePcs',w.rejectedPieces); _actAdd(p.brushDept,'keereWalaWastageKg',w.wastageKg); } }
 function _actApplySale(p,s){ const x=p.wastageSales; x.count++; _actAdd(x,'kg',s.kgSold); _actAdd(x,'amountRs',s.totalAmount); _actAdd(x.byType,s.wasteType||'?',s.kgSold); }
 function _actApplyPurchase(p,l){ const x=p.plankPurchases; x.entries++; _actAdd(x,'pcs',l.qty); _actAdd(x.byVendor,l.vendor,l.qty); _actAdd(x.bySize,l.material||l.size,l.qty); }
+function _actApplyPacking(p,r){ const x=p.packing; x.runs++; _actAdd(x,'boxes',r.boxes); _actAdd(x,'pcs',r.totalPcs); _actProd(x.byProduct,r.productName,'boxes',r.boxes); _actProd(x.byProduct,r.productName,'pcs',r.totalPcs); }
+function _actApplyDispatch(p,d){ const x=p.dispatch; x.dispatches++; _actAdd(x,'boxes',d.totalBoxes); _actAdd(x,'pcs',d.totalPcs); _actAdd(x.byCustomer,d.customer||'?',d.totalBoxes); (d.items||[]).forEach(it=>{ _actProd(x.byProduct,it.productName,'boxes',it.boxes); _actProd(x.byProduct,it.productName,'pcs',it.pcs); }); }
 
 // ---- shift-day math (Karachi is fixed UTC+5) ----
 const PKT_OFFSET_MS = 5*3600000;
@@ -4321,6 +4359,8 @@ function _actAggregateWindow(win){
   (state.wastage||[]).filter(w=>w&&!w.voided&&instOK(w.date,w.time)).forEach(w=>_actApplyWastage(p,w));
   (state.sales||[]).filter(s=>s&&!s.voided&&s.status!=='pending'&&s.status!=='rejected'&&instOK(s.date,s.time)).forEach(s=>_actApplySale(p,s));
   (state.ledger||[]).filter(l=>l&&l.type==='plank'&&l.direction==='IN'&&l.vendor&&instOK(l.date,l.time)).forEach(l=>_actApplyPurchase(p,l));
+  (state.packingLog||[]).filter(r=>r&&!r.voided&&instOK(r.date,r.time)).forEach(r=>_actApplyPacking(p,r));
+  (state.dispatches||[]).filter(x=>x&&!x.voided&&instOK(x.date,x.time)).forEach(x=>_actApplyDispatch(p,x));
   return p;
 }
 
@@ -4345,6 +4385,8 @@ function compileActivityData(){
   (state.wastage||[]).filter(w=>w&&!w.voided).forEach(w=>buckets(w.date).forEach(b=>_actApplyWastage(b,w)));
   (state.sales||[]).filter(s=>s&&!s.voided&&s.status!=='pending'&&s.status!=='rejected').forEach(s=>buckets(s.date).forEach(b=>_actApplySale(b,s)));
   (state.ledger||[]).filter(l=>l&&l.type==='plank'&&l.direction==='IN'&&l.vendor).forEach(l=>buckets(l.date).forEach(b=>_actApplyPurchase(b,l)));
+  (state.packingLog||[]).filter(r=>r&&!r.voided).forEach(r=>buckets(r.date).forEach(b=>_actApplyPacking(b,r)));
+  (state.dispatches||[]).filter(x=>x&&!x.voided).forEach(x=>buckets(x.date).forEach(b=>_actApplyDispatch(b,x)));
   const sortDesc = o => Object.keys(o).sort().reverse().reduce((a,k)=>{a[k]=o[k];return a;},{});
 
   const now = Date.now();
@@ -4361,7 +4403,9 @@ function compileActivityData(){
     socketDept: (state.socketProcessingLog||[]).filter(r=>r&&!r.voided&&r.date>=cutoffRaw).map(r=>({date:r.date,time:r.time,product:r.productName,brushBatch:r.fbBatchNo,finishedBatch:r.outputBatchNo,qty:r.qty,socketType:r.socketType||null,socketsUsed:r.socketQty,screwsUsed:r.screwQty})),
     wastage: (state.wastage||[]).filter(w=>w&&!w.voided&&w.date>=cutoffRaw).map(w=>({date:w.date,time:w.time,source:w.type,batch:w.batchNo,product:w.woodPieceName,pcs:w.rejectedPieces||null,kg:_actR1(w.wastageKg),split:w.typeSplit||null,reason:w.reason||null})),
     reworkAdded: (state.reworkStock||[]).filter(r=>r&&r.dateAdded>=cutoffRaw).map(r=>({date:r.dateAdded,category:r.category,product:r.productName,batch:r.batchNo,qty:r.qty,status:r.status,completedDate:r.completedDate||null})),
-    voids: (state.voidLog||[]).filter(v=>v&&v.date>=cutoffRaw).map(v=>({date:v.date,dept:v.dept,by:v.userId}))
+    voids: (state.voidLog||[]).filter(v=>v&&v.date>=cutoffRaw).map(v=>({date:v.date,dept:v.dept,by:v.userId})),
+    packing: (state.packingLog||[]).filter(r=>r&&!r.voided&&r.date>=cutoffRaw).map(r=>({date:r.date,time:r.time,packBatch:r.packBatchNo,product:r.productName,boxType:r.boxTypeName,boxes:r.boxes,pcs:r.totalPcs,perBoxColorSplit:r.split,fromBatch:r.sourceFbBatch})),
+    dispatches: (state.dispatches||[]).filter(x=>x&&!x.voided&&x.date>=cutoffRaw).map(x=>({date:x.date,time:x.time,customer:x.customer,gatePass:x.gatePass,vehicle:x.vehicle||null,boxes:x.totalBoxes,pcs:x.totalPcs,items:(x.items||[]).map(it=>({packBatch:it.packBatchNo,product:it.productName,boxes:it.boxes}))}))
   };
   return {
     dates:{ shiftLabel: shift.label, previousShiftLabel: prevShift.label, calendarDateUTC: new Date().toISOString().slice(0,10),
@@ -4428,7 +4472,8 @@ function compileReportData(){
       readyForSale: (state.readyForSale||[]).filter(f=>f.qty>0).map(f=>({product:f.productName, batch:f.batchNo, qty:f.qty})),
       sockets: (state.socketInventory||[]).filter(s=>s.qty>0).map(s=>({type:s.socketType, batch:s.batchNo, qty:s.qty})),
       screws: (state.screwInventory||[]).filter(s=>s.qty>0).map(s=>({batch:s.batchNo, qty:s.qty})),
-      scrap: (state.scrapInventory||[]).filter(s=>s.quantity>0).map(s=>({sizeInches:s.size, batch:s.batch, qty:s.quantity}))
+      scrap: (state.scrapInventory||[]).filter(s=>s.quantity>0).map(s=>({sizeInches:s.size, batch:s.batch, qty:s.quantity})),
+      packedBoxes: (state.packedBoxes||[]).filter(b=>b.boxes>0).map(b=>({product:b.productName, packBatch:b.batchNo, boxType:b.boxTypeName, boxes:b.boxes, pcsPerBox:b.pcsPerBox, totalPcs:(b.boxes||0)*(b.pcsPerBox||0), perBoxColorSplit:b.split}))
     },
     physicalStockChecks: [...(state.wastageRecons||[])].sort((a,b)=>(b.id||0)-(a.id||0)).slice(0,6).map(r=>({date:r.date, by:r.by, results:r.types})),
     ownerCorrectionTrail: [...(state.correctionsLog||[])].sort((a,b)=>(b.id||0)-(a.id||0)).slice(0,20).map(c=>({what:c.details, by:c.by, when:String(c.at||'').slice(0,10)}))
@@ -7147,6 +7192,254 @@ function hideRecentAdjustments(){
   re();
 }
 function showRecentAdjustments(){ try{ localStorage.removeItem('wbt_adj_hidden_upto'); }catch(e){} re(); }
+// ==================== PACKING & DISPATCH MODULE (09/09/2026) ====================
+// Colors live ONLY on boxes for now (Owner decision 09/09): RFS stock stays colorless;
+// a box's color split is declared at packing time. The color catalog and per-color split
+// maps ({colorName: pcs}) are deliberately shared/structured so per-color tracking can be
+// added at Brush Dept (bristles) and Socket Dept later without remodeling this data.
+// Stock family 'packed' (pcs) has full ledger receipts and shadow/System Watch coverage.
+
+function activeColors(){ return (state.colors||[]).filter(c=>c && !c.retired); }
+function addColor(){
+  const el=document.getElementById('newColorName'); const name=(el?.value||'').trim();
+  if(!name){ alert('Enter a color name.'); return; }
+  if((state.colors||[]).some(c=>c.name.toLowerCase()===name.toLowerCase())){ alert('"'+name+'" already exists.'); return; }
+  state.colors=[...(state.colors||[]),{id:Date.now()+Math.random(), name, addedBy:currentUser?.name||'?', addedOn:new Date().toISOString().slice(0,10)}];
+  el.value=''; saveAll(); re();
+}
+function retireColor(id){
+  const c=(state.colors||[]).find(x=>x.id===id); if(!c) return;
+  if(!confirm('Retire color "'+c.name+'"? It stays on all past records — it just leaves the pickers.')) return;
+  c.retired=true; saveAll(); re();
+}
+function addBoxType(){
+  const nameEl=document.getElementById('btName'), prodEl=document.getElementById('btProduct'), pcsEl=document.getElementById('btPcs');
+  const name=(nameEl?.value||'').trim(), productName=prodEl?.value||'', pcsPerBox=parseInt(pcsEl?.value||'0',10);
+  if(!name||!productName||!(pcsPerBox>0)){ alert('Fill box name, product, and pcs per box.'); return; }
+  if((state.boxTypes||[]).some(b=>!b.retired && b.name.toLowerCase()===name.toLowerCase())){ alert('"'+name+'" already exists.'); return; }
+  let fixedSplit=null;
+  const rows=[...document.querySelectorAll('.btSplitQty')];
+  const entered=rows.filter(r=>parseInt(r.value||'0',10)>0);
+  if(entered.length>0){
+    fixedSplit={}; let sum=0;
+    entered.forEach(r=>{ const q=parseInt(r.value,10); fixedSplit[r.dataset.color]=q; sum+=q; });
+    if(sum!==pcsPerBox){ alert('Fixed split adds up to '+sum+' but the box holds '+pcsPerBox+' pcs. Make them equal, or leave the split empty for a free-split box.'); return; }
+  }
+  state.boxTypes=[...(state.boxTypes||[]),{id:Date.now()+Math.random(), name, productName, pcsPerBox, fixedSplit, addedBy:currentUser?.name||'?', addedOn:new Date().toISOString().slice(0,10)}];
+  nameEl.value=''; pcsEl.value=''; rows.forEach(r=>r.value=''); saveAll(); re();
+}
+function retireBoxType(id){
+  const b=(state.boxTypes||[]).find(x=>x.id===id); if(!b) return;
+  if(!confirm('Retire box type "'+b.name+'"? Past records keep it — it just leaves the pickers.')) return;
+  b.retired=true; saveAll(); re();
+}
+
+function packingSplitEditorHTML(prefill, pcsPerBox){
+  const cols=activeColors();
+  if(cols.length===0) return '<div style="font-size:11px;color:#e74c3c;">No colors defined yet — add colors in this tab first.</div>';
+  return '<div style="display:flex;flex-wrap:wrap;gap:6px;">'+cols.map(c=>{
+    const v=prefill && prefill[c.name]!=null ? prefill[c.name] : '';
+    return '<label style="font-size:11px;background:#f7f7f7;border-radius:6px;padding:4px 8px;">'+c.name+' <input type="number" min="0" class="packSplitQty" data-color="'+c.name.replace(/"/g,'&quot;')+'" value="'+v+'" style="width:56px;"></label>';
+  }).join('')+'</div><div style="font-size:11px;color:#888;margin-top:4px;">Per-box split — must add up to exactly <b>'+(pcsPerBox||'?')+'</b> pcs.</div>';
+}
+function onPackBoxTypeChange(){
+  const btId=+document.getElementById('packBoxType')?.value||0;
+  const bt=(state.boxTypes||[]).find(b=>b.id===btId);
+  const holder=document.getElementById('packSplitHolder');
+  if(holder) holder.innerHTML = bt ? packingSplitEditorHTML(bt.fixedSplit, bt.pcsPerBox) : '';
+  updatePackPreview();
+}
+function updatePackPreview(){
+  const btId=+document.getElementById('packBoxType')?.value||0;
+  const bt=(state.boxTypes||[]).find(b=>b.id===btId);
+  const boxes=parseInt(document.getElementById('packBoxes')?.value||'0',10);
+  const pv=document.getElementById('packPreview');
+  if(!pv) return;
+  if(bt && boxes>0){ pv.textContent='= '+(boxes*bt.pcsPerBox)+' pcs will move out of Ready for Sale'; }
+  else pv.textContent='';
+}
+function submitPacking(){
+  if(!requireLiveCloud('Packing')) return;
+  const fbKey=document.getElementById('packSource')?.value||'';
+  const btId=+document.getElementById('packBoxType')?.value||0;
+  const boxes=parseInt(document.getElementById('packBoxes')?.value||'0',10);
+  const bt=(state.boxTypes||[]).find(b=>b.id===btId);
+  if(!fbKey||!bt||!(boxes>0)){ alert('Select source batch, box type, and number of boxes.'); return; }
+  const [fbBatch, prod]=fbKey.split('||');
+  if(prod!==bt.productName){ alert('Box type "'+bt.name+'" is for '+bt.productName+', not '+prod+'.'); return; }
+  const stock=(state.readyForSale||[]).find(r=>r.batchNo===fbBatch && r.productName===prod);
+  const totalPcs=boxes*bt.pcsPerBox;
+  if(!stock || (stock.qty||0)<totalPcs){ alert('Not enough Ready-for-Sale stock in '+fbBatch+' — need '+totalPcs+', have '+(stock?stock.qty:0)+'.'); return; }
+  const split={}; let sum=0;
+  [...document.querySelectorAll('.packSplitQty')].forEach(r=>{ const q=parseInt(r.value||'0',10); if(q>0){ split[r.dataset.color]=q; sum+=q; } });
+  if(sum!==bt.pcsPerBox){ alert('Color split adds up to '+sum+' pcs but each box holds '+bt.pcsPerBox+'. Fix the split.'); return; }
+  const pkNo=getNextBatchNo('PK');
+  const now=new Date();
+  stock.qty=(stock.qty||0)-totalPcs;
+  // keep zero row rather than delete — see WB002 Jumbo incident note in recordBrushProcessing
+  state.packedBoxes=[...(state.packedBoxes||[]),{
+    id:Date.now()+Math.random(), batchNo:pkNo, productName:prod, boxTypeName:bt.name,
+    pcsPerBox:bt.pcsPerBox, boxes, split, sourceFbBatch:fbBatch,
+    date:now.toISOString().slice(0,10), time:now.toTimeString().slice(0,5), by:currentUser?.name||'?'
+  }];
+  state.packingLog=[...(state.packingLog||[]),{
+    id:Date.now()+Math.random(), packBatchNo:pkNo, productName:prod, boxTypeName:bt.name,
+    boxes, pcsPerBox:bt.pcsPerBox, totalPcs, split, sourceFbBatch:fbBatch,
+    date:now.toISOString().slice(0,10), time:now.toTimeString().slice(0,5), by:currentUser?.name||'?'
+  }];
+  const splitTxt=Object.entries(split).map(([c,q])=>q+' '+c).join(' + ');
+  addLedgerEntry('finished', prod+' (Ready for Sale)', fbBatch, totalPcs, 'OUT', 'Packed into '+boxes+' × '+bt.name+' → '+pkNo);
+  addLedgerEntry('packed', prod, pkNo, totalPcs, 'IN', boxes+' boxes × '+bt.pcsPerBox+' pcs ('+splitTxt+'/box) from '+fbBatch);
+  saveAll(); re();
+  alert('Packed: '+boxes+' boxes ('+totalPcs+' pcs) of '+prod+' → '+pkNo);
+}
+function voidPackingRun(logId){
+  if(!requireLiveCloud('Void packing')) return;
+  if(!isAdminOrOwner()){ alert('Admin/Owner only.'); return; }
+  const run=(state.packingLog||[]).find(x=>x.id===logId); if(!run||run.voided) return;
+  const row=(state.packedBoxes||[]).find(b=>b.batchNo===run.packBatchNo);
+  if(!row || row.boxes!==run.boxes){ alert('Cannot void — boxes from '+run.packBatchNo+' were already dispatched (or the row changed). Void the dispatch first.'); return; }
+  const reason=prompt('Reason for voiding this packing run ('+run.packBatchNo+')?'); if(!reason) return;
+  run.voided=true; run.voidReason=reason; run.voidedBy=currentUser?.name||'?'; run.voidedAt=new Date().toISOString();
+  row.boxes=0; row.voidedOut=true; // keep as zero row rather than delete
+  // restore RFS
+  let stock=(state.readyForSale||[]).find(r=>r.batchNo===run.sourceFbBatch && r.productName===run.productName);
+  if(stock){ stock.qty=(stock.qty||0)+run.totalPcs; }
+  else { state.readyForSale=[...(state.readyForSale||[]),{id:Date.now()+Math.random(), batchNo:run.sourceFbBatch, productName:run.productName, qty:run.totalPcs}]; }
+  addLedgerEntry('packed', run.productName, run.packBatchNo, run.totalPcs, 'OUT', 'VOID packing: '+reason);
+  addLedgerEntry('finished', run.productName+' (Ready for Sale)', run.sourceFbBatch, run.totalPcs, 'IN', 'VOID packing '+run.packBatchNo+': '+reason);
+  state.voidLog=[...(state.voidLog||[]),{id:Date.now()+Math.random(), date:new Date().toISOString().slice(0,10), dept:'Packing', userId:currentUser?.name||'?', what:'Packing '+run.packBatchNo, reason}];
+  saveAll(); re();
+}
+function submitDispatch(){
+  if(!requireLiveCloud('Dispatch')) return;
+  const customer=(document.getElementById('dpCustomer')?.value||'').trim();
+  const vehicle=(document.getElementById('dpVehicle')?.value||'').trim();
+  const gatePass=(document.getElementById('dpGatePass')?.value||'').trim();
+  if(!customer||!gatePass){ alert('Customer and gate pass number are required.'); return; }
+  const items=[];
+  [...document.querySelectorAll('.dpBoxes')].forEach(inp=>{
+    const q=parseInt(inp.value||'0',10);
+    if(q>0) items.push({packBatchNo:inp.dataset.pk, boxes:q});
+  });
+  if(items.length===0){ alert('Enter boxes to dispatch against at least one packed batch.'); return; }
+  // validate and apply
+  for(const it of items){
+    const row=(state.packedBoxes||[]).find(b=>b.batchNo===it.packBatchNo);
+    if(!row || (row.boxes||0)<it.boxes){ alert('Not enough boxes in '+it.packBatchNo+'.'); return; }
+    it.productName=row.productName; it.pcsPerBox=row.pcsPerBox; it.pcs=it.boxes*row.pcsPerBox; it.split=row.split; it.boxTypeName=row.boxTypeName;
+  }
+  const now=new Date();
+  const dpId=Date.now()+Math.random();
+  items.forEach(it=>{
+    const row=(state.packedBoxes||[]).find(b=>b.batchNo===it.packBatchNo);
+    row.boxes-=it.boxes; // zero-box rows are kept (pickers filter boxes>0) — deletes don't self-heal if lost
+    addLedgerEntry('packed', it.productName, it.packBatchNo, it.pcs, 'OUT', 'Dispatched to '+customer+' — gate pass '+gatePass+(vehicle?' — vehicle '+vehicle:''));
+  });
+  state.dispatches=[...(state.dispatches||[]),{
+    id:dpId, customer, vehicle, gatePass, items,
+    totalBoxes:items.reduce((a,b)=>a+b.boxes,0), totalPcs:items.reduce((a,b)=>a+b.pcs,0),
+    date:now.toISOString().slice(0,10), time:now.toTimeString().slice(0,5), by:currentUser?.name||'?'
+  }];
+  document.getElementById('dpCustomer').value=''; document.getElementById('dpVehicle').value=''; document.getElementById('dpGatePass').value='';
+  saveAll(); re();
+  alert('Dispatched '+items.reduce((a,b)=>a+b.boxes,0)+' boxes to '+customer+' (gate pass '+gatePass+').');
+}
+function voidDispatch(id){
+  if(!requireLiveCloud('Void dispatch')) return;
+  if(!isAdminOrOwner()){ alert('Admin/Owner only.'); return; }
+  const dp=(state.dispatches||[]).find(x=>x.id===id); if(!dp||dp.voided) return;
+  const reason=prompt('Reason for voiding this dispatch (gate pass '+dp.gatePass+')?'); if(!reason) return;
+  dp.voided=true; dp.voidReason=reason; dp.voidedBy=currentUser?.name||'?'; dp.voidedAt=new Date().toISOString();
+  dp.items.forEach(it=>{
+    let row=(state.packedBoxes||[]).find(b=>b.batchNo===it.packBatchNo);
+    if(row){ row.boxes=(row.boxes||0)+it.boxes; }
+    else { state.packedBoxes=[...(state.packedBoxes||[]),{id:Date.now()+Math.random(), batchNo:it.packBatchNo, productName:it.productName, boxTypeName:it.boxTypeName, pcsPerBox:it.pcsPerBox, boxes:it.boxes, split:it.split||{}, sourceFbBatch:'(restored by void)', date:new Date().toISOString().slice(0,10), time:new Date().toTimeString().slice(0,5), by:currentUser?.name||'?'}]; }
+    addLedgerEntry('packed', it.productName, it.packBatchNo, it.pcs, 'IN', 'VOID dispatch (gate pass '+dp.gatePass+'): '+reason);
+  });
+  state.voidLog=[...(state.voidLog||[]),{id:Date.now()+Math.random(), date:new Date().toISOString().slice(0,10), dept:'Packing', userId:currentUser?.name||'?', what:'Dispatch gate pass '+dp.gatePass, reason}];
+  saveAll(); re();
+}
+
+function renderPacking(){
+  const rfsByProduct={};
+  (state.readyForSale||[]).forEach(r=>{ if(r && (r.qty||0)>0){ (rfsByProduct[r.productName]=rfsByProduct[r.productName]||[]).push(r); } });
+  const activeBoxTypes=(state.boxTypes||[]).filter(b=>b && !b.retired);
+  const packed=(state.packedBoxes||[]).filter(b=>b && (b.boxes||0)>0);
+  const recentPacks=[...(state.packingLog||[])].sort((a,b)=>(b.id||0)-(a.id||0)).slice(0,15);
+  const recentDispatches=[...(state.dispatches||[])].sort((a,b)=>(b.id||0)-(a.id||0)).slice(0,15);
+  let html='<div class="grid-2">';
+
+  // --- left column: catalogs ---
+  html+='<div>';
+  html+='<div class="card"><div class="label">🎨 Colors</div>'
+    +'<div style="font-size:11px;color:#888;margin-bottom:8px;">Shared catalog — used for box color splits now; Brush Dept bristles and Socket colors will use the same list later.</div>'
+    +activeColors().map(c=>'<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #eee;font-size:13px;"><span>'+c.name+'</span><button class="btn btn-gray" style="font-size:10px;padding:2px 8px;" onclick="retireColor('+c.id+')">Retire</button></div>').join('')
+    +'<div style="display:flex;gap:6px;margin-top:8px;"><input id="newColorName" placeholder="e.g. Red" style="flex:1;"><button class="btn" style="background:#27ae60;color:#fff;" onclick="addColor()">+ Add Color</button></div></div>';
+
+  html+='<div class="card"><div class="label">📦 Box Types</div>'
+    +'<div style="font-size:11px;color:#888;margin-bottom:8px;">Per product: pcs per box, and optionally a FIXED color split (auto-filled at packing, still editable). Leave the split empty for boxes whose mix changes every time.</div>'
+    +activeBoxTypes.map(b=>'<div style="padding:5px 0;border-bottom:1px solid #eee;font-size:12px;"><b>'+b.name+'</b> — '+b.productName+', '+b.pcsPerBox+' pcs/box'
+      +(b.fixedSplit?' <span style="color:#888;">(fixed: '+Object.entries(b.fixedSplit).map(([c,q])=>q+' '+c).join(' + ')+')</span>':' <span style="color:#888;">(free split)</span>')
+      +' <button class="btn btn-gray" style="font-size:10px;padding:2px 8px;float:right;" onclick="retireBoxType('+b.id+')">Retire</button></div>').join('')
+    +'<div style="margin-top:8px;"><input id="btName" placeholder="Box name e.g. Commando 12-pc Mixed" style="width:100%;margin-bottom:6px;">'
+    +'<div style="display:flex;gap:6px;margin-bottom:6px;"><select id="btProduct" style="flex:1;">'+(state.woodPieces||[]).map(w=>'<option>'+w.name+'</option>').join('')+'</select>'
+    +'<input id="btPcs" type="number" min="1" placeholder="pcs/box" style="width:90px;"></div>'
+    +'<div style="font-size:11px;color:#666;margin-bottom:4px;">Fixed split (optional):</div>'
+    +'<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px;">'+activeColors().map(c=>'<label style="font-size:11px;background:#f7f7f7;border-radius:6px;padding:4px 8px;">'+c.name+' <input type="number" min="0" class="btSplitQty" data-color="'+c.name.replace(/"/g,'&quot;')+'" style="width:56px;"></label>').join('')+'</div>'
+    +'<button class="btn" style="background:#27ae60;color:#fff;" onclick="addBoxType()">+ Add Box Type</button></div></div>';
+  html+='</div>';
+
+  // --- right column: pack + dispatch ---
+  html+='<div>';
+  html+='<div class="card" style="border:2px solid #27ae60;"><div class="label" style="color:#27ae60;">📦 Pack Boxes</div>'
+    +'<div style="font-size:11px;color:#888;margin-bottom:8px;">Takes pieces OUT of Ready for Sale and creates a packed lot (PK batch) with its color split. Full ledger receipts both sides.</div>'
+    +'<select id="packSource" style="width:100%;margin-bottom:6px;"><option value="">— Ready-for-Sale batch —</option>'
+    +Object.entries(rfsByProduct).map(([prod,rows])=>'<optgroup label="'+prod+'">'+rows.map(r=>'<option value="'+r.batchNo+'||'+prod+'">'+r.batchNo+' — '+r.qty+' pcs</option>').join('')+'</optgroup>').join('')+'</select>'
+    +'<div style="display:flex;gap:6px;margin-bottom:6px;"><select id="packBoxType" onchange="onPackBoxTypeChange()" style="flex:1;"><option value="">— Box type —</option>'
+    +activeBoxTypes.map(b=>'<option value="'+b.id+'">'+b.name+' ('+b.productName+', '+b.pcsPerBox+' pcs)</option>').join('')+'</select>'
+    +'<input id="packBoxes" type="number" min="1" placeholder="boxes" style="width:90px;" oninput="updatePackPreview()"></div>'
+    +'<div id="packSplitHolder"></div>'
+    +'<div id="packPreview" style="font-size:12px;font-weight:700;color:#27ae60;margin:6px 0;"></div>'
+    +'<button class="btn btn-full" style="background:#27ae60;color:#fff;" onclick="submitPacking()">📦 Pack</button></div>';
+
+  html+='<div class="card"><div class="label">📦 Packed Stock (awaiting dispatch)</div>'
+    +(packed.length===0?'<div style="font-size:12px;color:#888;">No packed boxes in stock.</div>'
+      :packed.map(b=>'<div style="padding:5px 0;border-bottom:1px solid #eee;font-size:12px;"><b>'+b.batchNo+'</b> — '+b.boxes+' boxes of '+b.productName+' <span style="color:#888;">('+b.boxTypeName+' · '+b.pcsPerBox+' pcs/box · '+Object.entries(b.split||{}).map(([c,q])=>q+' '+c).join(' + ')+')</span></div>').join(''))
+    +'</div>';
+  html+='</div></div>';
+
+  // --- history ---
+  html+='<div class="card"><div class="label">Recent Packing</div>'
+    +(recentPacks.length===0?'<div style="font-size:12px;color:#888;">Nothing yet.</div>':recentPacks.map(r=>'<div style="padding:6px 0;border-bottom:1px solid #eee;font-size:12px;'+(r.voided?'opacity:.5;text-decoration:line-through;':'')+'"><b>'+r.date+' '+r.time+'</b> — '+r.boxes+' × '+r.boxTypeName+' ('+r.totalPcs+' pcs '+r.productName+') from '+r.sourceFbBatch+' → <b>'+r.packBatchNo+'</b> <span style="color:#888;">('+r.by+')</span>'
+      +(!r.voided?(isAdminOrOwner()?' <button class="btn" style="background:#c0392b;color:#fff;font-size:10px;padding:2px 8px;float:right;" onclick="voidPackingRun('+r.id+')">Void</button>':''):'<div style="font-size:10px;color:#c0392b;">VOIDED: '+(r.voidReason||'')+'</div>')+'</div>').join(''))
+    +'</div>';
+  return html;
+}
+
+function renderDispatch(){
+  const packed=(state.packedBoxes||[]).filter(b=>b && (b.boxes||0)>0);
+  const recentDispatches=[...(state.dispatches||[])].sort((a,b)=>(b.id||0)-(a.id||0)).slice(0,15);
+  let html='';
+  html+='<div class="card" style="border:2px solid #8e44ad;"><div class="label" style="color:#8e44ad;">🚚 Dispatch</div>'
+    +'<div style="font-size:11px;color:#888;margin-bottom:8px;">Boxes leave the factory against a gate pass. Permanent record; voidable by Admin/Owner with a reason.</div>'
+    +(packed.length===0?'<div style="font-size:12px;color:#888;">No packed boxes in stock.</div>'
+      :'<table style="width:100%;font-size:12px;border-collapse:collapse;">'
+        +'<tr style="text-align:left;color:#888;"><th>PK batch</th><th>Product / box</th><th>In stock</th><th>Dispatch</th></tr>'
+        +packed.map(b=>'<tr style="border-top:1px solid #eee;"><td><b>'+b.batchNo+'</b></td><td>'+b.productName+'<div style="color:#888;font-size:10px;">'+b.boxTypeName+' · '+b.pcsPerBox+' pcs/box · '+Object.entries(b.split||{}).map(([c,q])=>q+' '+c).join(' + ')+'</div></td><td>'+b.boxes+' boxes</td><td><input type="number" min="0" max="'+b.boxes+'" class="dpBoxes" data-pk="'+b.batchNo+'" style="width:64px;"></td></tr>').join('')
+        +'</table>'
+        +'<div style="display:flex;gap:6px;margin-top:8px;"><input id="dpCustomer" placeholder="Customer *" style="flex:1;"><input id="dpVehicle" placeholder="Vehicle no." style="width:110px;"></div>'
+        +'<div style="display:flex;gap:6px;margin-top:6px;"><input id="dpGatePass" placeholder="Gate pass no. *" style="flex:1;"><button class="btn" style="background:#8e44ad;color:#fff;" onclick="submitDispatch()">🚚 Dispatch</button></div>')
+    +'</div>';
+  html+='<div class="card"><div class="label">Recent Dispatches</div>'
+    +(recentDispatches.length===0?'<div style="font-size:12px;color:#888;">Nothing yet.</div>':recentDispatches.map(d=>'<div style="padding:6px 0;border-bottom:1px solid #eee;font-size:12px;'+(d.voided?'opacity:.5;text-decoration:line-through;':'')+'"><b>'+d.date+' '+d.time+'</b> — '+d.totalBoxes+' boxes ('+d.totalPcs+' pcs) → <b>'+d.customer+'</b> · gate pass '+d.gatePass+(d.vehicle?' · '+d.vehicle:'')+' <span style="color:#888;">('+d.by+')</span>'
+      +'<div style="color:#888;font-size:10px;">'+d.items.map(it=>it.boxes+' × '+it.packBatchNo+' ('+it.productName+')').join(', ')+'</div>'
+      +(!d.voided?(isAdminOrOwner()?' <button class="btn" style="background:#c0392b;color:#fff;font-size:10px;padding:2px 8px;float:right;" onclick="voidDispatch('+d.id+')">Void</button>':''):'<div style="font-size:10px;color:#c0392b;">VOIDED: '+(d.voidReason||'')+'</div>')+'</div>').join(''))
+    +'</div>';
+  return html;
+}
+// ==================== END PACKING & DISPATCH MODULE ====================
+
 function renderRecentAdjustmentsCardHTML(){
   const adjs = (state.correctionsLog||[]).filter(c=>c && String(c.kind||'').startsWith('owner_adj_'))
     .sort((a,b)=>(b.id||0)-(a.id||0)).slice(0,5);
@@ -7203,6 +7496,54 @@ function renderGhostCorrectionsCardHTML(){
   }
   html += `</div>`;
   return html;
+}
+
+// ==================== ADJ-9 (09/09/2026): WB002 Jumbo phantom stored stock ====================
+// Receipts (verified twice against backups): produced 100+300+239 = 639 into WB002, ONE brush
+// run on 08/09 10:56 processed all 639 (572→BB020 + 32 Color + 22 Regmal + 13 Kharab Maal).
+// The stored row's deletion was the one op that failed to propagate, resurrecting 639 phantom
+// pcs on every device. Correction: set that row's qty to 0 (a SET, not a delete). Live-gated:
+// the card only renders when the CURRENT device's data still shows the exact evidenced
+// condition, verifies receipts live at press time, and logs permanently as owner_adj_9.
+function _adj9Evidence(){
+  const row=(state.finishedInventory||[]).find(f=>f && f.batchNo==='WB002' && f.productName==='Smart Commando Jumbo Broom' && (f.qty||0)>0);
+  if(!row) return null;
+  let bal=0;
+  (state.ledger||[]).forEach(e=>{ if(e && e.type==='finished' && e.batchNo==='WB002' && e.material==='Smart Commando Jumbo Broom'){ bal += e.direction==='IN'?(e.qty||0):-(e.qty||0); } });
+  const run=(state.brushProcessingLog||[]).find(r=>r && !r.voided && r.productName==='Smart Commando Jumbo Broom' && r.sourceBatch==='WB002' && r.fbBatchNo==='BB020');
+  if(Math.round(bal)!==0 || !run) return null; // condition must hold LIVE, exactly as evidenced
+  return {row, bal, run};
+}
+function renderAdj9CardHTML(){
+  if(!currentUser || currentUser.role!=='owner') return '';
+  if((state.correctionsLog||[]).some(c=>c && c.kind==='owner_adj_9')) return '';
+  const ev=_adj9Evidence(); if(!ev) return '';
+  return `<div class="card" style="border:2px solid #c0392b;background:#fff5f5;">
+    <div class="label" style="color:#c0392b;">🧾 ADJ-9 — WB002 Jumbo phantom stock (Owner action)</div>
+    <div style="font-size:11px;color:#666;margin-bottom:8px;">Verified live on this device right now:</div>
+    <table style="width:100%;font-size:12px;border-collapse:collapse;">
+      <tr><td>Produced into WB002 (receipts)</td><td style="text-align:right;"><b>639 pcs</b></td></tr>
+      <tr><td>Processed out 08/09 10:56 (receipts: 572→BB020 + 32 Color + 22 Regmal + 13 Kharab Maal)</td><td style="text-align:right;"><b>639 pcs</b></td></tr>
+      <tr><td>Receipts balance (live)</td><td style="text-align:right;"><b>${Math.round(ev.bal)} pcs</b></td></tr>
+      <tr style="color:#c0392b;"><td>Stored stock row (phantom — its deletion never propagated)</td><td style="text-align:right;"><b>${ev.row.qty} pcs</b></td></tr>
+    </table>
+    <button class="btn btn-full" style="background:#c0392b;color:#fff;margin-top:8px;" onclick="applyAdj9()">Apply ADJ-9 — set this row to 0 (receipts already correct)</button>
+  </div>`;
+}
+function applyAdj9(){
+  if(!requireLiveCloud('ADJ-9')) return;
+  if(!currentUser || currentUser.role!=='owner'){ alert('Owner only.'); return; }
+  const ev=_adj9Evidence();
+  if(!ev){ alert('Live verification failed — the evidenced condition no longer holds on this device. Not applying.'); re(); return; }
+  if(!confirm('ADJ-9: set WB002 Smart Commando Jumbo Broom stored stock from '+ev.row.qty+' to 0?\n\nReceipts already account for every piece (balance 0). No ledger entry is written — this corrects the stored number only.')) return;
+  const before=ev.row.qty;
+  ev.row.qty=0; // SET, not delete — deletes are the op that failed in the first place
+  state.correctionsLog=[...(state.correctionsLog||[]),{
+    id:Date.now()+Math.random(), kind:'owner_adj_9', by:currentUser.name||'Owner', at:new Date().toISOString(),
+    details:'ADJ-9: WB002 Smart Commando Jumbo Broom stored stock '+before+' -> 0. The 08/09 10:56 run processed all 639 produced pcs (receipts balance 0); the emptied row\'s delete never propagated and resurrected as phantom stock. Verified live before applying.'
+  }];
+  saveAll(); re();
+  alert('ADJ-9 applied. Now press "Mark handled" on the shadow finding in System Watch.');
 }
 
 function renderScrapRestorationCardHTML(){
@@ -7295,6 +7636,9 @@ function captureDataSnapshot(){
   // key scheme the ledger/shadow engines already use for scrap (scrap|size|batchTag), so this
   // single addition switches on real monitoring with no other code changes required.
   (state.scrapInventory||[]).forEach(s=>{ q[`scrap|${s.size}|${s.batch}`] = (q[`scrap|${s.size}|${s.batch}`]||0)+(s.quantity||0); });
+  // Packed boxes (09/09/2026): tracked in PCS (boxes × pcsPerBox) to match ledger receipts,
+  // so the genesis-replay shadow and rule 1a cover dispatch stock from day one.
+  (state.packedBoxes||[]).forEach(b=>{ q[`packed|${b.batchNo}|${b.productName}`] = (q[`packed|${b.batchNo}|${b.productName}`]||0)+((b.boxes||0)*(b.pcsPerBox||0)); });
   return {
     id: Date.now() + Math.random(),
     ts: Date.now(),
@@ -7309,6 +7653,8 @@ function captureDataSnapshot(){
       socketProcessingLog: (state.socketProcessingLog||[]).length,
       wastage: (state.wastage||[]).length,
       sales: (state.sales||[]).length,
+      packingLog: (state.packingLog||[]).length,
+      dispatches: (state.dispatches||[]).length,
       voidLog: (state.voidLog||[]).length,
     },
   };
@@ -7513,6 +7859,7 @@ function shadowLedgerEntryKey(e){
     case 'socket': return 'socket|'+e.batchNo+'|'+mat;
     case 'screw':  return 'screw|'+e.batchNo;
     case 'scrap':  return 'scrap|'+String(e.size)+'|'+e.batchNo;
+    case 'packed': return 'packed|'+e.batchNo+'|'+mat;
     case 'finished': {
       if(/\(Brush\)$/.test(mat))          return 'brush|'+e.batchNo+'|'+mat.replace(/ \(Brush\)$/,'');
       if(/\(Ready for Sale\)$/.test(mat)) return 'rfs|'+e.batchNo+'|'+mat.replace(/ \(Ready for Sale\)$/,'');
@@ -8973,7 +9320,7 @@ function renderAuthenticatedApp(){
   const allowedTabs = currentUser.tabs || [];
   const isAdmin = currentUser.role === 'admin' || currentUser.role === 'owner';
   document.querySelectorAll('.tab').forEach(t=>{
-    const tabName = t.textContent.replace('📒','').replace('💰','').replace('📈','').replace('⚙️','').replace('🪥','').replace('🔌','').replace('🔩','').trim();
+    const tabName = t.textContent.replace('📒','').replace('💰','').replace('📈','').replace('⚙️','').replace('🪥','').replace('🔌','').replace('🔩','').replace('📦','').replace('🚚','').trim();
     if(tabName === 'Admin'){
       t.style.display = isAdmin ? '' : 'none';
     } else if(tabName === 'Costing'){
@@ -8989,7 +9336,7 @@ function renderAuthenticatedApp(){
   state.currentTab = firstTab;
   document.querySelectorAll('.tab').forEach(t=>{
     t.classList.remove('active');
-    const tabName = t.textContent.replace('📒','').replace('💰','').replace('🪥','').replace('🔌','').replace('🔩','').trim();
+    const tabName = t.textContent.replace('📒','').replace('💰','').replace('🪥','').replace('🔌','').replace('🔩','').replace('📦','').replace('🚚','').trim();
     if(tabName === firstTab) t.classList.add('active');
   });
   // Update header with user info
@@ -9330,7 +9677,7 @@ function renderCostAnalysis(){
 
 function renderAdminPanel(){
   const users = state.users || DEFAULT_USERS;
-  const allTabs = ["Dashboard","Wood Finishing","Brush Dept","Socket Dept","Inventory","Wastage","Materials","BOM","Ledger","Sales"];
+  const allTabs = ["Dashboard","Wood Finishing","Brush Dept","Socket Dept","Inventory","Wastage","Materials","BOM","Ledger","Sales","Packing","Dispatch"];
   const isOwnerRole = currentUser?.role==='owner';
 
   let html = ``;
@@ -9836,7 +10183,7 @@ function editUser(idx){
     alert('🔒 Only the Owner can edit the Owner account.');
     return;
   }
-  const allTabs = ["Dashboard","Wood Finishing","Brush Dept","Socket Dept","Inventory","Wastage","Materials","BOM","Ledger","Sales"];
+  const allTabs = ["Dashboard","Wood Finishing","Brush Dept","Socket Dept","Inventory","Wastage","Materials","BOM","Ledger","Sales","Packing","Dispatch"];
   
   const modal = document.getElementById('adminModal');
   document.getElementById('adminModalTitle').textContent = `✏️ Edit: ${u.name}`;
@@ -9861,7 +10208,7 @@ function editUser(idx){
 }
 
 function addUser(){
-  const allTabs = ["Dashboard","Wood Finishing","Brush Dept","Socket Dept","Inventory","Wastage","Materials","BOM","Ledger","Sales"];
+  const allTabs = ["Dashboard","Wood Finishing","Brush Dept","Socket Dept","Inventory","Wastage","Materials","BOM","Ledger","Sales","Packing","Dispatch"];
   const modal = document.getElementById('adminModal');
   document.getElementById('adminModalTitle').textContent = '+ Add New User';
   document.getElementById('adminModalBody').innerHTML = `
