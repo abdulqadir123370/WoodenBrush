@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1788937699722;
+const APP_BUILD = 1788950950246;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -5117,7 +5117,7 @@ async function readSlipAndAutofill(file){
     if(data.confidence!=='high'){
       state.saleModal.readStatus = 'unreadable';
       state.saleModal.slipReadKg = data.netWeightKg; // kept for reference/audit even though not trusted
-      if(statusEl) statusEl.innerHTML = `<span style="color:#e67e22;">⚠️ Read ${data.netWeightKg} KG but only with ${data.confidence||'low'} confidence — not trusted enough to auto-fill.</span>`;
+      if(statusEl) statusEl.innerHTML = `<span style="color:#e67e22;">⚠️ Read ${data.netWeightKg} KG but only with ${data.confidence||'low'} confidence — not trusted enough to auto-fill.${data.crossCheckKg!=null?` <b>The slip's own arithmetic computes ${data.crossCheckKg} KG</b> — check the slip and type the correct figure.`:''}${data.notes?` <span style="color:#888;">(${String(data.notes).replace(/</g,'&lt;')})</span>`:''}</span>`;
       boxShow();
       return;
     }
