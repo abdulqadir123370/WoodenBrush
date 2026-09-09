@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1788955840301;
+const APP_BUILD = 1788956351194;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -7329,8 +7329,9 @@ function updatePackPreview(){
   h+='<div style="font-size:12px;margin-top:4px;">'+plan.draws.map(d=>'<div>→ <b>'+d.take+'</b> from '+d.batchNo+(d.fullyConsumed?' <span style="color:#d35400;">(batch fully used)</span>':' ('+(d.systemQty-d.take)+' left)')+'</div>').join('')+'</div>';
   const consumed=plan.draws.filter(d=>d.fullyConsumed);
   if(consumed.length){
-    h+='<div style="margin-top:8px;padding:8px;background:#fff8e6;border-radius:6px;font-size:12px;"><b>Physical count check</b> — these batches end in this run. Enter how many pieces were <i>actually</i> there (system figure prefilled). Any difference is recorded as a packing variance on that batch, for Admin/Owner review.'
-      +consumed.map(d=>'<div style="margin-top:4px;">'+d.batchNo+': system '+d.systemQty+' pcs · actual <input type="number" min="0" class="pkPhys" data-batch="'+d.batchNo+'" data-system="'+d.systemQty+'" value="'+d.systemQty+'" style="width:80px;"></div>').join('')+'</div>';
+    h+='<div style="margin-top:8px;padding:8px;background:#fff8e6;border-radius:6px;font-size:12px;"><b>A batch runs out in this run.</b> Nobody counts loose pieces — just say what the batch actually gave you: full boxes + the loose pieces left when it ran out. (System figure prefilled; change it only if reality differed.)'
+      +consumed.map(d=>{ const fb=Math.floor(d.systemQty/bt.pcsPerBox), lo=d.systemQty%bt.pcsPerBox; return '<div style="margin-top:6px;"><b>'+d.batchNo+'</b> gave: <input type="number" min="0" class="pkPhysBoxes" data-batch="'+d.batchNo+'" value="'+fb+'" style="width:64px;"> full boxes + <input type="number" min="0" max="'+(bt.pcsPerBox-1)+'" class="pkPhysLoose" data-batch="'+d.batchNo+'" value="'+lo+'" style="width:64px;"> loose pcs <span style="color:#888;">(system: '+fb+' boxes + '+lo+' = '+d.systemQty+' pcs)</span></div>'; }).join('')
+      +'<div style="margin-top:6px;color:#888;">Any difference from the system figure is recorded on that batch and shown to Admin/Owner. A few pieces either way is normal; patterns are what get noticed.</div></div>';
   }
   pv.innerHTML=h;
 }
@@ -7360,7 +7361,9 @@ function submitPacking(){
   const by=currentUser?.name||'?';
   // physical counts for batches that end in this run
   const phys={};
-  [...document.querySelectorAll('.pkPhys')].forEach(i=>{ const v=parseInt(i.value,10); if(isFinite(v)&&v>=0) phys[i.dataset.batch]=v; });
+  const looseByBatch={};
+  [...document.querySelectorAll('.pkPhysLoose')].forEach(i=>{ const v=parseInt(i.value,10); looseByBatch[i.dataset.batch]=(isFinite(v)&&v>=0)?v:0; });
+  [...document.querySelectorAll('.pkPhysBoxes')].forEach(i=>{ const v=parseInt(i.value,10); if(isFinite(v)&&v>=0) phys[i.dataset.batch]=v*bt.pcsPerBox+(looseByBatch[i.dataset.batch]||0); });
   // apply variances FIRST (so the plan draws from real quantities)
   const plan0=computePackPlan(prod,totalPcs);
   if(plan0.shortBy>0){ alert('Not enough Ready-for-Sale stock: need '+totalPcs+', have '+plan0.available+'.'); return; }
@@ -7516,8 +7519,8 @@ function renderPacking(){
     +'<button class="btn btn-full" style="background:#27ae60;color:#fff;" onclick="submitPacking()">📦 Pack</button></div>';
 
   html+='<div class="card"><div class="label">✅ Ready for Sale — by batch</div>'
-    +'<div style="font-size:11px;color:#888;margin-bottom:6px;">Physical count: use when a batch ends on its own or a count clearly differs. Every difference is recorded and flagged — small ones are normal here, patterns are not.</div>'
-    +Object.entries(rfsByProduct).map(([prod,rows])=>rows.map(r=>'<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #eee;font-size:12px;"><span>'+prod+' — <b>'+r.batchNo+'</b> · '+r.qty+' pcs</span><button class="btn btn-gray" style="font-size:10px;padding:2px 8px;" onclick="physicalCountRfsBatch(\''+r.batchNo+'\',\''+prod.replace(/'/g,"\\'")+'\')">Physical count</button></div>').join('')).join('')
+    +'<div style="font-size:11px;color:#888;margin-bottom:6px;">Batches are consumed oldest-first as you pack. When one runs out during a run, the pack form asks what it gave (full boxes + loose).'+(isAdminOrOwner()?' Admin/Owner can also correct a batch directly here.':'')+'</div>'
+    +Object.entries(rfsByProduct).map(([prod,rows])=>rows.map(r=>'<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #eee;font-size:12px;"><span>'+prod+' — <b>'+r.batchNo+'</b> · '+r.qty+' pcs</span>'+(isAdminOrOwner()?'<button class="btn btn-gray" style="font-size:10px;padding:2px 8px;" onclick="physicalCountRfsBatch(\''+r.batchNo+'\',\''+prod.replace(/'/g,"\\'")+'\')">Correct count</button>':'')+'</div>').join('')).join('')
     +'</div>';
   html+='<div class="card"><div class="label">📦 Packed Stock (awaiting dispatch)</div>'
     +(packed.length===0?'<div style="font-size:12px;color:#888;">No packed boxes in stock.</div>'
