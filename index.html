@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1788954291565;
+const APP_BUILD = 1788955840301;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -5647,8 +5647,68 @@ function openBatchTraceModal(fbBatchNo){
       </div>`).join('')}
   </div>`;
 
+  html += renderFbDownstreamHTML(fbBatchNo);
   body.innerHTML = html;
   modal.classList.remove('hidden');
+}
+
+// ==== PACKING & DISPATCH TRACE (09/09/2026) ====
+// Same story-telling style as the FB trace, built only from existing records. FB → PK lots
+// → dispatches (customer, gate pass), plus any physical-count variances recorded on the batch.
+function renderFbDownstreamHTML(fbBatchNo){
+  const nf = n => (n||0).toLocaleString();
+  const runs=(state.packingLog||[]).filter(r=>r && (r.sourceDraws||[]).some(d=>d.batchNo===fbBatchNo) || (r && r.sourceFbBatch===fbBatchNo && !r.sourceDraws));
+  const vars=(state.packingVariances||[]).filter(v=>v && v.batchNo===fbBatchNo);
+  if(runs.length===0 && vars.length===0) return '';
+  const packedPcs=runs.reduce((a,r)=>{ if(r.voided) return a; const d=(r.sourceDraws||[]).find(x=>x.batchNo===fbBatchNo); return a+(d?d.qty:(r.totalPcs||0)); },0);
+  let html=`<div class="card" style="border:2px solid #27ae60;margin-bottom:12px;">
+    <div class="label" style="color:#27ae60;">📦 Packing — pieces from this batch boxed for dispatch</div>
+    <div style="font-size:12px;font-weight:700;color:#27ae60;">Total packed from ${fbBatchNo}: ${nf(packedPcs)} pcs${runs.some(r=>r.voided)?' (excludes voided runs)':''}</div>
+    ${runs.map(r=>{ const d=(r.sourceDraws||[]).find(x=>x.batchNo===fbBatchNo); const q=d?d.qty:r.totalPcs; return `<div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;padding:3px 0;border-bottom:1px solid #f0e8de;${r.voided?'opacity:0.5;text-decoration:line-through;':''}">
+      <span>${r.date} — ${nf(q)} pcs → <b>${r.packBatchNo}</b> (${r.boxes} × ${r.boxTypeName}, by ${r.by||'?'})${r.voided?' (voided)':''}</span>
+      <button class="btn" style="background:#27ae60;color:#fff;font-size:10px;padding:2px 8px;" onclick="openPackTraceModal('${r.packBatchNo}')">🧬 Trace ${r.packBatchNo}</button>
+    </div>`; }).join('')}
+  </div>`;
+  if(vars.length){
+    html+=`<div class="card" style="border:2px solid #d35400;margin-bottom:12px;">
+      <div class="label" style="color:#d35400;">🔢 Physical counts recorded on this batch</div>
+      ${vars.map(v=>`<div style="font-size:11px;padding:3px 0;border-bottom:1px solid #f0e8de;">${v.date} ${v.time} — system ${nf(v.systemQty)}, counted ${nf(v.physicalQty)} → <b style="color:${v.diff<0?'#c0392b':'#27ae60'};">${v.diff>0?'+':''}${v.diff} pcs</b> (${v.context}, by ${v.by})</div>`).join('')}
+    </div>`;
+  }
+  return html;
+}
+function openPackTraceModal(pkNo){
+  const body=document.getElementById('batchTraceBody'); const modal=document.getElementById('batchTraceModal');
+  const nf = n => (n||0).toLocaleString();
+  const run=(state.packingLog||[]).find(r=>r && r.packBatchNo===pkNo);
+  const row=(state.packedBoxes||[]).find(b=>b && b.batchNo===pkNo);
+  if(!run){ body.innerHTML=`<div style="color:#aaa;font-size:13px;">No packing record found for ${pkNo}.</div>`; modal.classList.remove('hidden'); return; }
+  const fieldBox = (val) => `<div style="padding:8px 10px;background:#f9f5f0;border-radius:6px;font-weight:600;font-size:14px;">${val!==undefined&&val!==null&&val!==''?val:'—'}</div>`;
+  const draws = run.sourceDraws || [{batchNo:run.sourceFbBatch, qty:run.totalPcs}];
+  const dps=(state.dispatches||[]).filter(d=>d && (d.items||[]).some(it=>it.packBatchNo===pkNo));
+  const dispatchedBoxes=dps.reduce((a,d)=>a+(d.voided?0:(d.items.find(it=>it.packBatchNo===pkNo)?.boxes||0)),0);
+  let html=`<div class="card" style="border:2px solid #27ae60;margin-bottom:12px;">
+    <div class="label" style="color:#27ae60;">📦 This Packed Lot — ${pkNo}${run.voided?' <span style="color:#c0392b;">(VOIDED: '+(run.voidReason||'')+')</span>':''}</div>
+    <div class="grid2">
+      <div><div class="label">Product</div>${fieldBox(run.productName)}</div>
+      <div><div class="label">Packed on</div>${fieldBox(run.date+' '+run.time+' by '+(run.by||'?'))}</div>
+      <div><div class="label">Box type</div>${fieldBox(run.boxTypeName+' · '+run.pcsPerBox+' pcs/box'+(run.assortment?' · '+run.assortment:''))}</div>
+      <div><div class="label">Boxes</div>${fieldBox(nf(run.boxes)+' packed = '+nf(run.totalPcs)+' pcs · '+nf(dispatchedBoxes)+' dispatched · '+nf(row?row.boxes:0)+' in stock')}</div>
+    </div>
+  </div>
+  <div class="card" style="border:2px solid #8e44ad;margin-bottom:12px;">
+    <div class="label" style="color:#8e44ad;">🪥 Where the pieces came from — Ready-for-Sale batches</div>
+    ${draws.map(d=>`<div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;padding:4px 0;border-bottom:1px solid #f0e8de;">
+      <span><b>${d.batchNo}</b> — ${nf(d.qty)} pcs</span>
+      <button class="btn" style="background:#8e44ad;color:#fff;font-size:10px;padding:2px 8px;" onclick="openBatchTraceModal('${d.batchNo}')">🧬 Full story of ${d.batchNo}</button>
+    </div>`).join('')}
+    <div style="font-size:11px;color:#888;margin-top:6px;">Each batch's story traces back through Socket Dept → Brush Dept → Wood Finishing → the plank purchase and vendor.</div>
+  </div>
+  <div class="card" style="border:2px solid #2c3e50;margin-bottom:12px;">
+    <div class="label" style="color:#2c3e50;">🚚 Dispatches from this lot</div>
+    ${dps.length===0?'<div style="color:#aaa;font-size:11px;">Not dispatched yet.</div>':dps.map(d=>{ const it=d.items.find(x=>x.packBatchNo===pkNo); return `<div style="font-size:11px;padding:3px 0;border-bottom:1px solid #f0e8de;${d.voided?'opacity:0.5;text-decoration:line-through;':''}">${d.date} ${d.time} — <b>${nf(it.boxes)} boxes</b> (${nf(it.pcs)} pcs) → <b>${d.customer}</b> · gate pass ${d.gatePass}${d.vehicle?' · '+d.vehicle:''} · by ${d.by||'?'}${d.voided?' (VOIDED: '+(d.voidReason||'')+')':''}</div>`; }).join('')}
+  </div>`;
+  body.innerHTML=html; modal.classList.remove('hidden');
 }
 
 function openViewEntryModal(runId){
@@ -7461,13 +7521,13 @@ function renderPacking(){
     +'</div>';
   html+='<div class="card"><div class="label">📦 Packed Stock (awaiting dispatch)</div>'
     +(packed.length===0?'<div style="font-size:12px;color:#888;">No packed boxes in stock.</div>'
-      :packed.map(b=>'<div style="padding:5px 0;border-bottom:1px solid #eee;font-size:12px;"><b>'+b.batchNo+'</b> — '+b.boxes+' boxes of '+b.productName+' <span style="color:#888;">('+b.boxTypeName+' · '+b.pcsPerBox+' pcs/box'+(b.assortment?' · '+b.assortment:'')+')</span></div>').join(''))
+      :packed.map(b=>'<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid #eee;font-size:12px;"><span><b>'+b.batchNo+'</b> — '+b.boxes+' boxes of '+b.productName+' <span style="color:#888;">('+b.boxTypeName+' · '+b.pcsPerBox+' pcs/box'+(b.assortment?' · '+b.assortment:'')+')</span></span><button class="btn" style="background:#8e44ad;color:#fff;font-size:10px;padding:2px 8px;" onclick="openPackTraceModal(\''+b.batchNo+'\')">🧬 Trace</button></div>').join(''))
     +'</div>';
   html+='</div></div>';
 
   // --- history ---
   html+='<div class="card"><div class="label">Recent Packing</div>'
-    +(recentPacks.length===0?'<div style="font-size:12px;color:#888;">Nothing yet.</div>':recentPacks.map(r=>'<div style="padding:6px 0;border-bottom:1px solid #eee;font-size:12px;'+(r.voided?'opacity:.5;text-decoration:line-through;':'')+'"><b>'+r.date+' '+r.time+'</b> — '+r.boxes+' × '+r.boxTypeName+' ('+r.totalPcs+' pcs '+r.productName+') from '+((r.sourceDraws||[]).map(d=>d.qty+'×'+d.batchNo).join('+')||r.sourceFbBatch)+' → <b>'+r.packBatchNo+'</b> <span style="color:#888;">('+r.by+')</span>'
+    +(recentPacks.length===0?'<div style="font-size:12px;color:#888;">Nothing yet.</div>':recentPacks.map(r=>'<div style="padding:6px 0;border-bottom:1px solid #eee;font-size:12px;'+(r.voided?'opacity:.5;text-decoration:line-through;':'')+'"><b>'+r.date+' '+r.time+'</b> — '+r.boxes+' × '+r.boxTypeName+' ('+r.totalPcs+' pcs '+r.productName+') from '+((r.sourceDraws||[]).map(d=>d.qty+'×'+d.batchNo).join('+')||r.sourceFbBatch)+' → <b>'+r.packBatchNo+'</b> <span style="color:#888;">('+r.by+')</span> <button class="btn" style="background:#8e44ad;color:#fff;font-size:9px;padding:1px 6px;" onclick="openPackTraceModal(\''+r.packBatchNo+'\')">🧬</button>'
       +(!r.voided?(isAdminOrOwner()?' <button class="btn" style="background:#c0392b;color:#fff;font-size:10px;padding:2px 8px;float:right;" onclick="voidPackingRun('+r.id+')">Void</button>':''):'<div style="font-size:10px;color:#c0392b;">VOIDED: '+(r.voidReason||'')+'</div>')+'</div>').join(''))
     +'</div>';
   return html;
@@ -7482,14 +7542,14 @@ function renderDispatch(){
     +(packed.length===0?'<div style="font-size:12px;color:#888;">No packed boxes in stock.</div>'
       :'<table style="width:100%;font-size:12px;border-collapse:collapse;">'
         +'<tr style="text-align:left;color:#888;"><th>PK batch</th><th>Product / box</th><th>In stock</th><th>Dispatch</th></tr>'
-        +packed.map(b=>'<tr style="border-top:1px solid #eee;"><td><b>'+b.batchNo+'</b></td><td>'+b.productName+'<div style="color:#888;font-size:10px;">'+b.boxTypeName+' · '+b.pcsPerBox+' pcs/box'+(b.assortment?' · '+b.assortment:'')+'</div></td><td>'+b.boxes+' boxes</td><td><input type="number" min="0" max="'+b.boxes+'" class="dpBoxes" data-pk="'+b.batchNo+'" style="width:64px;"></td></tr>').join('')
+        +packed.map(b=>'<tr style="border-top:1px solid #eee;"><td><b>'+b.batchNo+'</b><br><button class="btn" style="background:#8e44ad;color:#fff;font-size:9px;padding:1px 6px;" onclick="openPackTraceModal(\''+b.batchNo+'\')">🧬 Trace</button></td><td>'+b.productName+'<div style="color:#888;font-size:10px;">'+b.boxTypeName+' · '+b.pcsPerBox+' pcs/box'+(b.assortment?' · '+b.assortment:'')+'</div></td><td>'+b.boxes+' boxes</td><td><input type="number" min="0" max="'+b.boxes+'" class="dpBoxes" data-pk="'+b.batchNo+'" style="width:64px;"></td></tr>').join('')
         +'</table>'
         +'<div style="display:flex;gap:6px;margin-top:8px;"><input id="dpCustomer" placeholder="Customer *" style="flex:1;"><input id="dpVehicle" placeholder="Vehicle no." style="width:110px;"></div>'
         +'<div style="display:flex;gap:6px;margin-top:6px;"><input id="dpGatePass" placeholder="Gate pass no. *" style="flex:1;"><button class="btn" style="background:#8e44ad;color:#fff;" onclick="submitDispatch()">🚚 Dispatch</button></div>')
     +'</div>';
   html+='<div class="card"><div class="label">Recent Dispatches</div>'
     +(recentDispatches.length===0?'<div style="font-size:12px;color:#888;">Nothing yet.</div>':recentDispatches.map(d=>'<div style="padding:6px 0;border-bottom:1px solid #eee;font-size:12px;'+(d.voided?'opacity:.5;text-decoration:line-through;':'')+'"><b>'+d.date+' '+d.time+'</b> — '+d.totalBoxes+' boxes ('+d.totalPcs+' pcs) → <b>'+d.customer+'</b> · gate pass '+d.gatePass+(d.vehicle?' · '+d.vehicle:'')+' <span style="color:#888;">('+d.by+')</span>'
-      +'<div style="color:#888;font-size:10px;">'+d.items.map(it=>it.boxes+' × '+it.packBatchNo+' ('+it.productName+')').join(', ')+'</div>'
+      +'<div style="color:#888;font-size:10px;">'+d.items.map(it=>it.boxes+' × <a href="#" onclick="openPackTraceModal(\''+it.packBatchNo+'\');return false;" style="color:#8e44ad;font-weight:700;">'+it.packBatchNo+'</a> ('+it.productName+')').join(', ')+'</div>'
       +(!d.voided?(isAdminOrOwner()?' <button class="btn" style="background:#c0392b;color:#fff;font-size:10px;padding:2px 8px;float:right;" onclick="voidDispatch('+d.id+')">Void</button>':''):'<div style="font-size:10px;color:#c0392b;">VOIDED: '+(d.voidReason||'')+'</div>')+'</div>').join(''))
     +'</div>';
   return html;
