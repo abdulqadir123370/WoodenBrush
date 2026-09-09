@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1788950950246;
+const APP_BUILD = 1788953619551;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -4404,7 +4404,7 @@ function compileActivityData(){
     wastage: (state.wastage||[]).filter(w=>w&&!w.voided&&w.date>=cutoffRaw).map(w=>({date:w.date,time:w.time,source:w.type,batch:w.batchNo,product:w.woodPieceName,pcs:w.rejectedPieces||null,kg:_actR1(w.wastageKg),split:w.typeSplit||null,reason:w.reason||null})),
     reworkAdded: (state.reworkStock||[]).filter(r=>r&&r.dateAdded>=cutoffRaw).map(r=>({date:r.dateAdded,category:r.category,product:r.productName,batch:r.batchNo,qty:r.qty,status:r.status,completedDate:r.completedDate||null})),
     voids: (state.voidLog||[]).filter(v=>v&&v.date>=cutoffRaw).map(v=>({date:v.date,dept:v.dept,by:v.userId})),
-    packing: (state.packingLog||[]).filter(r=>r&&!r.voided&&r.date>=cutoffRaw).map(r=>({date:r.date,time:r.time,packBatch:r.packBatchNo,product:r.productName,boxType:r.boxTypeName,boxes:r.boxes,pcs:r.totalPcs,perBoxColorSplit:r.split,fromBatch:r.sourceFbBatch})),
+    packing: (state.packingLog||[]).filter(r=>r&&!r.voided&&r.date>=cutoffRaw).map(r=>({date:r.date,time:r.time,packBatch:r.packBatchNo,product:r.productName,boxType:r.boxTypeName,boxes:r.boxes,pcs:r.totalPcs,assortment:r.assortment||null,fromBatch:r.sourceFbBatch})),
     dispatches: (state.dispatches||[]).filter(x=>x&&!x.voided&&x.date>=cutoffRaw).map(x=>({date:x.date,time:x.time,customer:x.customer,gatePass:x.gatePass,vehicle:x.vehicle||null,boxes:x.totalBoxes,pcs:x.totalPcs,items:(x.items||[]).map(it=>({packBatch:it.packBatchNo,product:it.productName,boxes:it.boxes}))}))
   };
   return {
@@ -4473,7 +4473,7 @@ function compileReportData(){
       sockets: (state.socketInventory||[]).filter(s=>s.qty>0).map(s=>({type:s.socketType, batch:s.batchNo, qty:s.qty})),
       screws: (state.screwInventory||[]).filter(s=>s.qty>0).map(s=>({batch:s.batchNo, qty:s.qty})),
       scrap: (state.scrapInventory||[]).filter(s=>s.quantity>0).map(s=>({sizeInches:s.size, batch:s.batch, qty:s.quantity})),
-      packedBoxes: (state.packedBoxes||[]).filter(b=>b.boxes>0).map(b=>({product:b.productName, packBatch:b.batchNo, boxType:b.boxTypeName, boxes:b.boxes, pcsPerBox:b.pcsPerBox, totalPcs:(b.boxes||0)*(b.pcsPerBox||0), perBoxColorSplit:b.split}))
+      packedBoxes: (state.packedBoxes||[]).filter(b=>b.boxes>0).map(b=>({product:b.productName, packBatch:b.batchNo, boxType:b.boxTypeName, boxes:b.boxes, pcsPerBox:b.pcsPerBox, totalPcs:(b.boxes||0)*(b.pcsPerBox||0), assortment:b.assortment||null}))
     },
     physicalStockChecks: [...(state.wastageRecons||[])].sort((a,b)=>(b.id||0)-(a.id||0)).slice(0,6).map(r=>({date:r.date, by:r.by, results:r.types})),
     ownerCorrectionTrail: [...(state.correctionsLog||[])].sort((a,b)=>(b.id||0)-(a.id||0)).slice(0,20).map(c=>({what:c.details, by:c.by, when:String(c.at||'').slice(0,10)}))
@@ -7213,20 +7213,17 @@ function retireColor(id){
   c.retired=true; saveAll(); re();
 }
 function addBoxType(){
-  const nameEl=document.getElementById('btName'), prodEl=document.getElementById('btProduct'), pcsEl=document.getElementById('btPcs');
-  const name=(nameEl?.value||'').trim(), productName=prodEl?.value||'', pcsPerBox=parseInt(pcsEl?.value||'0',10);
+  // 09/09/2026 (Owner decision): packing is COLORLESS for now. Colors are decided at the brush
+  // machine, which the system doesn't record yet — asking packers for a per-box color split
+  // would only produce invented numbers. Box type = product + pcs/box + an optional assortment
+  // LABEL (a description like "5-color mix", not counts). Per-color tracking returns once it's
+  // captured upstream (Brush Dept → Socket Dept), at which point splits can be validated.
+  const nameEl=document.getElementById('btName'), prodEl=document.getElementById('btProduct'), pcsEl=document.getElementById('btPcs'), labelEl=document.getElementById('btAssort');
+  const name=(nameEl?.value||'').trim(), productName=prodEl?.value||'', pcsPerBox=parseInt(pcsEl?.value||'0',10), assortment=(labelEl?.value||'').trim();
   if(!name||!productName||!(pcsPerBox>0)){ alert('Fill box name, product, and pcs per box.'); return; }
   if((state.boxTypes||[]).some(b=>!b.retired && b.name.toLowerCase()===name.toLowerCase())){ alert('"'+name+'" already exists.'); return; }
-  let fixedSplit=null;
-  const rows=[...document.querySelectorAll('.btSplitQty')];
-  const entered=rows.filter(r=>parseInt(r.value||'0',10)>0);
-  if(entered.length>0){
-    fixedSplit={}; let sum=0;
-    entered.forEach(r=>{ const q=parseInt(r.value,10); fixedSplit[r.dataset.color]=q; sum+=q; });
-    if(sum!==pcsPerBox){ alert('Fixed split adds up to '+sum+' but the box holds '+pcsPerBox+' pcs. Make them equal, or leave the split empty for a free-split box.'); return; }
-  }
-  state.boxTypes=[...(state.boxTypes||[]),{id:Date.now()+Math.random(), name, productName, pcsPerBox, fixedSplit, addedBy:currentUser?.name||'?', addedOn:new Date().toISOString().slice(0,10)}];
-  nameEl.value=''; pcsEl.value=''; rows.forEach(r=>r.value=''); saveAll(); re();
+  state.boxTypes=[...(state.boxTypes||[]),{id:Date.now()+Math.random(), name, productName, pcsPerBox, assortment:assortment||null, fixedSplit:null, addedBy:currentUser?.name||'?', addedOn:new Date().toISOString().slice(0,10)}];
+  nameEl.value=''; pcsEl.value=''; if(labelEl) labelEl.value=''; saveAll(); re();
 }
 function retireBoxType(id){
   const b=(state.boxTypes||[]).find(x=>x.id===id); if(!b) return;
@@ -7245,8 +7242,6 @@ function packingSplitEditorHTML(prefill, pcsPerBox){
 function onPackBoxTypeChange(){
   const btId=+document.getElementById('packBoxType')?.value||0;
   const bt=(state.boxTypes||[]).find(b=>b.id===btId);
-  const holder=document.getElementById('packSplitHolder');
-  if(holder) holder.innerHTML = bt ? packingSplitEditorHTML(bt.fixedSplit, bt.pcsPerBox) : '';
   updatePackPreview();
 }
 function updatePackPreview(){
@@ -7270,26 +7265,23 @@ function submitPacking(){
   const stock=(state.readyForSale||[]).find(r=>r.batchNo===fbBatch && r.productName===prod);
   const totalPcs=boxes*bt.pcsPerBox;
   if(!stock || (stock.qty||0)<totalPcs){ alert('Not enough Ready-for-Sale stock in '+fbBatch+' — need '+totalPcs+', have '+(stock?stock.qty:0)+'.'); return; }
-  const split={}; let sum=0;
-  [...document.querySelectorAll('.packSplitQty')].forEach(r=>{ const q=parseInt(r.value||'0',10); if(q>0){ split[r.dataset.color]=q; sum+=q; } });
-  if(sum!==bt.pcsPerBox){ alert('Color split adds up to '+sum+' pcs but each box holds '+bt.pcsPerBox+'. Fix the split.'); return; }
+  const split=null; // colorless packing (09/09/2026) — see addBoxType note
   const pkNo=getNextBatchNo('PK');
   const now=new Date();
   stock.qty=(stock.qty||0)-totalPcs;
   // keep zero row rather than delete — see WB002 Jumbo incident note in recordBrushProcessing
   state.packedBoxes=[...(state.packedBoxes||[]),{
-    id:Date.now()+Math.random(), batchNo:pkNo, productName:prod, boxTypeName:bt.name,
+    id:Date.now()+Math.random(), batchNo:pkNo, productName:prod, boxTypeName:bt.name, assortment:bt.assortment||null,
     pcsPerBox:bt.pcsPerBox, boxes, split, sourceFbBatch:fbBatch,
     date:now.toISOString().slice(0,10), time:now.toTimeString().slice(0,5), by:currentUser?.name||'?'
   }];
   state.packingLog=[...(state.packingLog||[]),{
-    id:Date.now()+Math.random(), packBatchNo:pkNo, productName:prod, boxTypeName:bt.name,
+    id:Date.now()+Math.random(), packBatchNo:pkNo, productName:prod, boxTypeName:bt.name, assortment:bt.assortment||null,
     boxes, pcsPerBox:bt.pcsPerBox, totalPcs, split, sourceFbBatch:fbBatch,
     date:now.toISOString().slice(0,10), time:now.toTimeString().slice(0,5), by:currentUser?.name||'?'
   }];
-  const splitTxt=Object.entries(split).map(([c,q])=>q+' '+c).join(' + ');
   addLedgerEntry('finished', prod+' (Ready for Sale)', fbBatch, totalPcs, 'OUT', 'Packed into '+boxes+' × '+bt.name+' → '+pkNo);
-  addLedgerEntry('packed', prod, pkNo, totalPcs, 'IN', boxes+' boxes × '+bt.pcsPerBox+' pcs ('+splitTxt+'/box) from '+fbBatch);
+  addLedgerEntry('packed', prod, pkNo, totalPcs, 'IN', boxes+' boxes × '+bt.pcsPerBox+' pcs'+(bt.assortment?' ('+bt.assortment+')':'')+' from '+fbBatch);
   saveAll(); re();
   alert('Packed: '+boxes+' boxes ('+totalPcs+' pcs) of '+prod+' → '+pkNo);
 }
@@ -7370,42 +7362,35 @@ function renderPacking(){
   const recentDispatches=[...(state.dispatches||[])].sort((a,b)=>(b.id||0)-(a.id||0)).slice(0,15);
   let html='<div class="grid-2">';
 
-  // --- left column: catalogs ---
+  // --- left column: catalogs (colorless for now — see addBoxType note) ---
   html+='<div>';
-  html+='<div class="card"><div class="label">🎨 Colors</div>'
-    +'<div style="font-size:11px;color:#888;margin-bottom:8px;">Shared catalog — used for box color splits now; Brush Dept bristles and Socket colors will use the same list later.</div>'
-    +activeColors().map(c=>'<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #eee;font-size:13px;"><span>'+c.name+'</span><button class="btn btn-gray" style="font-size:10px;padding:2px 8px;" onclick="retireColor('+c.id+')">Retire</button></div>').join('')
-    +'<div style="display:flex;gap:6px;margin-top:8px;"><input id="newColorName" placeholder="e.g. Red" style="flex:1;"><button class="btn" style="background:#27ae60;color:#fff;" onclick="addColor()">+ Add Color</button></div></div>';
-
   html+='<div class="card"><div class="label">📦 Box Types</div>'
-    +'<div style="font-size:11px;color:#888;margin-bottom:8px;">Per product: pcs per box, and optionally a FIXED color split (auto-filled at packing, still editable). Leave the split empty for boxes whose mix changes every time.</div>'
+    +'<div style="font-size:11px;color:#888;margin-bottom:8px;">Per product: pcs per box, plus an optional assortment label (e.g. "5-color mix") — a description for the packer, not counts. Colors aren\'t tracked per piece yet.</div>'
     +activeBoxTypes.map(b=>'<div style="padding:5px 0;border-bottom:1px solid #eee;font-size:12px;"><b>'+b.name+'</b> — '+b.productName+', '+b.pcsPerBox+' pcs/box'
-      +(b.fixedSplit?' <span style="color:#888;">(fixed: '+Object.entries(b.fixedSplit).map(([c,q])=>q+' '+c).join(' + ')+')</span>':' <span style="color:#888;">(free split)</span>')
+      +(b.assortment?' <span style="color:#888;">('+b.assortment+')</span>':'')
       +' <button class="btn btn-gray" style="font-size:10px;padding:2px 8px;float:right;" onclick="retireBoxType('+b.id+')">Retire</button></div>').join('')
-    +'<div style="margin-top:8px;"><input id="btName" placeholder="Box name e.g. Commando 12-pc Mixed" style="width:100%;margin-bottom:6px;">'
+    +'<div style="margin-top:8px;"><input id="btName" placeholder="Box name e.g. Commando 12-pc" style="width:100%;margin-bottom:6px;">'
     +'<div style="display:flex;gap:6px;margin-bottom:6px;"><select id="btProduct" style="flex:1;">'+(state.woodPieces||[]).map(w=>'<option>'+w.name+'</option>').join('')+'</select>'
     +'<input id="btPcs" type="number" min="1" placeholder="pcs/box" style="width:90px;"></div>'
-    +'<div style="font-size:11px;color:#666;margin-bottom:4px;">Fixed split (optional):</div>'
-    +'<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px;">'+activeColors().map(c=>'<label style="font-size:11px;background:#f7f7f7;border-radius:6px;padding:4px 8px;">'+c.name+' <input type="number" min="0" class="btSplitQty" data-color="'+c.name.replace(/"/g,'&quot;')+'" style="width:56px;"></label>').join('')+'</div>'
+    +'<input id="btAssort" placeholder="Assortment label (optional) e.g. 5-color mix" style="width:100%;margin-bottom:6px;">'
     +'<button class="btn" style="background:#27ae60;color:#fff;" onclick="addBoxType()">+ Add Box Type</button></div></div>';
   html+='</div>';
 
   // --- right column: pack + dispatch ---
   html+='<div>';
   html+='<div class="card" style="border:2px solid #27ae60;"><div class="label" style="color:#27ae60;">📦 Pack Boxes</div>'
-    +'<div style="font-size:11px;color:#888;margin-bottom:8px;">Takes pieces OUT of Ready for Sale and creates a packed lot (PK batch) with its color split. Full ledger receipts both sides.</div>'
+    +'<div style="font-size:11px;color:#888;margin-bottom:8px;">Takes pieces OUT of Ready for Sale and creates a packed lot (PK batch). Full ledger receipts both sides.</div>'
     +'<select id="packSource" style="width:100%;margin-bottom:6px;"><option value="">— Ready-for-Sale batch —</option>'
     +Object.entries(rfsByProduct).map(([prod,rows])=>'<optgroup label="'+prod+'">'+rows.map(r=>'<option value="'+r.batchNo+'||'+prod+'">'+r.batchNo+' — '+r.qty+' pcs</option>').join('')+'</optgroup>').join('')+'</select>'
     +'<div style="display:flex;gap:6px;margin-bottom:6px;"><select id="packBoxType" onchange="onPackBoxTypeChange()" style="flex:1;"><option value="">— Box type —</option>'
     +activeBoxTypes.map(b=>'<option value="'+b.id+'">'+b.name+' ('+b.productName+', '+b.pcsPerBox+' pcs)</option>').join('')+'</select>'
     +'<input id="packBoxes" type="number" min="1" placeholder="boxes" style="width:90px;" oninput="updatePackPreview()"></div>'
-    +'<div id="packSplitHolder"></div>'
     +'<div id="packPreview" style="font-size:12px;font-weight:700;color:#27ae60;margin:6px 0;"></div>'
     +'<button class="btn btn-full" style="background:#27ae60;color:#fff;" onclick="submitPacking()">📦 Pack</button></div>';
 
   html+='<div class="card"><div class="label">📦 Packed Stock (awaiting dispatch)</div>'
     +(packed.length===0?'<div style="font-size:12px;color:#888;">No packed boxes in stock.</div>'
-      :packed.map(b=>'<div style="padding:5px 0;border-bottom:1px solid #eee;font-size:12px;"><b>'+b.batchNo+'</b> — '+b.boxes+' boxes of '+b.productName+' <span style="color:#888;">('+b.boxTypeName+' · '+b.pcsPerBox+' pcs/box · '+Object.entries(b.split||{}).map(([c,q])=>q+' '+c).join(' + ')+')</span></div>').join(''))
+      :packed.map(b=>'<div style="padding:5px 0;border-bottom:1px solid #eee;font-size:12px;"><b>'+b.batchNo+'</b> — '+b.boxes+' boxes of '+b.productName+' <span style="color:#888;">('+b.boxTypeName+' · '+b.pcsPerBox+' pcs/box'+(b.assortment?' · '+b.assortment:'')+')</span></div>').join(''))
     +'</div>';
   html+='</div></div>';
 
@@ -7426,7 +7411,7 @@ function renderDispatch(){
     +(packed.length===0?'<div style="font-size:12px;color:#888;">No packed boxes in stock.</div>'
       :'<table style="width:100%;font-size:12px;border-collapse:collapse;">'
         +'<tr style="text-align:left;color:#888;"><th>PK batch</th><th>Product / box</th><th>In stock</th><th>Dispatch</th></tr>'
-        +packed.map(b=>'<tr style="border-top:1px solid #eee;"><td><b>'+b.batchNo+'</b></td><td>'+b.productName+'<div style="color:#888;font-size:10px;">'+b.boxTypeName+' · '+b.pcsPerBox+' pcs/box · '+Object.entries(b.split||{}).map(([c,q])=>q+' '+c).join(' + ')+'</div></td><td>'+b.boxes+' boxes</td><td><input type="number" min="0" max="'+b.boxes+'" class="dpBoxes" data-pk="'+b.batchNo+'" style="width:64px;"></td></tr>').join('')
+        +packed.map(b=>'<tr style="border-top:1px solid #eee;"><td><b>'+b.batchNo+'</b></td><td>'+b.productName+'<div style="color:#888;font-size:10px;">'+b.boxTypeName+' · '+b.pcsPerBox+' pcs/box'+(b.assortment?' · '+b.assortment:'')+'</div></td><td>'+b.boxes+' boxes</td><td><input type="number" min="0" max="'+b.boxes+'" class="dpBoxes" data-pk="'+b.batchNo+'" style="width:64px;"></td></tr>').join('')
         +'</table>'
         +'<div style="display:flex;gap:6px;margin-top:8px;"><input id="dpCustomer" placeholder="Customer *" style="flex:1;"><input id="dpVehicle" placeholder="Vehicle no." style="width:110px;"></div>'
         +'<div style="display:flex;gap:6px;margin-top:6px;"><input id="dpGatePass" placeholder="Gate pass no. *" style="flex:1;"><button class="btn" style="background:#8e44ad;color:#fff;" onclick="submitDispatch()">🚚 Dispatch</button></div>')
