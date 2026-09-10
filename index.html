@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1789023315197;
+const APP_BUILD = 1789024509549;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -7319,17 +7319,12 @@ function _packBatchesOf(prod){
     .sort((a,b)=>(parseInt(String(a.batchNo).replace(/\D/g,''),10)||0)-(parseInt(String(b.batchNo).replace(/\D/g,''),10)||0));
 }
 function onPackProductChange(){
-  const prod=document.getElementById('packProduct')?.value||'';
-  const rows=_packBatchesOf(prod);
-  const opts='<option value="">— Batch —</option>'+rows.map(r=>'<option value="'+r.batchNo+'">'+r.batchNo+' — '+r.qty+' pcs</option>').join('');
-  const b1=document.getElementById('packBatch'); if(b1) b1.innerHTML=opts;
-  const b2=document.getElementById('packNextBatch'); if(b2) b2.innerHTML='<option value="">— next batch —</option>'+rows.map(r=>'<option value="'+r.batchNo+'">'+r.batchNo+' — '+r.qty+' pcs</option>').join('');
+  window._packRows=[{batchNo:'',ranOut:false,qty:'',gaveBoxes:'',gaveLoose:''}];
+  renderPackRows();
   updatePackPreview();
 }
 // Records a physical-count difference on a Ready-for-Sale batch: permanent record, ledger
 // receipt so stock and receipts stay in agreement, and a System Watch finding for review.
-// (Definition restored 09/09/2026 — a rewrite dropped it while its call sites remained,
-// which crashed any pack run that declared a variance.)
 function _recordPackingVariance(batchNo, productName, systemQty, physicalQty, by, context){
   const diff=physicalQty-systemQty; if(diff===0) return null;
   const now=new Date();
@@ -7344,66 +7339,102 @@ function _recordPackingVariance(batchNo, productName, systemQty, physicalQty, by
     'Packing'); }catch(e){ console.error('variance finding failed', e); }
   return rec;
 }
-// Explicit-batch pack plan (Owner instruction 09/09/2026: packers pick ANY batch, any order,
-// any day — no FIFO). A run comes from one chosen batch; only if that batch RAN OUT during
-// the run does the packer say what it gave (full boxes + loose) and which batch supplied the
-// rest. That declared figure is the only "count" that ever happens in packing.
+
+// ---- Multi-batch mixing (09/09/2026, second revision): a run isn't limited to one batch plus
+// an overflow batch — the packer adds a row per batch they're deliberately drawing from and
+// says how many pieces come from each; rows can be any number, any batches, any split. Any row
+// can ALSO be marked "ran out" if that batch happened to finish during this run, independently
+// of the others. window._packRows is deliberately NOT in `state` — it's transient UI-only
+// scratch space for the form in progress, reset once the pack is submitted or the product
+// changes; nothing about what actually happened is ever inferred from it, only from what gets
+// submitted.
+function _packRowsEnsureInit(){ if(!window._packRows || window._packRows.length===0){ window._packRows=[{batchNo:'',ranOut:false,qty:'',gaveBoxes:'',gaveLoose:''}]; } }
+function addPackRow(){ _packRowsEnsureInit(); window._packRows.push({batchNo:'',ranOut:false,qty:'',gaveBoxes:'',gaveLoose:''}); renderPackRows(); updatePackPreview(); }
+function removePackRow(idx){ if(!window._packRows || window._packRows.length<=1) return; window._packRows.splice(idx,1); renderPackRows(); updatePackPreview(); }
+function setPackRowField(idx, field, value){
+  if(!window._packRows || !window._packRows[idx]) return;
+  window._packRows[idx][field]=value;
+  if(field==='batchNo' || field==='ranOut') renderPackRows(); // changes what's shown elsewhere (dup-batch exclusion / field shape)
+  updatePackPreview();
+}
+function renderPackRows(){
+  const holder=document.getElementById('packRowsHolder'); if(!holder) return;
+  _packRowsEnsureInit();
+  const prod=document.getElementById('packProduct')?.value||'';
+  const batches=_packBatchesOf(prod);
+  const rows=window._packRows;
+  holder.innerHTML = rows.map((row,idx)=>{
+    const usedElsewhere = rows.filter((r,i)=>i!==idx && r.batchNo).map(r=>r.batchNo);
+    const opts='<option value="">— Batch —</option>'+batches.filter(b=>!usedElsewhere.includes(b.batchNo)).map(b=>'<option value="'+b.batchNo+'"'+(b.batchNo===row.batchNo?' selected':'')+'>'+b.batchNo+' — '+b.qty+' pcs</option>').join('');
+    const fields = row.ranOut
+      ? 'gave <input type="number" min="0" value="'+row.gaveBoxes+'" oninput="setPackRowField('+idx+',\'gaveBoxes\',this.value)" style="width:56px;"> boxes + <input type="number" min="0" value="'+row.gaveLoose+'" oninput="setPackRowField('+idx+',\'gaveLoose\',this.value)" style="width:56px;"> loose'
+      : '<input type="number" min="0" placeholder="pcs" value="'+row.qty+'" oninput="setPackRowField('+idx+',\'qty\',this.value)" style="width:80px;">';
+    return '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;flex-wrap:wrap;">'
+      +'<select onchange="setPackRowField('+idx+',\'batchNo\',this.value)" style="flex:1;min-width:150px;">'+opts+'</select>'
+      +fields
+      +'<label style="font-size:11px;white-space:nowrap;"><input type="checkbox" '+(row.ranOut?'checked':'')+' onchange="setPackRowField('+idx+',\'ranOut\',this.checked)"> ran out</label>'
+      +(rows.length>1?'<button type="button" class="btn btn-gray" style="font-size:10px;padding:2px 8px;" onclick="removePackRow('+idx+')">✕</button>':'')
+      +'</div>';
+  }).join('') + '<button type="button" class="btn btn-gray" style="font-size:11px;" onclick="addPackRow()">+ Add another batch</button>';
+}
 function computeExplicitPackPlan(){
   const prod=document.getElementById('packProduct')?.value||'';
-  const batchA=document.getElementById('packBatch')?.value||'';
   const btId=+document.getElementById('packBoxType')?.value||0;
   const bt=(state.boxTypes||[]).find(b=>b.id===btId);
   const boxes=parseInt(document.getElementById('packBoxes')?.value||'0',10);
-  const ranOut=!!document.getElementById('packRanOut')?.checked;
-  const gaveBoxes=parseInt(document.getElementById('packGaveBoxes')?.value||'0',10)||0;
-  const gaveLoose=parseInt(document.getElementById('packGaveLoose')?.value||'0',10)||0;
-  const batchB=document.getElementById('packNextBatch')?.value||'';
   if(!prod||!bt||!(boxes>0)) return {error:''};
   if(bt.productName!==prod) return {error:'Box type "'+bt.name+'" is for '+bt.productName+', not '+prod+'.'};
-  if(!batchA) return {error:'Choose the batch you packed from.'};
   const total=boxes*bt.pcsPerBox;
-  const rowA=_packBatchesOf(prod).find(r=>r.batchNo===batchA); if(!rowA) return {error:'Batch not found.'};
-  if(!ranOut){
-    if(total>rowA.qty) return {error:'System has only '+rowA.qty+' pcs in '+batchA+' — that\'s '+Math.floor(rowA.qty/bt.pcsPerBox)+' full boxes. If the batch ran out during this run, tick "ran out" and say what it gave; the rest can come from another batch.'};
-    return {prod, bt, boxes, total, draws:[{batchNo:batchA, take:total, systemQty:rowA.qty}], variance:null};
+  _packRowsEnsureInit();
+  const active=window._packRows.filter(r=>r.batchNo);
+  if(active.length===0) return {error:'Choose at least one batch.'};
+  const seen=new Set();
+  for(const r of active){ if(seen.has(r.batchNo)) return {error:'Batch '+r.batchNo+' is chosen in two rows — combine them into one.'}; seen.add(r.batchNo); }
+  const draws=[]; const variances=[]; let sum=0;
+  for(const r of active){
+    const row=_packBatchesOf(prod).find(x=>x.batchNo===r.batchNo);
+    if(!row) return {error:'Batch '+r.batchNo+' not found.'};
+    if(r.ranOut){
+      const gb=parseInt(r.gaveBoxes,10)||0, gl=parseInt(r.gaveLoose,10)||0;
+      if(gl>=bt.pcsPerBox) return {error:r.batchNo+': loose pieces must be less than one box ('+bt.pcsPerBox+').'};
+      const phys=gb*bt.pcsPerBox+gl;
+      draws.push({batchNo:r.batchNo, take:phys, systemQty:row.qty, ranOut:true, physical:phys});
+      sum+=phys;
+      if(phys!==row.qty) variances.push({batchNo:r.batchNo, systemQty:row.qty, physicalQty:phys, diff:phys-row.qty});
+    } else {
+      const q=parseInt(r.qty,10)||0;
+      if(q<=0) return {error:r.batchNo+': enter how many pieces come from it (or tick "ran out").'};
+      if(q>row.qty) return {error:r.batchNo+' only has '+row.qty+' pcs — tick "ran out" if you are taking all of it and want to declare what it actually gave.'};
+      draws.push({batchNo:r.batchNo, take:q, systemQty:row.qty});
+      sum+=q;
+    }
   }
-  if(gaveLoose>=bt.pcsPerBox) return {error:'Loose pieces must be less than one box ('+bt.pcsPerBox+').'};
-  const physA=gaveBoxes*bt.pcsPerBox+gaveLoose;
-  if(physA>total) return {error:batchA+' gave '+physA+' pcs but this run is only '+total+' pcs. Reduce boxes/loose, or untick "ran out".'};
-  const rest=total-physA;
-  const draws=[{batchNo:batchA, take:physA, systemQty:rowA.qty, ranOut:true, physical:physA}];
-  if(rest>0){
-    if(!batchB) return {error:'The run needs '+rest+' more pcs — choose the batch they came from.'};
-    if(batchB===batchA) return {error:'Next batch must be a different batch.'};
-    const rowB=_packBatchesOf(prod).find(r=>r.batchNo===batchB); if(!rowB) return {error:'Next batch not found.'};
-    if(rest>rowB.qty) return {error:'System has only '+rowB.qty+' pcs in '+batchB+' but '+rest+' are needed. If '+batchB+' also ran out, enter this run in two parts.'};
-    draws.push({batchNo:batchB, take:rest, systemQty:rowB.qty});
-  }
-  const variance = physA!==rowA.qty ? {batchNo:batchA, systemQty:rowA.qty, physicalQty:physA, diff:physA-rowA.qty} : null;
-  return {prod, bt, boxes, total, draws, variance};
+  if(sum!==total) return {error:'Batches add up to '+sum+' pcs but this run needs '+total+' pcs. Adjust the quantities, or add another batch row.'};
+  return {prod, bt, boxes, total, draws, variances};
 }
 function updatePackPreview(){
   const pv=document.getElementById('packPreview'); if(!pv) return;
-  const ro=document.getElementById('packRanOutFields'); if(ro) ro.style.display=document.getElementById('packRanOut')?.checked?'block':'none';
   const plan=computeExplicitPackPlan();
   if(plan.error!==undefined){ pv.innerHTML=plan.error?'<span style="color:#e74c3c;">'+plan.error+'</span>':''; return; }
   let h='<div style="font-weight:700;color:#27ae60;">'+plan.boxes+' boxes = '+plan.total+' pcs</div>';
   h+=plan.draws.map(d=>'<div>→ <b>'+d.take+'</b> from '+d.batchNo+(d.ranOut?' <span style="color:#d35400;">(batch finished)</span>':' ('+(d.systemQty-d.take)+' left)')+'</div>').join('');
-  if(plan.variance){ h+='<div style="margin-top:4px;color:'+(plan.variance.diff<0?'#c0392b':'#27ae60')+';">'+plan.variance.batchNo+': system had '+plan.variance.systemQty+', it gave '+plan.variance.physicalQty+' → '+(plan.variance.diff>0?'+':'')+plan.variance.diff+' pcs will be recorded as a packing variance (shown to Admin/Owner).</div>'; }
+  (plan.variances||[]).forEach(v=>{ h+='<div style="margin-top:4px;color:'+(v.diff<0?'#c0392b':'#27ae60')+';">'+v.batchNo+': system had '+v.systemQty+', it gave '+v.physicalQty+' → '+(v.diff>0?'+':'')+v.diff+' pcs will be recorded as a packing variance (shown to Admin/Owner).</div>'; });
   pv.innerHTML=h;
 }
 function submitPacking(){
   if(!requireLiveCloud('Packing')) return;
   const plan=computeExplicitPackPlan();
-  if(plan.error!==undefined){ alert(plan.error||'Fill product, batch, box type and boxes.'); return; }
-  const {prod, bt, boxes, total, draws, variance}=plan;
+  if(plan.error!==undefined){ alert(plan.error||'Fill product, batch(es), box type and boxes.'); return; }
+  const {prod, bt, boxes, total, draws, variances}=plan;
   const by=currentUser?.name||'?';
-  if(variance){
-    if(!confirm(variance.batchNo+': system says '+variance.systemQty+' pcs, it gave '+variance.physicalQty+'. Record a variance of '+(variance.diff>0?'+':'')+variance.diff+' pcs on this batch?')) return;
-    const row=(state.readyForSale||[]).find(r=>r.batchNo===variance.batchNo && r.productName===prod);
-    row.qty=variance.physicalQty;
-    _recordPackingVariance(variance.batchNo, prod, variance.systemQty, variance.physicalQty, by, 'pack run');
+  for(const v of (variances||[])){
+    if(!confirm(v.batchNo+': system says '+v.systemQty+' pcs, it gave '+v.physicalQty+'. Record a variance of '+(v.diff>0?'+':'')+v.diff+' pcs on this batch?')) return;
   }
+  (variances||[]).forEach(v=>{
+    const row=(state.readyForSale||[]).find(r=>r.batchNo===v.batchNo && r.productName===prod);
+    row.qty=v.physicalQty;
+    _recordPackingVariance(v.batchNo, prod, v.systemQty, v.physicalQty, by, 'pack run');
+  });
   const pkNo=getNextBatchNo('PK');
   const now=new Date();
   draws.forEach(d=>{
@@ -7418,6 +7449,7 @@ function submitPacking(){
   state.packedBoxes=[...(state.packedBoxes||[]),{ id:Date.now()+Math.random(), batchNo:pkNo, ...rec }];
   state.packingLog=[...(state.packingLog||[]),{ id:Date.now()+Math.random(), packBatchNo:pkNo, totalPcs:total, ...rec }];
   addLedgerEntry('packed', prod, pkNo, total, 'IN', boxes+' boxes × '+bt.pcsPerBox+' pcs'+(bt.assortment?' ('+bt.assortment+')':'')+' — '+srcTxt);
+  window._packRows=[{batchNo:'',ranOut:false,qty:'',gaveBoxes:'',gaveLoose:''}];
   saveAll(); re();
   alert('Packed: '+boxes+' boxes ('+total+' pcs) of '+prod+' → '+pkNo+'\n'+srcTxt);
 }
@@ -7533,15 +7565,8 @@ function renderPacking(){
     +'<div style="font-size:11px;color:#888;margin-bottom:8px;">Takes pieces OUT of Ready for Sale and creates a packed lot (PK batch). Full ledger receipts both sides.</div>'
     +'<div style="display:flex;gap:6px;margin-bottom:6px;"><select id="packProduct" onchange="onPackProductChange()" style="flex:1;"><option value="">— Product —</option>'
     +Object.entries(rfsByProduct).map(([prod,rows])=>'<option value="'+prod+'">'+prod+' — '+rows.reduce((a,r)=>a+r.qty,0)+' pcs in '+rows.length+' batch(es)</option>').join('')+'</select>'
-    +'<select id="packBatch" onchange="updatePackPreview()" style="flex:1;"><option value="">— Batch —</option></select></div>'
-    +'<div style="display:flex;gap:6px;margin-bottom:6px;"><select id="packBoxType" onchange="onPackBoxTypeChange()" style="flex:1;"><option value="">— Box type —</option>'
-    +activeBoxTypes.map(b=>'<option value="'+b.id+'">'+b.name+' ('+b.productName+', '+b.pcsPerBox+' pcs)</option>').join('')+'</select>'
-    +'<input id="packBoxes" type="number" min="1" placeholder="boxes" style="width:90px;" oninput="updatePackPreview()"></div>'
-    +'<label style="display:block;font-size:12px;margin:6px 0;"><input type="checkbox" id="packRanOut" onchange="updatePackPreview()"> This batch <b>ran out</b> during this run</label>'
-    +'<div id="packRanOutFields" style="display:none;padding:8px;background:#fff8e6;border-radius:6px;font-size:12px;margin-bottom:6px;">'
-      +'It gave <input type="number" min="0" id="packGaveBoxes" oninput="updatePackPreview()" style="width:64px;"> full boxes + <input type="number" min="0" id="packGaveLoose" oninput="updatePackPreview()" style="width:64px;"> loose pcs'
-      +'<div style="margin-top:6px;">Rest came from <select id="packNextBatch" onchange="updatePackPreview()"><option value="">— next batch —</option></select></div>'
-      +'<div style="color:#888;margin-top:4px;">Nobody counts loose pieces — full boxes + what was left when it ran out is all we need. Any difference from the system figure is recorded on that batch.</div></div>'
+    +'<div style="font-size:11px;color:#888;margin:4px 0 6px;">Choose one batch, or mix several — add a row per batch and say how many pieces come from each. If a batch runs out mid-run, tick "ran out" and say what it actually gave (full boxes + loose); the rest can come from another row.</div>'
+    +'<div id="packRowsHolder"></div>'
     +'<div id="packPreview" style="font-size:12px;margin:6px 0;"></div>'
     +'<button class="btn btn-full" style="background:#27ae60;color:#fff;" onclick="submitPacking()">📦 Pack</button></div>';
 
