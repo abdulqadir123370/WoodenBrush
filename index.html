@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1789034635120;
+const APP_BUILD = 1789036481130;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -1508,6 +1508,7 @@ function getNextBatchNo(prefix){
     ...(state.finishedBrushes||[]).map(b=>b.batchNo),
     ...(state.packedBoxes||[]).map(b=>b.batchNo),
     ...(state.packingLog||[]).map(b=>b.packBatchNo),
+    ...(state.dispatches||[]).map(d=>d.challanNo),
     ...Object.keys(state.batchGenealogy||{}),
   ];
   const re = new RegExp("^"+prefix+"(\\d+)$");
@@ -1568,6 +1569,7 @@ function logVoidUsage(dept){
 }
 
 function switchTab(name,el){
+  if(typeof closeCameraScan==='function'){ try{ closeCameraScan(); }catch(e){} } // never leave the camera running across a tab switch
   state.currentTab=name;
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
   el.classList.add('active');
@@ -1595,7 +1597,7 @@ function renderTab(name){
   else if(name==="Ledger") el.innerHTML=renderLedger();
   else if(name==="Sales") el.innerHTML=renderSales();
   else if(name==="Packing") el.innerHTML=renderPacking();
-  else if(name==="Dispatch") el.innerHTML=renderDispatch();
+  else if(name==="Dispatch"){ el.innerHTML=renderDispatch(); setTimeout(()=>document.getElementById('dpScanInput')?.focus(), 50); }
   else if(name==="Costing") el.innerHTML=renderCostAnalysis();
   else if(name==="Admin") el.innerHTML=renderAdminPanel();
 }
@@ -7485,6 +7487,7 @@ function printBoxTags(packBatchNo){
       <div class="t3">Batch: ${a.parts.length===1 ? '<b>'+a.parts[0].batchNo+'</b>' : a.parts.map(p=>'<b>'+p.batchNo+'</b> ('+p.qty+')').join(' + ')}${a.parts.length>1?' <span class="mix">MIX</span>':''}</div>
       <div class="t4">${run.boxTypeName} · ${run.pcsPerBox} pcs${run.assortment?' · '+run.assortment:''}</div>
       <div class="t5">Packed ${run.date} by ${run.by||'?'}</div>
+      <svg class="bc" data-val="${run.packBatchNo}-${a.boxNo}"></svg>
     </div>`;
   const w=window.open('','_blank');
   if(!w){ alert('Popup blocked — allow popups for this site to print tags.'); return; }
@@ -7498,10 +7501,21 @@ function printBoxTags(packBatchNo){
     .mix{background:#000;color:#fff;font-size:9pt;padding:0.5mm 2mm;border-radius:2mm;font-weight:700;}
     .t4{font-size:10pt;color:#333;}
     .t5{font-size:9pt;color:#666;margin-top:1mm;}
+    .bc{width:100%;height:16mm;margin-top:2mm;}
     @media print{ .noprint{display:none;} }
   </style></head><body>
   <div class="noprint" style="margin-bottom:6mm;"><button onclick="window.print()" style="font-size:14pt;padding:4mm 8mm;">🖨️ Print ${run.boxes} tags</button> — cut along the borders, paste one on each box.</div>
   <div class="grid">${alloc.map(tag).join('')}</div>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.5/JsBarcode.all.min.js" onerror="document.querySelectorAll('.bc').forEach(e=>e.style.display='none')"><\/script>
+  <script>
+    // Code 128 barcode per tag, value = PK lot + box number ("PK002-14"): scanning identifies
+    // the exact box; the system knows its batches/product from the pack record. If the
+    // barcode library can't load (offline), tags still print — bars just get hidden.
+    try{
+      if(window.JsBarcode){ document.querySelectorAll('.bc').forEach(el=>{ JsBarcode(el, el.dataset.val, {format:'CODE128', height:40, displayValue:true, fontSize:12, margin:0}); }); }
+      else{ document.querySelectorAll('.bc').forEach(e=>e.style.display='none'); }
+    }catch(e){ document.querySelectorAll('.bc').forEach(x=>x.style.display='none'); }
+  <\/script>
   </body></html>`);
   w.document.close();
 }
@@ -7563,15 +7577,150 @@ function submitDispatch(){
     row.boxes-=it.boxes; // zero-box rows are kept (pickers filter boxes>0) — deletes don't self-heal if lost
     addLedgerEntry('packed', it.productName, it.packBatchNo, it.pcs, 'OUT', 'Dispatched to '+customer+' — gate pass '+gatePass+(vehicle?' — vehicle '+vehicle:''));
   });
+  const challanNo=getNextBatchNo('CH');
   state.dispatches=[...(state.dispatches||[]),{
-    id:dpId, customer, vehicle, gatePass, items,
+    id:dpId, challanNo, customer, vehicle, gatePass, items,
     totalBoxes:items.reduce((a,b)=>a+b.boxes,0), totalPcs:items.reduce((a,b)=>a+b.pcs,0),
     date:now.toISOString().slice(0,10), time:now.toTimeString().slice(0,5), by:currentUser?.name||'?'
   }];
-  document.getElementById('dpCustomer').value=''; document.getElementById('dpVehicle').value=''; document.getElementById('dpGatePass').value='';
+  resetDispatchScanState();
   saveAll(); re();
-  alert('Dispatched '+items.reduce((a,b)=>a+b.boxes,0)+' boxes to '+customer+' (gate pass '+gatePass+').');
+  if(confirm('Dispatched '+items.reduce((a,b)=>a+b.boxes,0)+' boxes to '+customer+' — '+challanNo+' (gate pass '+gatePass+').\n\nPrint the delivery challan now?')){ printDispatchChallan(dpId); }
 }
+// ==================== SCAN-TO-DISPATCH + CHALLAN (10/09/2026) ====================
+// Every packed box already carries a barcode encoding "PKlot-boxNo" (see printBoxTags).
+// Scanning during dispatch is just a fast, error-checked way of filling the SAME per-PK
+// box-count inputs (.dpBoxes) the manual table always used — submitDispatch() itself is
+// unchanged, so typing still works with zero scanner and nothing regresses.
+// _dispatchScanState is transient (not in `state`, not synced) — a box's dispatch only
+// becomes real once "Dispatch" is pressed and the ledger receipts are written.
+let _dispatchScanState = { scans: [] }; // [{id:'PK002-14', pk:'PK002'}], in scan order
+function _dispatchTally(){ const t={}; _dispatchScanState.scans.forEach(s=>{ t[s.pk]=(t[s.pk]||0)+1; }); return t; }
+function _syncDpBoxesInputs(){
+  const tally=_dispatchTally();
+  document.querySelectorAll('.dpBoxes').forEach(inp=>{ const n=tally[inp.dataset.pk]||0; if(n>0) inp.value=n; });
+}
+function renderDispatchScanList(){
+  const holder=document.getElementById('dpScanList'); if(!holder) return;
+  const scans=_dispatchScanState.scans;
+  if(scans.length===0){ holder.innerHTML='<div style="font-size:11px;color:#888;">No boxes scanned yet — scan a tag or type box counts below.</div>'; return; }
+  const tally=_dispatchTally();
+  holder.innerHTML = '<div style="font-size:11px;font-weight:700;margin-bottom:4px;">Scanned: '+Object.entries(tally).map(([pk,n])=>n+' × '+pk).join(', ')+' — '+scans.length+' boxes total</div>'
+    + '<div style="display:flex;flex-wrap:wrap;gap:4px;">'
+    + scans.map((s,i)=>'<span style="background:#f0e8de;border-radius:10px;padding:2px 8px;font-size:11px;">'+s.id+' <a href="#" onclick="removeDispatchScan('+i+');return false;" style="color:#c0392b;font-weight:700;text-decoration:none;">✕</a></span>').join('')
+    + '</div>';
+  _syncDpBoxesInputs();
+}
+function resetDispatchScanState(){ _dispatchScanState={scans:[]}; renderDispatchScanList(); }
+function removeDispatchScan(idx){ _dispatchScanState.scans.splice(idx,1); renderDispatchScanList(); }
+function handleBoxScan(raw){
+  const val=(raw||'').trim();
+  const flash=(ok)=>{ const el=document.getElementById('dpScanInput'); if(!el) return; el.style.background=ok?'#eafaf1':'#fdecea'; setTimeout(()=>{ if(el) el.style.background=''; },500); };
+  if(!val) return;
+  const m=val.match(/^(PK\d+)-(\d+)$/);
+  if(!m){ flash(false); const msg=document.getElementById('dpScanMsg'); if(msg) msg.textContent='Not a box tag: "'+val+'"'; return; }
+  const [, pk] = m;
+  const row=(state.packedBoxes||[]).find(b=>b && b.batchNo===pk);
+  const msg=document.getElementById('dpScanMsg');
+  if(!row || (row.boxes||0)<=0){ flash(false); if(msg) msg.textContent=pk+' has no boxes in stock (already dispatched, or lot not found).'; return; }
+  if(_dispatchScanState.scans.some(s=>s.id===val)){ flash(false); if(msg) msg.textContent=val+' was already scanned in this dispatch.'; return; }
+  const already=_dispatchScanState.scans.filter(s=>s.pk===pk).length;
+  if(already>=row.boxes){ flash(false); if(msg) msg.textContent='Only '+row.boxes+' boxes of '+pk+' in stock — already scanned '+already+'.'; return; }
+  _dispatchScanState.scans.push({id:val, pk});
+  if(msg) msg.textContent='';
+  flash(true);
+  renderDispatchScanList();
+}
+function onDpScanKeydown(ev){
+  if(ev.key!=='Enter') return;
+  ev.preventDefault();
+  const el=ev.target; handleBoxScan(el.value); el.value='';
+}
+
+// ---- Camera scanning (ZXing, loaded on demand — CDN: unpkg.com, official host for this
+// package; if it can't load — offline, blocked network — the button just says so and the
+// keyboard-scanner + manual typing paths are completely unaffected). ----
+let _zxingControls=null;
+function _ensureZXing(cb){
+  if(window.ZXing){ cb(); return; }
+  const s2=document.createElement('script');
+  s2.src='https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js';
+  s2.onload=()=>cb();
+  s2.onerror=()=>{ const msg=document.getElementById('dpScanMsg'); if(msg) msg.textContent='Could not load the camera scanner (no internet?) — use a handheld scanner or type box counts below instead.'; closeCameraScan(); };
+  document.head.appendChild(s2);
+}
+function openCameraScan(){
+  const modal=document.getElementById('camScanModal'); if(!modal) return;
+  modal.classList.remove('hidden');
+  const statusEl=document.getElementById('camScanStatus'); if(statusEl) statusEl.textContent='Loading scanner…';
+  _ensureZXing(()=>{
+    if(statusEl) statusEl.textContent="Point the camera at a box tag's barcode.";
+    try{
+      const hints=new Map(); hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.CODE_128]);
+      const reader=new ZXing.BrowserMultiFormatReader(hints);
+      let lastVal=null, lastAt=0;
+      reader.decodeFromVideoDevice(null, 'camScanVideo', (result)=>{
+        if(!result) return;
+        const text=result.getText(); const now=Date.now();
+        if(text===lastVal && now-lastAt<1500) return; // debounce: same box held in frame
+        lastVal=text; lastAt=now;
+        handleBoxScan(text);
+        if(statusEl) statusEl.textContent='Scanned '+text+' — keep going or close when done.';
+      }).then(controls=>{ _zxingControls=controls; }).catch(e=>{
+        if(statusEl) statusEl.textContent='Could not access the camera — check camera permission for this site.';
+        console.error('camera scan error', e);
+      });
+    }catch(e){ if(statusEl) statusEl.textContent='Camera scanner failed to start.'; console.error(e); }
+  });
+}
+function closeCameraScan(){
+  if(_zxingControls){ try{ _zxingControls.stop(); }catch(e){} _zxingControls=null; }
+  const modal=document.getElementById('camScanModal'); if(modal) modal.classList.add('hidden');
+}
+
+// ---- Dispatch Challan (delivery note), printable — same popup-print pattern as box tags ----
+function printDispatchChallan(dispatchId){
+  const dp=(state.dispatches||[]).find(d=>d && d.id===dispatchId);
+  if(!dp){ alert('Dispatch record not found.'); return; }
+  const w=window.open('','_blank');
+  if(!w){ alert('Popup blocked — allow popups for this site to print the challan.'); return; }
+  const rows=dp.items.map((it,i)=>`<tr><td>${i+1}</td><td>${it.productName}</td><td>${it.boxTypeName||''}</td><td style="text-align:right;">${it.boxes}</td><td style="text-align:right;">${it.pcs}</td><td>${it.packBatchNo}</td></tr>`).join('');
+  w.document.write(`<!DOCTYPE html><html><head><title>Challan ${dp.challanNo||''}</title><style>
+    body{font-family:Arial,sans-serif;margin:14mm;color:#111;}
+    h1{font-size:15pt;margin:0;}
+    h2{font-size:11pt;color:#555;margin:1mm 0 6mm;font-weight:400;}
+    .hdr{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #111;padding-bottom:4mm;margin-bottom:6mm;}
+    .meta{font-size:10.5pt;line-height:1.7;}
+    table{width:100%;border-collapse:collapse;margin-top:4mm;}
+    th,td{border:1px solid #999;padding:2mm 3mm;font-size:10.5pt;text-align:left;}
+    th{background:#f2f2f2;}
+    .tot{font-weight:700;background:#f9f9f9;}
+    .sig{display:flex;justify-content:space-between;margin-top:20mm;}
+    .sigbox{width:45%;border-top:1px solid #111;padding-top:2mm;font-size:10pt;text-align:center;}
+    @media print{ .noprint{display:none;} }
+  </style></head><body>
+  <div class="noprint" style="margin-bottom:6mm;"><button onclick="window.print()" style="font-size:13pt;padding:3mm 7mm;">🖨️ Print</button></div>
+  <div class="hdr">
+    <div><h1>Royal Plastics & Household</h1><h2>Delivery Challan</h2></div>
+    <div class="meta"><b>Challan No:</b> ${dp.challanNo||'—'}<br><b>Date:</b> ${dp.date} ${dp.time}${dp.voided?'<br><b style="color:#c0392b;">VOIDED</b>':''}</div>
+  </div>
+  <div class="meta" style="margin-bottom:4mm;">
+    <b>Customer:</b> ${dp.customer}<br>
+    <b>Vehicle:</b> ${dp.vehicle||'—'} &nbsp;&nbsp; <b>Gate Pass:</b> ${dp.gatePass}
+  </div>
+  <table>
+    <tr><th>#</th><th>Product</th><th>Box Type</th><th>Boxes</th><th>Pcs</th><th>PK Ref</th></tr>
+    ${rows}
+    <tr class="tot"><td colspan="3">Total</td><td style="text-align:right;">${dp.totalBoxes}</td><td style="text-align:right;">${dp.totalPcs}</td><td></td></tr>
+  </table>
+  <div class="sig">
+    <div class="sigbox">Dispatched by<br>(${dp.by||''})</div>
+    <div class="sigbox">Received by</div>
+  </div>
+  </body></html>`);
+  w.document.close();
+}
+
 function voidDispatch(id){
   if(!requireLiveCloud('Void dispatch')) return;
   if(!isAdminOrOwner()){ alert('Admin/Owner only.'); return; }
@@ -7648,11 +7797,17 @@ function renderPacking(){
 }
 
 function renderDispatch(){
+  setTimeout(renderDispatchScanList, 0); // fires after this HTML is inserted into the DOM
   const packed=(state.packedBoxes||[]).filter(b=>b && (b.boxes||0)>0);
   const recentDispatches=[...(state.dispatches||[])].sort((a,b)=>(b.id||0)-(a.id||0)).slice(0,15);
   let html='';
   html+='<div class="card" style="border:2px solid #8e44ad;"><div class="label" style="color:#8e44ad;">🚚 Dispatch</div>'
     +'<div style="font-size:11px;color:#888;margin-bottom:8px;">Boxes leave the factory against a gate pass. Permanent record; voidable by Admin/Owner with a reason.</div>'
+    +'<div style="font-size:11px;font-weight:700;color:#8e44ad;text-transform:uppercase;letter-spacing:.03em;margin-bottom:4px;">Scan boxes</div>'
+    +'<div style="display:flex;gap:6px;margin-bottom:6px;"><input id="dpScanInput" placeholder="Scan a box tag, or type PK002-14 and press Enter" onkeydown="onDpScanKeydown(event)" style="flex:1;font-size:14px;" autocomplete="off"><button class="btn" style="background:#2c3e50;color:#fff;" onclick="openCameraScan()">📷 Camera</button></div>'
+    +'<div id="dpScanMsg" style="font-size:11px;color:#c0392b;min-height:14px;margin-bottom:4px;"></div>'
+    +'<div id="dpScanList" style="margin-bottom:12px;padding:8px;background:#faf7f2;border-radius:6px;"></div>'
+    +'<div style="font-size:11px;font-weight:700;color:#8e44ad;text-transform:uppercase;letter-spacing:.03em;margin-bottom:4px;border-top:1px solid #eee;padding-top:10px;">Or enter box counts directly</div>'
     +(packed.length===0?'<div style="font-size:12px;color:#888;">No packed boxes in stock.</div>'
       :'<table style="width:100%;font-size:12px;border-collapse:collapse;">'
         +'<tr style="text-align:left;color:#888;"><th>PK batch</th><th>Product / box</th><th>In stock</th><th>Dispatch</th></tr>'
@@ -7664,6 +7819,7 @@ function renderDispatch(){
   html+='<div class="card"><div class="label">Recent Dispatches</div>'
     +(recentDispatches.length===0?'<div style="font-size:12px;color:#888;">Nothing yet.</div>':recentDispatches.map(d=>'<div style="padding:6px 0;border-bottom:1px solid #eee;font-size:12px;'+(d.voided?'opacity:.5;text-decoration:line-through;':'')+'"><b>'+d.date+' '+d.time+'</b> — '+d.totalBoxes+' boxes ('+d.totalPcs+' pcs) → <b>'+d.customer+'</b> · gate pass '+d.gatePass+(d.vehicle?' · '+d.vehicle:'')+' <span style="color:#888;">('+d.by+')</span>'
       +'<div style="color:#888;font-size:10px;">'+d.items.map(it=>it.boxes+' × <a href="#" onclick="openPackTraceModal(\''+it.packBatchNo+'\');return false;" style="color:#8e44ad;font-weight:700;">'+it.packBatchNo+'</a> ('+it.productName+')').join(', ')+'</div>'
+      +'<button class="btn" style="background:#2c3e50;color:#fff;font-size:10px;padding:2px 8px;margin-top:2px;" onclick="printDispatchChallan('+d.id+')">🧾 '+(d.challanNo||'Challan')+'</button>'
       +(!d.voided?(isAdminOrOwner()?' <button class="btn" style="background:#c0392b;color:#fff;font-size:10px;padding:2px 8px;float:right;" onclick="voidDispatch('+d.id+')">Void</button>':''):'<div style="font-size:10px;color:#c0392b;">VOIDED: '+(d.voidReason||'')+'</div>')+'</div>').join(''))
     +'</div>';
   return html;
@@ -10777,6 +10933,18 @@ loadFromFirestore();
       <button onclick="document.getElementById('batchTraceModal').classList.add('hidden')" style="background:none;border:none;font-size:20px;cursor:pointer;color:#888;">✕</button>
     </div>
     <div id="batchTraceBody" style="max-height:60vh;overflow-y:auto;"></div>
+  </div>
+</div>
+
+<div id="camScanModal" class="modal-overlay hidden">
+  <div class="modal">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+      <div style="font-size:16px;font-weight:700;">📷 Scan Box Tags</div>
+      <button onclick="closeCameraScan()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#888;">✕</button>
+    </div>
+    <div id="camScanStatus" style="font-size:12px;color:#666;margin-bottom:8px;">Loading scanner…</div>
+    <video id="camScanVideo" style="width:100%;border-radius:8px;background:#000;" playsinline></video>
+    <div style="font-size:11px;color:#888;margin-top:8px;">Scans go straight into the dispatch below — keep this open and scan every box, then close and press Dispatch.</div>
   </div>
 </div>
 
