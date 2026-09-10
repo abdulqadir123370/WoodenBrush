@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1789024509549;
+const APP_BUILD = 1789026049817;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -7562,15 +7562,22 @@ function renderPacking(){
   // --- right column: pack + dispatch ---
   html+='<div>';
   html+='<div class="card" style="border:2px solid #27ae60;"><div class="label" style="color:#27ae60;">📦 Pack Boxes</div>'
-    +'<div style="font-size:11px;color:#888;margin-bottom:8px;">Takes pieces OUT of Ready for Sale and creates a packed lot (PK batch). Full ledger receipts both sides.</div>'
-    +'<div style="display:flex;gap:6px;margin-bottom:6px;"><select id="packProduct" onchange="onPackProductChange()" style="flex:1;"><option value="">— Product —</option>'
+    +'<div style="font-size:11px;color:#888;margin-bottom:10px;">Takes pieces OUT of Ready for Sale and creates a packed lot (PK batch). Full ledger receipts both sides.</div>'
+    +'<div style="font-size:11px;font-weight:700;color:#27ae60;text-transform:uppercase;letter-spacing:.03em;margin-bottom:4px;">What to pack</div>'
+    +'<select id="packProduct" onchange="onPackProductChange()" style="width:100%;margin-bottom:6px;"><option value="">— Product —</option>'
     +Object.entries(rfsByProduct).map(([prod,rows])=>'<option value="'+prod+'">'+prod+' — '+rows.reduce((a,r)=>a+r.qty,0)+' pcs in '+rows.length+' batch(es)</option>').join('')+'</select>'
-    +'<div style="font-size:11px;color:#888;margin:4px 0 6px;">Choose one batch, or mix several — add a row per batch and say how many pieces come from each. If a batch runs out mid-run, tick "ran out" and say what it actually gave (full boxes + loose); the rest can come from another row.</div>'
+    +'<div style="display:flex;gap:6px;margin-bottom:12px;"><select id="packBoxType" onchange="onPackBoxTypeChange()" style="flex:1;"><option value="">— Box type —</option>'
+    +activeBoxTypes.map(b=>'<option value="'+b.id+'">'+b.name+' ('+b.productName+', '+b.pcsPerBox+' pcs)</option>').join('')+'</select>'
+    +'<input id="packBoxes" type="number" min="1" placeholder="boxes" style="width:90px;" oninput="updatePackPreview()"></div>'
+    +'<div style="border-top:1px solid #eee;padding-top:10px;">'
+    +'<div style="font-size:11px;font-weight:700;color:#27ae60;text-transform:uppercase;letter-spacing:.03em;margin-bottom:4px;">Which batch(es)</div>'
+    +'<div style="font-size:11px;color:#888;margin-bottom:8px;">Choose one batch, or mix several — add a row per batch and say how many pieces come from each. If a batch runs out mid-run, tick "ran out" and say what it actually gave (full boxes + loose); the rest can come from another row.</div>'
     +'<div id="packRowsHolder"></div>'
-    +'<div id="packPreview" style="font-size:12px;margin:6px 0;"></div>'
+    +'</div>'
+    +'<div id="packPreview" style="font-size:12px;margin:10px 0;"></div>'
     +'<button class="btn btn-full" style="background:#27ae60;color:#fff;" onclick="submitPacking()">📦 Pack</button></div>';
 
-  html+='<div class="card"><div class="label">✅ Ready for Sale — by batch</div>'
+    html+='<div class="card"><div class="label">✅ Ready for Sale — by batch</div>'
     +'<div style="font-size:11px;color:#888;margin-bottom:6px;">Pack from any batch, any order. When a batch runs out during a run, the pack form asks what it gave (full boxes + loose).'+(isAdminOrOwner()?' Admin/Owner can also correct a batch directly here.':'')+'</div>'
     +Object.entries(rfsByProduct).map(([prod,rows])=>rows.map(r=>'<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #eee;font-size:12px;"><span>'+prod+' — <b>'+r.batchNo+'</b> · '+r.qty+' pcs</span>'+(isAdminOrOwner()?'<button class="btn btn-gray" style="font-size:10px;padding:2px 8px;" onclick="physicalCountRfsBatch(\''+r.batchNo+'\',\''+prod.replace(/'/g,"\\'")+'\')">Correct count</button>':'')+'</div>').join('')).join('')
     +'</div>';
