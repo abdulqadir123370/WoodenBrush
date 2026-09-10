@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1789026049817;
+const APP_BUILD = 1789034635120;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -5695,6 +5695,7 @@ function openPackTraceModal(pkNo){
       <div><div class="label">Box type</div>${fieldBox(run.boxTypeName+' · '+run.pcsPerBox+' pcs/box'+(run.assortment?' · '+run.assortment:''))}</div>
       <div><div class="label">Boxes</div>${fieldBox(nf(run.boxes)+' packed = '+nf(run.totalPcs)+' pcs · '+nf(dispatchedBoxes)+' dispatched · '+nf(row?row.boxes:0)+' in stock')}</div>
     </div>
+    ${run.voided?'':`<button class="btn" style="background:#2c3e50;color:#fff;font-size:11px;padding:4px 10px;margin-top:8px;" onclick="printBoxTags('${pkNo}')">🏷️ Print box tags (one per box, batch number on each)</button>`}
   </div>
   <div class="card" style="border:2px solid #8e44ad;margin-bottom:12px;">
     <div class="label" style="color:#8e44ad;">🪥 Where the pieces came from — Ready-for-Sale batches</div>
@@ -7409,7 +7410,8 @@ function computeExplicitPackPlan(){
       sum+=q;
     }
   }
-  if(sum!==total) return {error:'Batches add up to '+sum+' pcs but this run needs '+total+' pcs. Adjust the quantities, or add another batch row.'};
+  if(sum<total) return {error:'Need '+(total-sum)+' more pcs to complete '+total+' — increase a row or add another batch ('+sum+' of '+total+' so far).'};
+  if(sum>total) return {error:(sum-total)+' pcs too many — reduce a row by '+(sum-total)+' ('+sum+' entered, run needs '+total+').'};
   return {prod, bt, boxes, total, draws, variances};
 }
 function updatePackPreview(){
@@ -7451,7 +7453,57 @@ function submitPacking(){
   addLedgerEntry('packed', prod, pkNo, total, 'IN', boxes+' boxes × '+bt.pcsPerBox+' pcs'+(bt.assortment?' ('+bt.assortment+')':'')+' — '+srcTxt);
   window._packRows=[{batchNo:'',ranOut:false,qty:'',gaveBoxes:'',gaveLoose:''}];
   saveAll(); re();
-  alert('Packed: '+boxes+' boxes ('+total+' pcs) of '+prod+' → '+pkNo+'\n'+srcTxt);
+  if(confirm('Packed: '+boxes+' boxes ('+total+' pcs) of '+prod+' → '+pkNo+'\n'+srcTxt+'\n\nPrint box tags now? (one tag per box with its batch number)')){ printBoxTags(pkNo); }
+}
+// ---- BOX TAGS (10/09/2026): every carton gets a pasteable tag with its batch number ----
+// Boxes are filled from the pack run's batch rows IN ORDER, so per-box contents are fully
+// determined by the draws: most boxes are single-batch; the box where one batch hands over
+// to the next is a MIX box and its tag names both batches with the split. Allocation is
+// computed on demand from sourceDraws — nothing extra is stored.
+function computeBoxAllocation(run){
+  const per=run.pcsPerBox||0; const draws=(run.sourceDraws||[]).map(d=>({batchNo:d.batchNo, left:d.qty}));
+  const out=[]; let di=0;
+  for(let b=1;b<=run.boxes;b++){
+    let need=per; const parts=[];
+    while(need>0 && di<draws.length){
+      const d=draws[di];
+      const take=Math.min(d.left, need);
+      if(take>0){ parts.push({batchNo:d.batchNo, qty:take}); d.left-=take; need-=take; }
+      if(d.left<=0) di++;
+    }
+    out.push({boxNo:b, parts});
+  }
+  return out;
+}
+function printBoxTags(packBatchNo){
+  const run=(state.packingLog||[]).find(r=>r && r.packBatchNo===packBatchNo && !r.voided);
+  if(!run){ alert('No active packing record for '+packBatchNo+'.'); return; }
+  const alloc=computeBoxAllocation(run);
+  const tag = a => `<div class="tag">
+      <div class="t1">Royal Plastics — ${run.productName}</div>
+      <div class="t2">${run.packBatchNo} &nbsp;·&nbsp; Box ${a.boxNo} / ${run.boxes}</div>
+      <div class="t3">Batch: ${a.parts.length===1 ? '<b>'+a.parts[0].batchNo+'</b>' : a.parts.map(p=>'<b>'+p.batchNo+'</b> ('+p.qty+')').join(' + ')}${a.parts.length>1?' <span class="mix">MIX</span>':''}</div>
+      <div class="t4">${run.boxTypeName} · ${run.pcsPerBox} pcs${run.assortment?' · '+run.assortment:''}</div>
+      <div class="t5">Packed ${run.date} by ${run.by||'?'}</div>
+    </div>`;
+  const w=window.open('','_blank');
+  if(!w){ alert('Popup blocked — allow popups for this site to print tags.'); return; }
+  w.document.write(`<!DOCTYPE html><html><head><title>Box tags — ${run.packBatchNo}</title><style>
+    body{font-family:Arial,sans-serif;margin:8mm;}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:4mm;}
+    .tag{border:2px solid #000;border-radius:3mm;padding:4mm;page-break-inside:avoid;}
+    .t1{font-size:11pt;font-weight:700;}
+    .t2{font-size:16pt;font-weight:800;margin:1mm 0;}
+    .t3{font-size:13pt;margin:1mm 0;}
+    .mix{background:#000;color:#fff;font-size:9pt;padding:0.5mm 2mm;border-radius:2mm;font-weight:700;}
+    .t4{font-size:10pt;color:#333;}
+    .t5{font-size:9pt;color:#666;margin-top:1mm;}
+    @media print{ .noprint{display:none;} }
+  </style></head><body>
+  <div class="noprint" style="margin-bottom:6mm;"><button onclick="window.print()" style="font-size:14pt;padding:4mm 8mm;">🖨️ Print ${run.boxes} tags</button> — cut along the borders, paste one on each box.</div>
+  <div class="grid">${alloc.map(tag).join('')}</div>
+  </body></html>`);
+  w.document.close();
 }
 function physicalCountRfsBatch(batchNo, productName){
   if(!requireLiveCloud('Physical count')) return;
@@ -7583,13 +7635,13 @@ function renderPacking(){
     +'</div>';
   html+='<div class="card"><div class="label">📦 Packed Stock (awaiting dispatch)</div>'
     +(packed.length===0?'<div style="font-size:12px;color:#888;">No packed boxes in stock.</div>'
-      :packed.map(b=>'<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid #eee;font-size:12px;"><span><b>'+b.batchNo+'</b> — '+b.boxes+' boxes of '+b.productName+' <span style="color:#888;">('+b.boxTypeName+' · '+b.pcsPerBox+' pcs/box'+(b.assortment?' · '+b.assortment:'')+')</span></span><button class="btn" style="background:#8e44ad;color:#fff;font-size:10px;padding:2px 8px;" onclick="openPackTraceModal(\''+b.batchNo+'\')">🧬 Trace</button></div>').join(''))
+      :packed.map(b=>'<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid #eee;font-size:12px;"><span><b>'+b.batchNo+'</b> — '+b.boxes+' boxes of '+b.productName+' <span style="color:#888;">('+b.boxTypeName+' · '+b.pcsPerBox+' pcs/box'+(b.assortment?' · '+b.assortment:'')+')</span></span><span><button class="btn" style="background:#2c3e50;color:#fff;font-size:10px;padding:2px 8px;margin-right:4px;" onclick="printBoxTags(\''+b.batchNo+'\')">🏷️ Tags</button><button class="btn" style="background:#8e44ad;color:#fff;font-size:10px;padding:2px 8px;" onclick="openPackTraceModal(\''+b.batchNo+'\')">🧬 Trace</button></span></div>').join(''))
     +'</div>';
   html+='</div></div>';
 
   // --- history ---
   html+='<div class="card"><div class="label">Recent Packing</div>'
-    +(recentPacks.length===0?'<div style="font-size:12px;color:#888;">Nothing yet.</div>':recentPacks.map(r=>'<div style="padding:6px 0;border-bottom:1px solid #eee;font-size:12px;'+(r.voided?'opacity:.5;text-decoration:line-through;':'')+'"><b>'+r.date+' '+r.time+'</b> — '+r.boxes+' × '+r.boxTypeName+' ('+r.totalPcs+' pcs '+r.productName+') from '+((r.sourceDraws||[]).map(d=>d.qty+'×'+d.batchNo).join('+')||r.sourceFbBatch)+' → <b>'+r.packBatchNo+'</b> <span style="color:#888;">('+r.by+')</span> <button class="btn" style="background:#8e44ad;color:#fff;font-size:9px;padding:1px 6px;" onclick="openPackTraceModal(\''+r.packBatchNo+'\')">🧬</button>'
+    +(recentPacks.length===0?'<div style="font-size:12px;color:#888;">Nothing yet.</div>':recentPacks.map(r=>'<div style="padding:6px 0;border-bottom:1px solid #eee;font-size:12px;'+(r.voided?'opacity:.5;text-decoration:line-through;':'')+'"><b>'+r.date+' '+r.time+'</b> — '+r.boxes+' × '+r.boxTypeName+' ('+r.totalPcs+' pcs '+r.productName+') from '+((r.sourceDraws||[]).map(d=>d.qty+'×'+d.batchNo).join('+')||r.sourceFbBatch)+' → <b>'+r.packBatchNo+'</b> <span style="color:#888;">('+r.by+')</span> <button class="btn" style="background:#2c3e50;color:#fff;font-size:9px;padding:1px 6px;" onclick="printBoxTags(\''+r.packBatchNo+'\')">🏷️</button> <button class="btn" style="background:#8e44ad;color:#fff;font-size:9px;padding:1px 6px;" onclick="openPackTraceModal(\''+r.packBatchNo+'\')">🧬</button>'
       +(!r.voided?(isAdminOrOwner()?' <button class="btn" style="background:#c0392b;color:#fff;font-size:10px;padding:2px 8px;float:right;" onclick="voidPackingRun('+r.id+')">Void</button>':''):'<div style="font-size:10px;color:#c0392b;">VOIDED: '+(r.voidReason||'')+'</div>')+'</div>').join(''))
     +'</div>';
   return html;
