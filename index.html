@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1789036481130;
+const APP_BUILD = 1789037131042;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -7603,12 +7603,9 @@ function _syncDpBoxesInputs(){
 function renderDispatchScanList(){
   const holder=document.getElementById('dpScanList'); if(!holder) return;
   const scans=_dispatchScanState.scans;
-  if(scans.length===0){ holder.innerHTML='<div style="font-size:11px;color:#888;">No boxes scanned yet — scan a tag or type box counts below.</div>'; return; }
+  if(scans.length===0){ holder.innerHTML=''; return; }
   const tally=_dispatchTally();
-  holder.innerHTML = '<div style="font-size:11px;font-weight:700;margin-bottom:4px;">Scanned: '+Object.entries(tally).map(([pk,n])=>n+' × '+pk).join(', ')+' — '+scans.length+' boxes total</div>'
-    + '<div style="display:flex;flex-wrap:wrap;gap:4px;">'
-    + scans.map((s,i)=>'<span style="background:#f0e8de;border-radius:10px;padding:2px 8px;font-size:11px;">'+s.id+' <a href="#" onclick="removeDispatchScan('+i+');return false;" style="color:#c0392b;font-weight:700;text-decoration:none;">✕</a></span>').join('')
-    + '</div>';
+  holder.innerHTML = 'Scanned '+scans.length+' boxes so far ('+Object.entries(tally).map(([pk,n])=>n+' × '+pk).join(', ')+') — <a href="#" onclick="removeDispatchScan('+(scans.length-1)+');return false;" style="color:#c0392b;font-weight:700;">undo last scan</a>';
   _syncDpBoxesInputs();
 }
 function resetDispatchScanState(){ _dispatchScanState={scans:[]}; renderDispatchScanList(); }
@@ -7803,13 +7800,12 @@ function renderDispatch(){
   let html='';
   html+='<div class="card" style="border:2px solid #8e44ad;"><div class="label" style="color:#8e44ad;">🚚 Dispatch</div>'
     +'<div style="font-size:11px;color:#888;margin-bottom:8px;">Boxes leave the factory against a gate pass. Permanent record; voidable by Admin/Owner with a reason.</div>'
-    +'<div style="font-size:11px;font-weight:700;color:#8e44ad;text-transform:uppercase;letter-spacing:.03em;margin-bottom:4px;">Scan boxes</div>'
     +'<div style="display:flex;gap:6px;margin-bottom:6px;"><input id="dpScanInput" placeholder="Scan a box tag, or type PK002-14 and press Enter" onkeydown="onDpScanKeydown(event)" style="flex:1;font-size:14px;" autocomplete="off"><button class="btn" style="background:#2c3e50;color:#fff;" onclick="openCameraScan()">📷 Camera</button></div>'
-    +'<div id="dpScanMsg" style="font-size:11px;color:#c0392b;min-height:14px;margin-bottom:4px;"></div>'
-    +'<div id="dpScanList" style="margin-bottom:12px;padding:8px;background:#faf7f2;border-radius:6px;"></div>'
-    +'<div style="font-size:11px;font-weight:700;color:#8e44ad;text-transform:uppercase;letter-spacing:.03em;margin-bottom:4px;border-top:1px solid #eee;padding-top:10px;">Or enter box counts directly</div>'
+    +'<div id="dpScanMsg" style="font-size:11px;color:#c0392b;min-height:14px;"></div>'
+    +'<div id="dpScanList" style="font-size:11px;color:#666;margin-bottom:10px;min-height:16px;"></div>'
     +(packed.length===0?'<div style="font-size:12px;color:#888;">No packed boxes in stock.</div>'
-      :'<table style="width:100%;font-size:12px;border-collapse:collapse;">'
+      :'<div style="font-size:11px;color:#888;margin-bottom:6px;">Numbers fill in as you scan — or type/edit any of them directly if you\'d rather not scan.</div>'
+        +'<table style="width:100%;font-size:12px;border-collapse:collapse;">'
         +'<tr style="text-align:left;color:#888;"><th>PK batch</th><th>Product / box</th><th>In stock</th><th>Dispatch</th></tr>'
         +packed.map(b=>'<tr style="border-top:1px solid #eee;"><td><b>'+b.batchNo+'</b><br><button class="btn" style="background:#8e44ad;color:#fff;font-size:9px;padding:1px 6px;" onclick="openPackTraceModal(\''+b.batchNo+'\')">🧬 Trace</button></td><td>'+b.productName+'<div style="color:#888;font-size:10px;">'+b.boxTypeName+' · '+b.pcsPerBox+' pcs/box'+(b.assortment?' · '+b.assortment:'')+'</div></td><td>'+b.boxes+' boxes</td><td><input type="number" min="0" max="'+b.boxes+'" class="dpBoxes" data-pk="'+b.batchNo+'" style="width:64px;"></td></tr>').join('')
         +'</table>'
