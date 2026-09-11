@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1789037131042;
+const APP_BUILD = 1789106263788;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -1699,8 +1699,9 @@ function renderDashboard(){
     const total=(mat?.batches||[]).reduce((s,b)=>s+b.qty,0);
     html+=`<div style="margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid #f0e8de;">
       <div style="font-weight:700;font-size:13px;margin-bottom:6px;">${mat?.name}</div>`;
-    if(mat?.batches?.length>0){
-      mat.batches.forEach(b=>{
+    const visibleBatches=(mat?.batches||[]).filter(b=>b.qty>0);
+    if(visibleBatches.length>0){
+      visibleBatches.forEach(b=>{
         html+=`<div class="batch-item"><span><b>${b.batchNo}</b> (${b.dateAdded})</span><span class="green" style="font-weight:700;">${b.qty} pcs</span></div>`;
       });
     } else {
@@ -2310,7 +2311,7 @@ function recordProduction(){
     state.materials[size].batches=state.materials[size].batches.map(b=>{
       if(b.batchNo!==openBatch.batchNo) return b;
       return {...b,qty:b.qty-planksUsed};
-    }).filter(b=>b.qty>0);
+    }); // keep zero-qty rows (WB002-class fix) — display already filters qty>0
   }
 
   if(rem>0&&canUse&&!openBatch.isScrap){
@@ -6246,6 +6247,29 @@ function applyVoidToSaleEntry(id, reason){
   return { saleKgRestored: entry.kgSold||0, saleAmountReversed: entry.totalAmount||0, wasteType: entry.wasteType };
 }
 
+// Raw material purchases don't have their own record collection (one purchase can cover
+// several plank sizes, each just a line in state.materials[size].batches) — the ledger's
+// 'plank' IN receipt IS the record, and already carries id/date/time/batchNo/size/qty/vendor.
+// Voiding removes the REMAINING (unused) stock only — pieces already cut into production are
+// already accounted for downstream and can't be un-cut. Never deletes the batch row (same
+// keep-zero-row principle as the WB002 incident fix). voidedByOwner marks the ORIGINAL ledger
+// receipt so it drops out of the candidates list — the receipt itself is never edited or
+// removed, only flagged, keeping the ledger's append-only guarantee intact.
+function applyVoidToPlankPurchase(id, reason){
+  const by = currentUser?.loginName || currentUser?.name || 'Unknown';
+  const entry = (state.ledger||[]).find(e=>e && e.id===id && e.type==='plank' && e.direction==='IN');
+  if(!entry || entry.voidedByOwner) return null;
+  const mat = state.materials?.[entry.size];
+  const b = (mat?.batches||[]).find(x=>x.batchNo===entry.batchNo);
+  if(!b || !(b.qty>0)) return null; // nothing left to void
+  const qtyVoided = b.qty;
+  const usedAlready = Math.max(0, (entry.qty||0)-qtyVoided);
+  b.qty = 0; // keep the row, don't delete
+  entry.voidedByOwner = true; entry.voidedByOwnerBy = by; entry.voidedByOwnerReason = reason;
+  addLedgerEntry('plank', mat.name, entry.batchNo, qtyVoided, 'OUT', reason, entry.size, entry.vendor||'');
+  return { plankVoidedPcs: qtyVoided, plankUsedAlreadyPcs: usedAlready, plankSize: entry.size, plankBatch: entry.batchNo };
+}
+
 // ==================== FLAG (works across every kind: wood/brush/socket/wastage/sales) ====================
 function applyFlagToKind(kind, runId, note){
   const by = currentUser?.loginName || currentUser?.name || 'Unknown';
@@ -6309,6 +6333,7 @@ function formatVoidSummary(summary){
   if(summary.socketsRestored>0 || summary.screwsRestored>0) msg += `Restored: ${summary.socketsRestored} sockets, ${summary.screwsRestored} screws.\n`;
   if(summary.wastageEntryKgRemoved>0) msg += `${summary.wastageEntryKgRemoved.toFixed(1)} KG of ${summary.wasteType||'wastage'} will be removed from the wastage tally.\n`;
   if(summary.saleKgRestored>0) msg += `${summary.saleKgRestored} KG of ${summary.wasteType||'wastage'} will be added back to available wastage stock (Rs.${(summary.saleAmountReversed||0).toFixed(0)} removed from revenue).\n`;
+  if(summary.plankVoidedPcs>0) msg += `${summary.plankVoidedPcs} pcs will be removed from ${summary.plankSize}" plank stock (batch ${summary.plankBatch}).\n` + (summary.plankUsedAlreadyPcs>0 ? `${summary.plankUsedAlreadyPcs} pcs from this purchase were already used in production and are unaffected.\n` : '');
   const parts = [];
   if(summary.finishedRemoved>0) parts.push(`${summary.finishedRemoved} pcs removed from Wood Finishing output`);
   if(summary.brushRemoved>0) parts.push(`${summary.brushRemoved} pcs removed from Brush Dept stock`);
@@ -7091,9 +7116,14 @@ function ownerVoidEntryLabel(kind, r){
   if(kind==='brush') return `${r.date} ${r.time||''} — ${r.productName} — ${r.qty} pcs (Batch ${r.fbBatchNo})`;
   if(kind==='socket') return `${r.date} ${r.time||''} — ${r.productName} — ${r.qty} pcs socketed (${r.outputBatchNo||r.fbBatchNo||''})`;
   if(kind==='wastage') return `${r.date} ${r.time||''} — ${r.batchNo||'—'} — ${(r.wastageKg||0).toFixed(1)} KG (${(r.reason||'').slice(0,40)})`;
+  if(kind==='purchase') return `${r.date} ${r.time||''} — ${r.size}" batch ${r.batchNo} — ${r.qty} pcs from ${r.vendor||'—'}${r.pricePerPiece?` @ Rs.${r.pricePerPiece}/pc`:''}`;
   return `${r.date} ${r.time||''} — ${r.buyer} — ${r.kgSold} KG ${r.wasteType} for Rs.${(r.totalAmount||0).toFixed(0)}`;
 }
 function ownerVoidCandidates(kind){
+  if(kind==='purchase'){
+    return [...(state.ledger||[])].filter(e=>e && e.type==='plank' && e.direction==='IN' && !e.voidedByOwner)
+      .sort((a,b)=>(b.id||0)-(a.id||0)).slice(0,40);
+  }
   const coll = kind==='wood' ? state.production : kind==='brush' ? state.brushProcessingLog
     : kind==='socket' ? state.socketProcessingLog : kind==='wastage' ? state.wastage : state.sales;
   return [...(coll||[])].filter(r=>r && !r.voided).sort((a,b)=>(b.id||0)-(a.id||0)).slice(0,40);
@@ -7111,8 +7141,10 @@ function previewOwnerVoid(){
   const reason = (state.ovReason||'').trim();
   const msg = document.getElementById('ovMsg');
   const say = (t,ok)=>{ if(msg){msg.textContent=t; msg.className='msg '+(ok?'ok':'err');} };
-  if(!['wood','brush','socket','wastage','sales'].includes(kind)){ say('⚠️ Select the entry type.'); return; }
-  const r = ownerVoidCandidates(kind).find(x=>x.id===id) || (kind==='wood'?state.production:kind==='brush'?state.brushProcessingLog:kind==='socket'?state.socketProcessingLog:kind==='wastage'?state.wastage:state.sales||[]).find(x=>x&&x.id===id&&!x.voided);
+  if(!['wood','brush','socket','wastage','sales','purchase'].includes(kind)){ say('⚠️ Select the entry type.'); return; }
+  const r = kind==='purchase'
+    ? (state.ledger||[]).find(x=>x && x.id===id && x.type==='plank' && x.direction==='IN' && !x.voidedByOwner)
+    : (ownerVoidCandidates(kind).find(x=>x.id===id) || (kind==='wood'?state.production:kind==='brush'?state.brushProcessingLog:kind==='socket'?state.socketProcessingLog:kind==='wastage'?state.wastage:state.sales||[]).find(x=>x&&x.id===id&&!x.voided));
   if(!r){ say('⚠️ Select the entry to void.'); return; }
   if(reason.length<10){ say('⚠️ Reason is mandatory — at least 10 characters. It is stamped on the entry forever.'); return; }
   const fullReason = `OWNER VOID (any-age): ${reason}`;
@@ -7128,6 +7160,7 @@ function previewOwnerVoid(){
   else if(kind==='socket') summary = applyVoidToSocketRun(id, fullReason);
   else if(kind==='wastage') summary = applyVoidToWastageEntry(id, fullReason);
   else if(kind==='sales') summary = applyVoidToSaleEntry(id, fullReason);
+  else if(kind==='purchase') summary = applyVoidToPlankPurchase(id, fullReason);
   else summary = applyVoidToRun(id, fullReason);
   const brushVoidedCount = (state.brushProcessingLog||[]).filter(x=>x.voided && x.voidedReason===fullReason).length;
   const socketVoidedCount = (state.socketProcessingLog||[]).filter(x=>x.voided && x.voidedReason===fullReason).length;
@@ -7151,6 +7184,7 @@ function confirmOwnerVoidFinal(){
   else if(kind==='socket') summary = applyVoidToSocketRun(target.runId, reason);
   else if(kind==='wastage') summary = applyVoidToWastageEntry(target.runId, reason);
   else if(kind==='sales') summary = applyVoidToSaleEntry(target.runId, reason);
+  else if(kind==='purchase') summary = applyVoidToPlankPurchase(target.runId, reason);
   else summary = applyVoidToRun(target.runId, reason);
   state.correctionsLog = [...(state.correctionsLog||[]), {
     id: Date.now()+Math.random(), kind:'owner_void_'+Date.now(),
@@ -7171,7 +7205,7 @@ function confirmVoidFinalDispatch(){
 }
 function renderOwnerVoidCardHTML(){
   const kind = state.ovKind;
-  const kinds = {wood:'Production run (Wood Finishing)', brush:'Brush Dept run', socket:'Socket Dept run', wastage:'Wastage entry', sales:'Sale'};
+  const kinds = {wood:'Production run (Wood Finishing)', brush:'Brush Dept run', socket:'Socket Dept run', wastage:'Wastage entry', sales:'Sale', purchase:'Raw material purchase'};
   const candidates = kinds[kind] ? ownerVoidCandidates(kind) : [];
   return `<div class="card" style="border:2px solid #8e2323;">
     <div class="label" style="color:#8e2323;">🚫 Owner Void — any age</div>
