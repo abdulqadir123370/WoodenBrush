@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1789106263788;
+const APP_BUILD = 1789111241866;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -611,6 +611,44 @@ function scheduleSyncRetry(){
 function forceFullResync(){
   syncShadow = {};
   return doFirestoreSync();
+}
+
+// ==================== CONFIRMED SAVE (11/9/2026, WB006 void-loss incident) ====================
+// Root cause traced from a fresh backup: a void showed correctly on the Owner's own screen
+// (proof: a WhatsApp screenshot taken right after) but left NO trace anywhere in the synced
+// data — no voided flag, no reversing ledger line, nothing. Happened twice, same workflow both
+// times: void, then immediately switch apps to send the screenshot. flushPendingSync() (below)
+// already tries to force the save through when a tab backgrounds — but it only STARTS the
+// Firestore write; it can't guarantee that async write finishes before a backgrounded mobile
+// tab gets frozen or killed by the OS, which aborts it silently with no error at all. For a
+// single deliberate action (void, adjustment) there's also no reason to wait through the normal
+// 1.2s debounce, which exists to coalesce rapid typing, not one-off high-stakes actions.
+// saveAllConfirmed() skips that debounce and returns the real Firestore commit promise so the
+// caller can hold the person on the page — with an explicit "don't switch apps yet" message —
+// until the write is actually confirmed, not just optimistically assumed.
+function saveAllConfirmed(){
+  saveAll();
+  clearTimeout(syncTimeout); syncTimeout = null; // this action shouldn't wait through the debounce
+  return doFirestoreSync();
+}
+function withConfirmedSave(label, onSettled){
+  const overlay = document.createElement('div');
+  overlay.id = 'confirmSaveOverlay';
+  overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.55);z-index:900;display:flex;align-items:center;justify-content:center;padding:20px;';
+  overlay.innerHTML = `<div style="background:#fff;border-radius:12px;padding:26px 28px;text-align:center;max-width:320px;">
+    <div style="font-size:30px;margin-bottom:10px;">☁️</div>
+    <div style="font-weight:700;margin-bottom:6px;">Saving ${label} to the cloud…</div>
+    <div style="font-size:12px;color:#888;">Stay on this page — don't switch apps or close the tab until this finishes. Only takes a moment.</div>
+  </div>`;
+  document.body.appendChild(overlay);
+  saveAllConfirmed().then(()=>{
+    overlay.remove();
+    if(onSettled) onSettled(true);
+  }).catch(()=>{
+    overlay.remove();
+    alert('⚠️ Could not confirm '+label+' saved to the cloud — the connection likely dropped at the wrong moment. Nothing else was affected, but this needs to be done again once you have a solid connection. Please repeat it now.');
+    if(onSettled) onSettled(false);
+  });
 }
 
 // Safety net: flush a pending debounced sync immediately if the tab is hidden or closed.
@@ -6418,7 +6456,8 @@ function confirmVoidFinal(){
   document.getElementById('voidPreviewModal').classList.add('hidden');
   state.pendingVoid = null;
   state.voidTarget = null;
-  saveAll(); re();
+  re();
+  withConfirmedSave('the void', ()=>{});
 }
 
 function openFlagModal(runId, kind){
@@ -7102,8 +7141,8 @@ function applyOwnerAdjustment(){
   }];
   if(typeof ghostCorrectionExplained!=='undefined') ghostCorrectionExplained.add(batch);
   state.adjQty=''; state.adjReason='';
-  saveAll(); re();
-  setTimeout(()=>{ const m2=document.getElementById('adjMsg'); if(m2){m2.textContent=`✅ ADJ-${adjNo} applied and published to the Ledger and Dashboard.`; m2.className='msg ok';} }, 100);
+  re();
+  withConfirmedSave('ADJ-'+adjNo, (ok)=>{ const m2=document.getElementById('adjMsg'); if(m2){ if(ok){ m2.textContent=`✅ ADJ-${adjNo} applied and confirmed saved to the cloud.`; m2.className='msg ok'; } else { m2.textContent=`⚠️ ADJ-${adjNo} applied locally but not yet confirmed saved — see the alert.`; m2.className='msg err'; } } });
 }
 // ==================== OWNER VOID — ANY AGE ====================
 // Rule change (Owner decision 12/8): the 24-hour void wall stays absolute for every role in
@@ -7194,7 +7233,8 @@ function confirmOwnerVoidFinal(){
   document.getElementById('voidPreviewModal').classList.add('hidden');
   state.pendingVoid = null;
   state.ovId=''; state.ovReason='';
-  saveAll(); re();
+  re();
+  withConfirmedSave('the void', ()=>{});
 }
 // The shared preview modal's Confirm button routes here so the normal staff flow
 // (confirmVoidFinal) is completely untouched — zero regression risk to tested behavior.
@@ -7958,8 +7998,8 @@ function applyAdj9(){
     id:Date.now()+Math.random(), kind:'owner_adj_9', by:currentUser.name||'Owner', at:new Date().toISOString(),
     details:'ADJ-9: WB002 Smart Commando Jumbo Broom stored stock '+before+' -> 0. The 08/09 10:56 run processed all 639 produced pcs (receipts balance 0); the emptied row\'s delete never propagated and resurrected as phantom stock. Verified live before applying.'
   }];
-  saveAll(); re();
-  alert('ADJ-9 applied. Now press "Mark handled" on the shadow finding in System Watch.');
+  re();
+  withConfirmedSave('ADJ-9', (ok)=>{ if(ok) alert('ADJ-9 applied and confirmed saved. Now press "Mark handled" on the shadow finding in System Watch.'); });
 }
 
 function renderScrapRestorationCardHTML(){
