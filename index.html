@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1789225983693;
+const APP_BUILD = 1789226144759;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -1959,6 +1959,7 @@ function renderDashboard(){
   // Owner adjustments are published to EVERY role's dashboard — sunlight is the control.
   let html=renderRecentAdjustmentsCardHTML();
   html+=renderAdj9CardHTML(); // ADJ-9 one-time correction card (Owner only, auto-hides once applied)
+  html+=renderAdj10CardHTML(); // ADJ-10/11 WB007 phantom backfill (Owner only, one tap, auto-hides once applied)
   html+=renderAiReportCardHTML(); // Admin + Owner (moved here from Admin tab 01/09/2026)
 
   // Voided & flagged entries — always visible to Admin/Owner here, regardless of which
@@ -8545,6 +8546,76 @@ function renderGhostCorrectionsCardHTML(){
   }
   html += `</div>`;
   return html;
+}
+
+// ==================== ADJ-10/11 (12/09/2026): WB007 phantom backfill + clamp restore ====================
+// Evidence (established live 12/09, shadow findings + auto-fix log): WB007's ledger history
+// consumed 1,830 more 12" and 33,960 more 24" planks than its receipts ever purchased — the
+// duplicate-entry phantom. When the real 12/09 delivery (1,930×12" + 4,008×24") was moved
+// into WB007, the auto-corrector clamped the 12" row from 1,930 to 100 against that hole.
+// One-tap correction, Owner-authorized via chat 12/09: write the two backfill ledger INs
+// (documenting the phantom as receipts) and restore the 12" row to the real delivery figure.
+// Live-gated: only offered while the device's data still shows the evidenced condition.
+function _adj10Evidence(){
+  // Known phantom constants from the 12/09 shadow findings: 12\" hole = 1,830 pcs,
+  // 24\" hole = 33,960 pcs. The 12\" stored row may be in either state: clamped to the
+  // derived value (100) by the 12/09 auto-fix, or already restored (1,930). Anything else
+  // means the world changed since the evidence — refuse and leave it to a person.
+  const HOLE12 = 1830, HOLE24 = 33960;
+  const balOf = (size)=>{ let b=0; (state.ledger||[]).forEach(e=>{ if(e && e.type==='plank' && e.size===size && e.batchNo==='WB007'){ b += e.direction==='IN'?(e.qty||0):-(e.qty||0); } }); return Math.round(b); };
+  const bal12 = balOf('12'), bal24 = balOf('24');
+  const row12=(state.materials?.['12']?.batches||[]).find(b=>b.batchNo==='WB007');
+  const row24=(state.materials?.['24']?.batches||[]).find(b=>b.batchNo==='WB007');
+  if(!row12 || !row24) return null;
+  // 12\": ledger must still carry the 1,830 hole (derived = real delivery − hole), row either clamped or restored
+  const target12 = bal12 + HOLE12;
+  const twelveOk = (row12.qty===bal12 /* clamped */ || row12.qty===target12 /* restored */);
+  // 24\": derived must sit exactly one 33,960 hole below the stored real delivery
+  const twentyFourOk = (row24.qty - bal24 === HOLE24);
+  if(!twelveOk && !twentyFourOk) return null;
+  return {
+    bal12, bal24, row12, row24,
+    fill12: twelveOk ? HOLE12 : 0,
+    fill24: twentyFourOk ? HOLE24 : 0,
+    target12,
+    restore12: twelveOk && row12.qty===bal12 ? (target12 - row12.qty) : 0
+  };
+}
+function renderAdj10CardHTML(){
+  if(!currentUser || currentUser.role!=='owner') return '';
+  if((state.correctionsLog||[]).some(c=>c && c.kind==='owner_adj_10')) return '';
+  const ev=_adj10Evidence(); if(!ev) return '';
+  return `<div class="card" style="border:2px solid #c0392b;background:#fff5f5;">
+    <div class="label" style="color:#c0392b;">🧾 ADJ-10/11 — WB007 phantom backfill (one tap)</div>
+    <div style="font-size:11px;color:#666;margin-bottom:8px;">Verified live on this device right now — WB007's receipts run short by the duplicate-entry phantom:</div>
+    <table style="width:100%;font-size:12px;border-collapse:collapse;">
+      ${ev.fill12?`<tr><td>12" planks backfill receipt (ADJ-10)</td><td style="text-align:right;"><b>${ev.fill12} pcs</b></td></tr>`:''}
+      ${ev.restore12?`<tr><td>12" stock restore (auto-clamped 1,930 → ${ev.row12.qty} on 12/09)</td><td style="text-align:right;"><b>+${ev.restore12} pcs</b></td></tr>`:''}
+      ${ev.fill24?`<tr><td>24" planks backfill receipt (ADJ-11)</td><td style="text-align:right;"><b>${ev.fill24} pcs</b></td></tr>`:''}
+    </table>
+    <div style="font-size:11px;color:#666;margin:6px 0;">One tap: books become consistent (derived == stored), 12" stock ends at ${ev.target12} pcs, 24" stays at ${ev.row24.qty} pcs, and the two RECEIPT SHADOW findings close at the next check. Verify against the physical count when convenient; any floor difference is a normal deduct-adjustment afterwards.</div>
+    <button class="btn btn-full" style="background:#c0392b;color:#fff;" onclick="applyAdj10()">Apply ADJ-10/11 — backfill receipts + restore clamped stock</button>
+  </div>`;
+}
+function applyAdj10(){
+  if(!requireLiveCloud('ADJ-10/11')) return;
+  if(!currentUser || currentUser.role!=='owner'){ alert('Owner only.'); return; }
+  const ev=_adj10Evidence();
+  if(!ev){ alert('Live verification failed — the evidenced condition no longer holds on this device. Not applying.'); re(); return; }
+  if(!confirm('ADJ-10/11: write WB007 backfill receipts — '+ev.fill12+' pcs (12") and '+ev.fill24+' pcs (24")'+(ev.restore12?', and restore the 12" stock row to '+ev.target12+' pcs':'')+'?\n\nThis documents the duplicate-entry phantom as ledger receipts so derived and stored stock agree. Stamped permanently.')) return;
+  if(ev.fill12>0){
+    addLedgerEntry('plank','12" Planks','WB007',ev.fill12,'IN','ADJ-10: duplicate-entry phantom backfill — receipts reconciliation per 12/09 shadow findings; pairs with restoring the 1,830 pcs auto-clamped 12/09','12','');
+    if(ev.restore12>0) ev.row12.qty = ev.target12;
+  }
+  if(ev.fill24>0){
+    addLedgerEntry('plank','24" Planks','WB007',ev.fill24,'IN','ADJ-11: duplicate-entry phantom backfill — receipts reconciliation per 12/09 shadow findings','24','');
+  }
+  state.correctionsLog=[...(state.correctionsLog||[]),{
+    id:Date.now()+Math.random(), kind:'owner_adj_10', by:currentUser.name||'Owner', at:new Date().toISOString(),
+    details:'ADJ-10/11: WB007 phantom backfill receipts written — 12": '+ev.fill12+' pcs (row restored to '+ev.target12+'), 24": '+ev.fill24+' pcs. Books reconciled (derived==stored); physical count remains the final verification. Owner-authorized 12/09.'
+  }];
+  re();
+  withConfirmedSave('ADJ-10/11', (ok)=>{ if(ok) alert('ADJ-10/11 applied and confirmed saved. The two WB007 shadow findings will close at the next System Watch check — then "Mark handled" them.'); });
 }
 
 // ==================== ADJ-9 (09/09/2026): WB002 Jumbo phantom stored stock ====================
