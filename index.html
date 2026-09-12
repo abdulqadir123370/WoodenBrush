@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1789193909733;
+const APP_BUILD = 1789195482178;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -546,6 +546,7 @@ function doFirestoreSync(){
               if(o.t==='set') syncShadow[o.stateKey][o.docId] = o.j;
               else delete syncShadow[o.stateKey][o.docId];
               clearInFlight(o.stateKey, o.docId);
+              if(typeof critMarkConfirmed==='function') critMarkConfirmed(o.stateKey, o.docId);
             });
           })
           .catch(err=>{
@@ -640,25 +641,141 @@ function saveAllConfirmed(){
   if(notReady.length) return Promise.reject(new Error('collections not live on this device: '+notReady.join(', ')));
   return doFirestoreSync();
 }
-function withConfirmedSave(label, onSettled){
-  const overlay = document.createElement('div');
-  overlay.id = 'confirmSaveOverlay';
-  overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.55);z-index:900;display:flex;align-items:center;justify-content:center;padding:20px;';
-  overlay.innerHTML = `<div style="background:#fff;border-radius:12px;padding:26px 28px;text-align:center;max-width:320px;">
-    <div style="font-size:30px;margin-bottom:10px;">☁️</div>
-    <div style="font-weight:700;margin-bottom:6px;">Saving ${label} to the cloud…</div>
-    <div style="font-size:12px;color:#888;">Stay on this page — don't switch apps or close the tab until this finishes. Only takes a moment.</div>
-  </div>`;
-  document.body.appendChild(overlay);
-  saveAllConfirmed().then(()=>{
-    overlay.remove();
-    if(onSettled) onSettled(true);
-  }).catch(()=>{
-    overlay.remove();
-    alert('⚠️ Could not confirm '+label+' saved to the cloud — the connection likely dropped at the wrong moment. Nothing else was affected, but this needs to be done again once you have a solid connection. Please repeat it now.');
-    if(onSettled) onSettled(false);
+// ==================== CRITICAL WRITE JOURNAL (12/09/2026) ====================
+// Owner's rule: void-and-forget. Nobody waits on a screen. The blocking overlay is gone;
+// instead every high-stakes action (void / adjustment) is JOURNALED to localStorage the
+// instant it's applied — the exact doc payloads, not just an intention. The journal:
+//   • survives a killed tab, a frozen app, a reload, a dead connection;
+//   • on startup, journaled docs are marked in-flight BEFORE the first server snapshot, so
+//     the server can never resurrect the pre-void value over them (the WB006 failure mode);
+//   • keeps re-pushing until the cloud commit for those exact docs succeeds, then clears.
+// A small corner toast (never blocking) reports: amber "saving", green "confirmed in cloud",
+// red "not confirmed yet — kept safe on this device, still trying". Since requireLiveCloud
+// already gates the action, confirmation normally lands in a second or two unnoticed.
+const CRIT_JOURNAL_KEY = 'wbt_critical_journal_v1';
+function critJournalLoad(){ try{ const j=JSON.parse(localStorage.getItem(CRIT_JOURNAL_KEY)); return Array.isArray(j)?j:[]; }catch(e){ return []; } }
+function critJournalStore(j){ try{ localStorage.setItem(CRIT_JOURNAL_KEY, JSON.stringify(j)); }catch(e){} }
+window._critPending = {}; // critId -> {label, remaining:{stateKey|docId:true}, onSettled, timer, settled}
+
+function critToast(msg, kind){ // kind: 'saving' | 'ok' | 'err'
+  let el = document.getElementById('critToast');
+  if(!el){
+    el = document.createElement('div');
+    el.id = 'critToast';
+    el.style.cssText = 'position:fixed;bottom:14px;right:14px;z-index:950;max-width:290px;padding:10px 14px;border-radius:10px;font-size:12px;font-weight:600;box-shadow:0 4px 14px rgba(0,0,0,0.25);transition:opacity .3s;line-height:1.45;';
+    document.body.appendChild(el);
+  }
+  clearTimeout(el._hideT);
+  el.style.opacity = '1';
+  el.style.background = kind==='ok' ? '#27ae60' : kind==='err' ? '#c0392b' : '#e67e22';
+  el.style.color = '#fff';
+  el.textContent = msg;
+  if(kind!=='err') el._hideT = setTimeout(()=>{ el.style.opacity='0'; }, kind==='ok'?4000:8000);
+}
+
+// Diff current state vs the sync shadow — the same comparison doFirestoreSync makes — and
+// capture the changed docs' payloads. Only listener-ready collections can be diffed honestly.
+function critCaptureChangedDocs(){
+  const docs = []; const notReady = [];
+  Object.keys(SK).forEach(stateKey=>{
+    if(!collectionReady[stateKey]){ notReady.push(stateKey); return; }
+    const recs = recordsOf(stateKey);
+    const shadow = syncShadow[stateKey] || {};
+    Object.entries(recs).forEach(([docId, rec])=>{
+      if(rec && rec._seedDefault) return;
+      const j = JSON.stringify(rec);
+      if(shadow[docId] !== j) docs.push({stateKey, docId, j});
+    });
+  });
+  return {docs, notReady};
+}
+
+function critMarkConfirmed(stateKey, docId){
+  // Called from the commit-success path: this exact doc reached the cloud.
+  const journal = critJournalLoad();
+  let changed = false;
+  journal.forEach(entry=>{
+    if(entry.docs && entry.docs.some(d=>d.stateKey===stateKey && String(d.docId)===String(docId))){
+      entry.docs = entry.docs.filter(d=>!(d.stateKey===stateKey && String(d.docId)===String(docId)));
+      changed = true;
+    }
+  });
+  if(changed) critJournalStore(journal.filter(e=>e.docs && e.docs.length>0));
+  Object.entries(window._critPending).forEach(([critId, p])=>{
+    delete p.remaining[stateKey+'|'+docId];
+    if(Object.keys(p.remaining).length===0 && !p.settled){
+      p.settled = true;
+      clearTimeout(p.timer);
+      critToast('✅ '+p.label.charAt(0).toUpperCase()+p.label.slice(1)+' confirmed saved in the cloud.', 'ok');
+      if(p.onSettled) p.onSettled(true);
+      delete window._critPending[critId];
+    }
   });
 }
+
+// Startup replay: journaled docs from a previous session must (a) win over the first server
+// snapshot and (b) be re-pushed. Runs BEFORE listeners attach. State itself already holds the
+// journaled values via normal localStorage persistence; belt-and-braces: if a journaled doc's
+// current local value no longer matches (state loss), restore it from the journal payload.
+function critJournalReplayAtStartup(){
+  const journal = critJournalLoad();
+  if(!journal.length) return;
+  journal.forEach(entry=>{
+    (entry.docs||[]).forEach(d=>{
+      markInFlight(d.stateKey, String(d.docId));
+      try{
+        if(!MAP_COLLECTIONS[d.stateKey]){
+          const arr = state[d.stateKey]||[];
+          const idx = arr.findIndex(r=>String(recKey(r))===String(d.docId));
+          const want = JSON.parse(d.j);
+          if(idx>=0){ if(JSON.stringify(arr[idx])!==d.j) arr[idx]=want; }
+          else arr.push(want);
+        } else {
+          const map = state[d.stateKey]||{};
+          if(JSON.stringify(map[d.docId])!==d.j) map[d.docId] = JSON.parse(d.j);
+          state[d.stateKey] = map;
+        }
+      }catch(e){}
+    });
+  });
+  critToast('Finishing '+journal.length+' unconfirmed save'+(journal.length>1?'s':'')+' from last time…', 'saving');
+}
+
+function withConfirmedSave(label, onSettled){
+  saveAll(); // persists state (incl. this change) to localStorage immediately
+  clearTimeout(syncTimeout); syncTimeout = null; // no debounce for one-off high-stakes actions
+  const cap = critCaptureChangedDocs();
+  if(cap.notReady.length){
+    critToast('⚠️ Part of the app has no live cloud link on this device ('+cap.notReady.join(', ')+') — '+label+' is kept safe here but may not reach the cloud. Reload this device soon.', 'err');
+  }
+  if(cap.docs.length===0){
+    // Nothing detectably changed (shouldn't happen for a real void) — still try a sync.
+    if(fbDb) doFirestoreSync().catch(()=>{});
+    if(onSettled) onSettled(true);
+    return;
+  }
+  const critId = 'c'+Date.now().toString(36)+Math.random().toString(36).slice(2,7);
+  const journal = critJournalLoad();
+  journal.push({critId, label, ts:new Date().toISOString(), docs:cap.docs});
+  critJournalStore(journal);
+  const remaining = {};
+  cap.docs.forEach(d=>{ remaining[d.stateKey+'|'+d.docId] = true; });
+  const p = { label, remaining, onSettled, settled:false };
+  p.timer = setTimeout(()=>{
+    if(p.settled) return;
+    critToast('⚠️ '+label.charAt(0).toUpperCase()+label.slice(1)+' is applied and KEPT SAFE on this device, but the cloud has not confirmed it yet (internet stalling?). It keeps retrying by itself — no need to do it again. Just keep using the app normally and don\'t clear this browser\'s data.', 'err');
+    // No onSettled(false) here: nothing failed — it's pending. A later confirm flips the
+    // toast green and fires onSettled(true).
+  }, 20000);
+  window._critPending[critId] = p;
+  critToast('Saving '+label+' to the cloud…', 'saving');
+  if(fbDb) doFirestoreSync().catch(()=>{}); // failures auto-retry via scheduleSyncRetry
+}
+
+// Journal watchdog: as long as unconfirmed critical saves exist, keep nudging the sync
+// (doFirestoreSync recomputes the diff from state each time, so journaled docs -- whose shadow
+// still holds the pre-change value or nothing -- get resent automatically).
+setInterval(()=>{ try{ if(critJournalLoad().length>0 && fbDb) doFirestoreSync().catch(()=>{}); }catch(e){} }, 30000);
 
 // Safety net: flush a pending debounced sync immediately if the tab is hidden or closed.
 function flushPendingSync(){
@@ -962,6 +1079,7 @@ function loadFromFirestore(){
     attachFleetListeners();
     reportDeviceStatus();
     setInterval(reportDeviceStatus, 4*60*1000); // heartbeat every 4 minutes
+    try{ critJournalReplayAtStartup(); }catch(e){ console.error('journal replay failed', e); }
     attachFirestoreListeners(()=>{
       cloudDataConfirmed = true;
       // If the 10s startup timeout already showed the offline warning, the connection has
