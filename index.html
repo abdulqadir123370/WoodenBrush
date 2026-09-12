@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1789197281264;
+const APP_BUILD = 1789198788429;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -453,9 +453,14 @@ function recordsOf(stateKey){
   if(MAP_COLLECTIONS[stateKey]){
     Object.entries(val||{}).forEach(([k,v])=>{ if(v!==undefined && v!==null) out[k]=v; });
   } else {
+    // 12/09 (findings write-storm incident): systemFindings does NOT get _ord. Stamping array
+    // position onto every record meant one unshifted finding re-numbered ~100 existing 60-73KB
+    // docs -> a ~7MB batch the write stream refused (resource-exhausted, network-independent).
+    // Findings order is derived from ts at render instead.
+    const noOrd = stateKey==='systemFindings';
     (val||[]).forEach((r,i)=>{
       const k = recKey(r);
-      if(k!==null){ r._ord = i; out[k]=r; }
+      if(k!==null){ if(noOrd){ if(r._ord!==undefined) delete r._ord; } else { r._ord = i; } out[k]=r; }
     });
   }
   return out;
@@ -535,8 +540,19 @@ function doFirestoreSync(){
       return Promise.resolve();
     }
     const chunkPromises = [];
-    for(let i=0; i<ops.length; i+=400){
-      const chunk = ops.slice(i, i+400);
+    // 12/09: chunk by BYTES as well as count. 400 fat docs in one batch (~7MB of embedded
+    // finding screenshots) is exactly what exhausted the write stream; ~800KB per batch
+    // commits reliably on any connection.
+    const chunks = [];
+    let cur = [], curBytes = 0;
+    ops.forEach(o=>{
+      const sz = (o.t==='set' && o.j) ? o.j.length : 200;
+      if(cur.length>0 && (cur.length>=400 || curBytes+sz > 800000)){ chunks.push(cur); cur=[]; curBytes=0; }
+      cur.push(o); curBytes += sz;
+    });
+    if(cur.length>0) chunks.push(cur);
+    for(let ci=0; ci<chunks.length; ci++){
+      const chunk = chunks[ci];
       const batch = fbDb.batch();
       chunk.forEach(o=>{
         const ref = fbDb.collection(o.col).doc(o.docId);
@@ -570,8 +586,15 @@ function doFirestoreSync(){
       );
     }
     window._lastPendingOps = ops.length;
+    // 12/09 diagnostic (resource-exhausted recurrence): surface exactly which collections
+    // make up a stuck write count, and whether it's set/delete, right in the fleet panel —
+    // no need to open DevTools on the stuck device to find out.
+    const byKey = {};
+    ops.forEach(o=>{ const k=o.stateKey+':'+o.t; byKey[k]=(byKey[k]||0)+1; });
+    window._lastPendingOpsBreakdown = Object.entries(byKey).sort((a,b)=>b[1]-a[1]).map(([k,n])=>k+'×'+n).join(', ');
+    if(ops.length>20) console.warn('Large sync batch ('+ops.length+' ops):', window._lastPendingOpsBreakdown);
     const pr = Promise.allSettled(chunkPromises).then(results=>{
-      if(results.every(r=>r.status==='fulfilled')){ lastSyncOkAt = Date.now(); lastSyncErrText = null; window._lastPendingOps = 0; }
+      if(results.every(r=>r.status==='fulfilled')){ lastSyncOkAt = Date.now(); lastSyncErrText = null; window._lastPendingOps = 0; window._lastPendingOpsBreakdown = ''; }
       const failed = results.filter(r=>r.status==='rejected');
       if(failed.length===0){
         syncStatus='saved'; syncConsecutiveFailures=0; lastSyncError=null;
@@ -1253,6 +1276,7 @@ function reportDeviceStatus(extra){
       lastSyncOkAt: lastSyncOkAt,
       lastSyncErr: lastSyncErrText ? String(lastSyncErrText).slice(0,300) : null,
       pendingOps: (typeof window._lastPendingOps==='number') ? window._lastPendingOps : null,
+      pendingOpsBreakdown: window._lastPendingOpsBreakdown || null,
       ledgerLocal: (state && state.ledger) ? state.ledger.length : null,
       ...(extra||{})
     };
@@ -1321,7 +1345,7 @@ function renderFleetStatusHTML(){
       <span style="float:right;color:${stale?'#b3261e':'#777'};">${stale?'⚠️ last seen ':''}${fmtAge(r.ts)}</span><br>
       build ${r.build||'?'} ${behindBuild?'<b style="color:#b3261e;">(BELOW FLEET MINIMUM)</b>':''}
       · last good sync: ${fmtAge(r.lastSyncOkAt)}
-      ${hasPending ? ' · <b style="color:#b3261e;">'+r.pendingOps+' writes stuck</b>' : ''}
+      ${hasPending ? ' · <b style="color:#b3261e;">'+r.pendingOps+' writes stuck</b>'+(r.pendingOpsBreakdown?' <span style="font-weight:400;color:#888;">('+r.pendingOpsBreakdown+')</span>':'') : ''}
       ${r.lastCmdAck ? ' · ack: '+String(r.lastCmdAck).slice(0,40) : ''}
       ${hasErr ? '<div style="color:#b3261e;margin-top:4px;">last error: '+String(r.lastSyncErr).slice(0,180)+'</div>' : ''}
       <div style="margin-top:6px;">
@@ -8488,7 +8512,7 @@ async function attachUIScreenshot(finding, retryDelayMs){
   const f = (state.systemFindings||[]).find(x=>x.id===finding.id);
   if(!f) return;
   if(url) f.uiProofUrl = url;
-  else if(shot.length < 700000) f.uiProofUrl = shot; // embedded in the record — the free-plan path (finding docs stay well under the 1MB limit)
+  else if(shot.length < 120000) f.uiProofUrl = shot; // embedded fallback capped at ~120KB (12/09: 60-73KB embeds across ~100 findings were the write-storm payload; Storage upload stays the preferred path)
   saveAll();
   if(typeof renderAutoFixResults==='function') renderAutoFixResults();
 }
@@ -8505,7 +8529,8 @@ function addSystemFinding(kind, refKey, title, detail, tab){
     status: 'open',
   };
   finding.proofImage = generateFindingProofImage(finding);
-  state.systemFindings = [finding, ...(state.systemFindings||[])].slice(0, 100); // bounded inbox
+  if(finding.proofImage && finding.proofImage.length > 100000) finding.proofImage = ''; // never let one proof card bloat the doc
+  state.systemFindings = [finding, ...(state.systemFindings||[])].sort((a,b)=>(b.ts||0)-(a.ts||0)).slice(0, 100); // bounded inbox, newest 100 by ts
   try{ attachUIScreenshot(finding); }catch(e){} // real-UI screenshot attaches asynchronously when it's ready
   return finding;
 }
@@ -8797,8 +8822,9 @@ function resolveBadBaselineCluster(){
 }
 
 function renderFindingsInboxHTML(){
-  const open = (state.systemFindings||[]).filter(f=>f.status==='open');
-  const resolved = (state.systemFindings||[]).filter(f=>f.status!=='open').slice(0,5);
+  const byNewest = [...(state.systemFindings||[])].sort((a,b)=>(b.ts||0)-(a.ts||0));
+  const open = byNewest.filter(f=>f.status==='open');
+  const resolved = byNewest.filter(f=>f.status!=='open').slice(0,5);
   if(open.length===0 && resolved.length===0){
     return `<div style="font-size:12px;color:#888;">No findings — the watch has nothing waiting for you.</div>`;
   }
