@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1789219495700;
+const APP_BUILD = 1789220280118;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -7472,9 +7472,30 @@ function applyOwnerEditPurchase(id, upd, reason){
   if(newPrice!==undefined && !(newPrice>=0)) return {error:'Price cannot be negative.'};
   const newVendor = (upd.vendor||entry.vendor||'').trim();
 
+  // Batch-number change (12/09): allowed ONLY while nothing has been consumed from the old
+  // batch+size — after that, production OUT receipts reference the old number and renaming
+  // the IN would orphan them (a manufactured WB007-style imbalance). Pre-consumption, the
+  // stock moves row-to-row cleanly (merging into the target row if it already exists).
+  const mat = state.materials?.[entry.size];
+  const newBatchNo = (upd.batchNo||entry.batchNo||'').trim().toUpperCase();
+  upd._prevBatchNo = entry.batchNo;
+  if(newBatchNo && newBatchNo !== entry.batchNo){
+    if(!/^[A-Z]{1,4}\d{1,4}$/.test(newBatchNo)) return {error:'Batch number must look like WB008 (letters then numbers).'};
+    const oldRow = (mat?.batches||[]).find(x=>x.batchNo===entry.batchNo);
+    if(!oldRow) return {error:'Old batch row '+entry.batchNo+' not found — use Owner Adjustment instead.'};
+    const consumedOut = (state.ledger||[]).some(x=>x && x.type==='plank' && x.direction==='OUT' && x.size===entry.size && x.batchNo===entry.batchNo);
+    if(consumedOut || oldRow.qty < (entry.qty||0)){
+      return {error:'Batch number cannot be edited: pieces from '+entry.size+'\" '+entry.batchNo+' are already consumed (production receipts reference it). Void this purchase and re-enter it under the correct batch instead.'};
+    }
+    oldRow.qty -= (entry.qty||0); // keep-zero-rows: row stays even at 0
+    let tRow = (mat?.batches||[]).find(x=>x.batchNo===newBatchNo);
+    if(!tRow){ tRow = {batchNo:newBatchNo, qty:0}; mat.batches.push(tRow); }
+    tRow.qty += (entry.qty||0);
+    entry.batchNo = newBatchNo;
+  }
+
   // Stock effect of the qty change on the batch row
   const delta = newQty - (entry.qty||0);
-  const mat = state.materials?.[entry.size];
   const b = (mat?.batches||[]).find(x=>x.batchNo===entry.batchNo);
   if(delta!==0){
     if(!b) return {error:'Batch row '+entry.batchNo+' not found for '+entry.size+'" — stock effect cannot be applied. Use Owner Adjustment instead.'};
@@ -7483,7 +7504,8 @@ function applyOwnerEditPurchase(id, upd, reason){
   }
 
   // Permanent stamp of what it used to say (first edit keeps the true original forever)
-  const prev = { qty: entry.qty, pricePerPiece: entry.pricePerPiece, vendor: entry.vendor, date: entry.date };
+  const prev = { qty: entry.qty, pricePerPiece: entry.pricePerPiece, vendor: entry.vendor, date: entry.date, batchNo: (entry.amendedByOwner?undefined:undefined) ?? undefined };
+  prev.batchNo = upd._prevBatchNo !== undefined ? upd._prevBatchNo : entry.batchNo;
   entry.amendedByOwner = entry.amendedByOwner || { original: prev, edits: [] };
   entry.amendedByOwner.edits.push({ by: currentUser?.loginName || currentUser?.name || 'Owner', at: new Date().toISOString(), reason, prev });
   entry.qty = newQty;
@@ -7499,21 +7521,21 @@ function confirmOwnerEditPurchase(){
   if(!id){ alert('Pick an entry to edit.'); return; }
   const reason = (state.oeReason||'').trim();
   if(reason.length < 10){ alert('A written reason (at least 10 characters) is mandatory — it is stamped on the entry forever.'); return; }
-  const upd = { qty: state.oeQty, price: state.oePrice, vendor: state.oeVendor, date: state.oeDate };
+  const upd = { qty: state.oeQty, price: state.oePrice, vendor: state.oeVendor, date: state.oeDate, batchNo: state.oeBatch };
   const res = applyOwnerEditPurchase(id, upd, reason);
   if(!res || res.error){ alert('❌ Edit not applied: '+(res?.error||'unknown')); return; }
   state.correctionsLog = [...(state.correctionsLog||[]), {
     id: Date.now()+Math.random(), at: new Date().toISOString(), by: currentUser?.name||'Owner',
-    action: 'OWNER EDIT (purchase): '+res.size+'" batch '+res.batchNo+' — '+res.prev.qty+' pcs → '+res.newQty+' pcs'+(res.delta!==0?(' (stock '+(res.delta>0?'+':'')+res.delta+' pcs)'):'')+' — '+reason
+    action: 'OWNER EDIT (purchase): '+res.size+'" batch '+(res.prev.batchNo!==res.batchNo?(res.prev.batchNo+' → '+res.batchNo):res.batchNo)+' — '+res.prev.qty+' pcs → '+res.newQty+' pcs'+(res.delta!==0?(' (stock '+(res.delta>0?'+':'')+res.delta+' pcs)'):'')+' — '+reason
   }];
-  state.oeId=''; state.oeReason=''; state.oeQty=''; state.oePrice=''; state.oeVendor=''; state.oeDate='';
+  state.oeId=''; state.oeReason=''; state.oeQty=''; state.oePrice=''; state.oeVendor=''; state.oeDate=''; state.oeBatch='';
   re();
   withConfirmedSave('the edit', ()=>{});
 }
 function ownerEditPrefill(idStr){
   state.oeId = idStr;
   const e = (state.ledger||[]).find(x=>x && x.id===+idStr);
-  if(e){ state.oeQty=e.qty; state.oePrice=(e.pricePerPiece??''); state.oeVendor=e.vendor||''; state.oeDate=e.date||''; }
+  if(e){ state.oeQty=e.qty; state.oePrice=(e.pricePerPiece??''); state.oeVendor=e.vendor||''; state.oeDate=e.date||''; state.oeBatch=e.batchNo||''; }
   re();
 }
 function renderOwnerEditCardHTML(){
@@ -7537,6 +7559,8 @@ function renderOwnerEditCardHTML(){
           ${[...new Set([sel.vendor||'', ...getActiveVendors()])].filter(v=>v!=='').map(v=>`<option value="${v}" ${state.oeVendor===v?'selected':''}>${v}</option>`).join('')}
         </select></div>
       <div><div class="label">Date</div><input type="date" value="${state.oeDate}" max="${todayStr}" oninput="state.oeDate=this.value"/></div>
+      <div><div class="label">Batch number</div><input value="${state.oeBatch||''}" oninput="state.oeBatch=this.value.toUpperCase()" style="text-transform:uppercase;"/>
+        <div style="font-size:10px;color:#999;margin-top:2px;">Only editable while nothing is consumed from this batch yet — after that, void + re-enter.</div></div>
     </div>
     <div class="label">Reason — mandatory, stamped forever</div>
     <input placeholder="e.g. vendor slip shows 4008 pcs, 4080 was typed by mistake" value="${state.oeReason||''}" oninput="state.oeReason=this.value" style="margin-bottom:10px;"/>
