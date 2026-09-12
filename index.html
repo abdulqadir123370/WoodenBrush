@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1789222379881;
+const APP_BUILD = 1789222953259;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -4867,14 +4867,27 @@ async function runAiReport(presetQuestion){
   const killer = setTimeout(()=>ctrl.abort(), 100000);
   const ticker = setInterval(()=>{ const m=document.getElementById('aiReportMsg'); if(m && m.className==='msg'){ m.textContent=`🤖 Generating report — ${Math.round((Date.now()-t0)/1000)}s (sent ${sizeKB} KB; free AI, usually 10–40s)...`; } }, 1000);
   try{
-    const resp = await fetch(url, { method:'POST', signal: ctrl.signal,
-      headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+WEIGHT_SLIP_READER_SECRET },
-      body });
-    const res = await resp.json().catch(()=>null);
-    if(!resp.ok || !res || !res.success){
-      const detail = res && res.error ? res.error : ('HTTP '+resp.status);
-      if(msg){msg.textContent='⚠️ Report failed: '+detail; msg.className='msg err';}
-      return;
+    // 12/09 (Owner rule: figures must match, full stop): if verification flags any figure in
+    // the AI's wording as absent from the dataset, do NOT show it — send it back with the
+    // exact list of failed figures and demand a rewrite from dataset figures only. Up to 2
+    // correction rounds; the warning footer survives only if the AI fails all rounds, and
+    // then it is the honest truth and must never be hidden.
+    let res = null;
+    for(let attempt=0; attempt<3; attempt++){
+      const q = attempt===0 ? question
+        : question + '\n\nIMPORTANT CORRECTION (attempt '+(attempt+1)+'): your previous draft quoted figures that do NOT exist in the dataset: '+res.unverified.join(', ')+'. Rewrite the FULL answer using ONLY figures that appear in the dataset exactly as given. NEVER calculate, total, or estimate new numbers yourself. If a figure is not in the dataset, write "not in data" instead of a number.';
+      const resp = await fetch(url, { method:'POST', signal: ctrl.signal,
+        headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+WEIGHT_SLIP_READER_SECRET },
+        body: JSON.stringify({ question: q, data }) });
+      res = await resp.json().catch(()=>null);
+      if(!resp.ok || !res || !res.success){
+        const detail = res && res.error ? res.error : ('HTTP '+resp.status);
+        if(msg){msg.textContent='⚠️ Report failed: '+detail; msg.className='msg err';}
+        return;
+      }
+      if(!Array.isArray(res.unverified) || res.unverified.length===0) break;
+      const m2=document.getElementById('aiReportMsg');
+      if(m2 && attempt<2){ m2.textContent='🔁 Verification caught '+res.unverified.length+' figure(s) that don\'t match the data — making the AI rewrite ('+(attempt+2)+'/3)...'; m2.className='msg'; }
     }
     state.lastAiReport = res.report;
     state.lastAiReportQuestion = question;
@@ -4882,7 +4895,7 @@ async function runAiReport(presetQuestion){
     if(out){
       let footer = '';
       if(Array.isArray(res.unverified) && res.unverified.length>0){
-        footer = `\n\n──────────\n⚠️ VERIFICATION: these figures in the report could not be matched to the app's own computed data — treat them with caution and check the relevant tab before acting: ${res.unverified.join(', ')}`;
+        footer = `\n\n──────────\n⚠️ VERIFICATION: even after 3 attempts these figures could not be matched to the app's own computed data — do NOT act on them without checking the relevant tab: ${res.unverified.join(', ')}`;
       } else {
         footer = `\n\n──────────\n✅ Verified: every figure quoted above matches the app's own computed data.`;
       }
@@ -4982,17 +4995,27 @@ async function runAiChat(){
   const ticker = setInterval(()=>{ const m=document.getElementById('aiChatMsg'); if(m && m.className==='msg'){ m.textContent='🤖 Thinking — '+Math.round((Date.now()-t0)/1000)+'s...'; } }, 1000);
   if(msg){ msg.textContent='🤖 Thinking...'; msg.className='msg'; }
   try{
-    const resp = await fetch(url, { method:'POST', signal: ctrl.signal,
-      headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+WEIGHT_SLIP_READER_SECRET },
-      body: JSON.stringify({ question: contextQuestion, data }) });
-    const res = await resp.json().catch(()=>null);
-    if(!resp.ok || !res || !res.success){
-      const detail = res && res.error ? res.error : ('HTTP '+resp.status);
-      state.aiChatThread = [...state.aiChatThread, {role:'ai', text:'⚠️ Could not answer: '+detail+' — try again.'}];
-    } else {
+    let res = null, failed = false;
+    for(let attempt=0; attempt<3; attempt++){
+      const q = attempt===0 ? contextQuestion
+        : contextQuestion + '\n\nIMPORTANT CORRECTION (attempt '+(attempt+1)+'): your previous draft quoted figures that do NOT exist in the dataset: '+res.unverified.join(', ')+'. Rewrite the FULL answer using ONLY figures that appear in the dataset exactly as given. NEVER calculate, total, or estimate new numbers yourself. If a figure is not in the dataset, write "not in data" instead of a number.';
+      const resp = await fetch(url, { method:'POST', signal: ctrl.signal,
+        headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+WEIGHT_SLIP_READER_SECRET },
+        body: JSON.stringify({ question: q, data }) });
+      res = await resp.json().catch(()=>null);
+      if(!resp.ok || !res || !res.success){
+        const detail = res && res.error ? res.error : ('HTTP '+resp.status);
+        state.aiChatThread = [...state.aiChatThread, {role:'ai', text:'⚠️ Could not answer: '+detail+' — try again.'}];
+        failed = true; break;
+      }
+      if(!Array.isArray(res.unverified) || res.unverified.length===0) break;
+      const m2=document.getElementById('aiChatMsg');
+      if(m2 && attempt<2){ m2.textContent='🔁 Verification caught unmatched figure(s) — making the AI rewrite ('+(attempt+2)+'/3)...'; m2.className='msg'; }
+    }
+    if(!failed){
       let answer = res.report;
       if(Array.isArray(res.unverified) && res.unverified.length>0){
-        answer += '\n\n⚠️ Unverified figures in this answer (check the tab before acting): '+res.unverified.join(', ');
+        answer += '\n\n⚠️ Even after 3 attempts, these figures could not be matched to the app\'s data — do NOT act on them without checking the tab: '+res.unverified.join(', ');
       }
       state.aiChatThread = [...state.aiChatThread, {role:'ai', text:answer}];
     }
