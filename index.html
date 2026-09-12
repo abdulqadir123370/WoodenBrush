@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1789225561582;
+const APP_BUILD = 1789225983693;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -8626,7 +8626,16 @@ function collectMaterialsStockDiscrepancies(){
         // is missing, as happens on a device with stale/partial data). "Fixing" stock to a
         // negative number would be nonsense, so these are marked unfixable and surfaced for a
         // person instead of being touched.
-        discrepancies.push({size, batchNo, currentQty, ledgerQty: rounded, unfixable: rounded<0});
+        // 12/09 (WB007 1830-pc clamp incident): a batch whose history contains OWNER-VOIDED
+        // entries, or which has an OPEN shadow-mismatch finding, has a KNOWN-BROKEN ledger
+        // story — a positive derived balance there is just as untrustworthy as a negative
+        // one (real new stock moved into WB007 got auto-clamped down by the batch's old
+        // phantom hole). Auto-correction refuses ALL such batches; they belong to a person
+        // (Owner Adjustment), not the machine.
+        const historyBroken =
+          (state.ledger||[]).some(x=>x && x.batchNo===batchNo && x.size===size && x.voidedByOwner) ||
+          (state.systemFindings||[]).some(f=>f && f.status==='open' && f.kind==='shadow-mismatch' && String(f.refKey||'').includes('|'+size+'|'+batchNo));
+        discrepancies.push({size, batchNo, currentQty, ledgerQty: rounded, unfixable: rounded<0 || historyBroken, historyBroken});
       }
     });
   });
