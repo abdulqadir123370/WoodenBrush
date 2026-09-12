@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1789195482178;
+const APP_BUILD = 1789197281264;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -476,6 +476,13 @@ function syncToFirestore(){
 function doFirestoreSync(){
   if(IS_FILE_COPY) return Promise.resolve();
   if(!fbDb) return Promise.resolve();
+  // 12/09 SINGLE-FLIGHT GUARD (queued-writes explosion, resource-exhausted incident): the
+  // watchdog + auto-retry could start a NEW batch.commit while the previous one was still
+  // sitting in the SDK's backoff queue — each attempt queued more mutations until Firestore
+  // itself refused with "Write stream exhausted maximum allowed queued writes". Only one
+  // commit may be in flight; every caller shares its promise. The next diff after it settles
+  // naturally picks up anything newer.
+  if(window._syncCommitInFlight) return window._syncCommitInFlight;
   clearTimeout(syncTimeout);
   syncTimeout = null;
   syncStatus='saving';
@@ -563,7 +570,7 @@ function doFirestoreSync(){
       );
     }
     window._lastPendingOps = ops.length;
-    return Promise.allSettled(chunkPromises).then(results=>{
+    const pr = Promise.allSettled(chunkPromises).then(results=>{
       if(results.every(r=>r.status==='fulfilled')){ lastSyncOkAt = Date.now(); lastSyncErrText = null; window._lastPendingOps = 0; }
       const failed = results.filter(r=>r.status==='rejected');
       if(failed.length===0){
@@ -585,6 +592,10 @@ function doFirestoreSync(){
       scheduleSyncRetry();
       throw lastSyncError;
     });
+    window._syncCommitInFlight = pr;
+    const _clearInFlightPr = ()=>{ window._syncCommitInFlight = null; };
+    pr.then(_clearInFlightPr, _clearInFlightPr);
+    return pr;
   } catch(err){
     syncStatus='error';
     syncConsecutiveFailures++;
@@ -707,10 +718,43 @@ function critMarkConfirmed(stateKey, docId){
       p.settled = true;
       clearTimeout(p.timer);
       critToast('✅ '+p.label.charAt(0).toUpperCase()+p.label.slice(1)+' confirmed saved in the cloud.', 'ok');
+      critFileDelayFinding(p);
       if(p.onSettled) p.onSettled(true);
       delete window._critPending[critId];
     }
   });
+  // Entries confirmed by a LATER SESSION (this session has no _critPending for them — the
+  // journal replay path) also deserve a finding when they confirm: they were by definition
+  // delayed across a tab kill or reload.
+  if(Object.keys(window._critPending).length===0){
+    // handled above for same-session; cross-session delay findings are filed at replay time
+  }
+}
+// 12/09 (Owner's rule): a critical save that confirmed LATE opens an explicit System Watch
+// finding. During the unconfirmed window another device can race the same stock totals
+// (e.g. consume from a batch the void just zeroed) — the ledger receipts stay truthful but
+// the stored total can land wrong. Instead of waiting for the 2h shadow pass to maybe
+// notice, the delay itself is filed as a finding naming the affected batches, so a person
+// (and the shadow) look at exactly the right place.
+const CRIT_DELAY_FINDING_MS = 20000;
+function critFileDelayFinding(p){
+  try{
+    const startedAt = p.startedAt || 0;
+    const delayMs = Date.now() - startedAt;
+    if(!startedAt || delayMs < CRIT_DELAY_FINDING_MS) return;
+    if(typeof addSystemFinding !== 'function') return;
+    const batches = [...new Set((p.docs||[]).map(d=>{
+      try{ const r = JSON.parse(d.j); return r.batchNo || r.fbBatchNo || null; }catch(e){ return null; }
+    }).filter(Boolean))];
+    addSystemFinding(
+      'crit_save_delayed',
+      'crit_'+(p.critId||startedAt),
+      'Delayed cloud save: '+p.label,
+      p.label.charAt(0).toUpperCase()+p.label.slice(1)+' was applied on '+((currentUser&&currentUser.name)||'a device')+"'s device but took "+Math.round(delayMs/1000)+'s to confirm in the cloud (connection stall). During that window another device could have written the same stock totals with pre-'+p.label+' numbers. The ledger receipts are correct either way — what needs a look is the STORED batch totals'+(batches.length?(' for: '+batches.join(', ')):'')+'. Compare stored qty vs the ledger story (trace modal) and correct via Owner Adjustment if they disagree.',
+      'Admin'
+    );
+    saveAll();
+  }catch(e){ console.error('delay finding failed', e); }
 }
 
 // Startup replay: journaled docs from a previous session must (a) win over the first server
@@ -739,6 +783,15 @@ function critJournalReplayAtStartup(){
     });
   });
   critToast('Finishing '+journal.length+' unconfirmed save'+(journal.length>1?'s':'')+' from last time…', 'saving');
+  // Cross-session delay = automatic finding for each journaled action (filed once startup
+  // settles enough for addSystemFinding/saveAll to exist and collections to be ready).
+  setTimeout(()=>{
+    try{
+      journal.forEach(entry=>{
+        critFileDelayFinding({ label: entry.label, startedAt: new Date(entry.ts).getTime() || (Date.now()-CRIT_DELAY_FINDING_MS-1), docs: entry.docs, critId: entry.critId });
+      });
+    }catch(e){}
+  }, 8000);
 }
 
 function withConfirmedSave(label, onSettled){
@@ -760,7 +813,7 @@ function withConfirmedSave(label, onSettled){
   critJournalStore(journal);
   const remaining = {};
   cap.docs.forEach(d=>{ remaining[d.stateKey+'|'+d.docId] = true; });
-  const p = { label, remaining, onSettled, settled:false };
+  const p = { label, remaining, onSettled, settled:false, startedAt: Date.now(), docs: cap.docs, critId };
   p.timer = setTimeout(()=>{
     if(p.settled) return;
     critToast('⚠️ '+label.charAt(0).toUpperCase()+label.slice(1)+' is applied and KEPT SAFE on this device, but the cloud has not confirmed it yet (internet stalling?). It keeps retrying by itself — no need to do it again. Just keep using the app normally and don\'t clear this browser\'s data.', 'err');
