@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1789222953259;
+const APP_BUILD = 1789223864317;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -3583,7 +3583,7 @@ function renderInventory(){
         ${g.vendor?`<div style="font-size:11px;color:#7a5230;font-weight:700;margin-bottom:6px;">🏭 ${g.vendor}</div>`:''}
         ${g.sizes.map(sz=>`
         <div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;">
-          <span>${sz.size}" — ${sz.qty} pcs${sz.price>0?` @ Rs.${sz.price}/pc`:''}</span>
+          <span>${sz.size}" — ${sz.qty} pcs${sz.price>0?` @ Rs.${sz.price}/pc`:` <span style="color:#e67e22;font-size:10px;font-weight:700;" title="Entered before the mandatory-price rule or restored from ledger receipts — backfill it via Owner Edit so this batch can be costed">price not recorded</span>`}</span>
           ${sz.price>0?`<span style="color:#888;">Rs.${(sz.qty*sz.price).toLocaleString()}</span>`:''}
         </div>`).join('')}
         <div style="font-size:11px;color:#aaa;margin-top:6px;padding-top:6px;border-top:1px solid #f0e8de;">
@@ -7549,9 +7549,14 @@ function applyOwnerAdjustment(){
 // ledger story row shows an EDITED (Owner) badge with the old values. Stock effect of a qty
 // change is applied to the batch row, guarded so it can never make remaining stock negative.
 function ownerEditCandidates(){
-  return [...(state.ledger||[])].filter(e=>e && e.type==='plank' && e.direction==='IN' && !e.voidedByOwner && !/restored/i.test(e.note||''))
+  // 12/09: restored-from-ledger and migration-seed entries ARE listed — they're exactly the
+  // ones missing price/vendor (pre-rule history) and Owner Edit is the backfill path. Their
+  // qty and batch number stay locked inside applyOwnerEditPurchase (reconstructed history —
+  // only descriptive fields are correctable).
+  return [...(state.ledger||[])].filter(e=>e && e.type==='plank' && e.direction==='IN' && !e.voidedByOwner)
     .sort((a,b)=>(b.id||0)-(a.id||0)).slice(0,40);
 }
+function isReconstructedEntry(e){ return /restored|existing stock/i.test(e?.note||''); }
 function applyOwnerEditPurchase(id, upd, reason){
   const entry = (state.ledger||[]).find(e=>e && e.id===id && e.type==='plank' && e.direction==='IN' && !e.voidedByOwner);
   if(!entry) return {error:'Entry not found or already voided.'};
@@ -7572,6 +7577,10 @@ function applyOwnerEditPurchase(id, upd, reason){
   const mat = state.materials?.[entry.size];
   const newBatchNo = (upd.batchNo||entry.batchNo||'').trim().toUpperCase();
   upd._prevBatchNo = entry.batchNo;
+  if(isReconstructedEntry(entry)){
+    if(newBatchNo && newBatchNo !== entry.batchNo) return {error:'This entry was reconstructed from ledger history — its batch number is locked. Only price, vendor and date can be corrected on it.'};
+    if(newQty !== (entry.qty||0)) return {error:'This entry was reconstructed from ledger history — its quantity is locked. Only price, vendor and date can be corrected on it. For a real stock difference, use Owner Adjustment.'};
+  }
   if(newBatchNo && newBatchNo !== entry.batchNo){
     if(!/^[A-Z]{1,4}\d{1,4}$/.test(newBatchNo)) return {error:'Batch number must look like WB008 (letters then numbers).'};
     const oldRow = (mat?.batches||[]).find(x=>x.batchNo===entry.batchNo);
@@ -7642,7 +7651,7 @@ function renderOwnerEditCardHTML(){
     <div class="label">Entry</div>
     <select onchange="ownerEditPrefill(this.value)" style="margin-bottom:8px;">
       <option value="">— Select —</option>
-      ${candidates.map(r=>`<option value="${r.id}" ${+state.oeId===r.id?'selected':''}>${r.date} — ${r.size}&quot; batch ${r.batchNo} — ${r.qty} pcs from ${r.vendor||'—'}${r.amendedByOwner?' (edited)':''}</option>`).join('')}
+      ${candidates.map(r=>`<option value="${r.id}" ${+state.oeId===r.id?'selected':''}>${r.date} — ${r.size}&quot; batch ${r.batchNo} — ${r.qty} pcs from ${r.vendor||'—'}${!(r.pricePerPiece>0)?' · NO PRICE':''}${isReconstructedEntry(r)?' (restored — price/vendor/date only)':''}${r.amendedByOwner?' (edited)':''}</option>`).join('')}
     </select>
     ${sel?`<div class="grid2">
       <div><div class="label">Quantity (pcs)</div><input type="number" min="1" step="1" value="${state.oeQty}" oninput="state.oeQty=this.value"/></div>
@@ -8585,6 +8594,18 @@ function collectMaterialsStockDiscrepancies(){
   return discrepancies;
 }
 
+// 12/09 BUG FIX: when a batch row was missing/wrong and got reconstructed to match the
+// ledger's quantity, BOTH reconstruction sites below defaulted vendor/price to placeholders
+// even when the real purchase price and vendor already existed on the ledger's own IN
+// receipt for that batch+size. The price was never actually missing — it was being thrown
+// away at reconstruction time. This looks it up instead of guessing.
+function findLedgerPurchaseInfo(size, batchNo){
+  const matches = (state.ledger||[]).filter(e=>e && e.type==='plank' && e.direction==='IN' && e.size===size && e.batchNo===batchNo && !e.voidedByOwner);
+  if(!matches.length) return null;
+  const best = matches.reduce((a,b)=>(b.id||0)>(a.id||0)?b:a); // most recent (an edit/correction wins)
+  if(!(best.pricePerPiece>0) && !best.vendor) return null;
+  return { vendor: best.vendor || '(restored from ledger)', price: best.pricePerPiece || 0 };
+}
 function restoreMaterialsStockFromLedger(){
   const discrepancies = collectMaterialsStockDiscrepancies();
   if(discrepancies.length===0){ alert('Nothing to restore — current stock already matches the ledger for every batch.'); return; }
@@ -8600,7 +8621,9 @@ function restoreMaterialsStockFromLedger(){
     } else if(idx>=0){
       batches[idx] = {...batches[idx], qty:d.ledgerQty};
     } else {
-      batches.push({batchNo:d.batchNo, qty:d.ledgerQty, dateAdded:new Date().toISOString().slice(0,10), vendor:'(restored from ledger)', pricePerPiece:0});
+      const info = findLedgerPurchaseInfo(d.size, d.batchNo);
+      batches.push({batchNo:d.batchNo, qty:d.ledgerQty, dateAdded:new Date().toISOString().slice(0,10),
+        vendor: info?.vendor || '(restored from ledger)', pricePerPiece: info?.price || 0});
     }
     state.materials[d.size].batches = batches;
   });
@@ -9235,6 +9258,22 @@ function runAutoFixCycle(){
     state.socketTypes = [...(state.socketTypes||[]), ...socketNames.map(c=>c.name)];
     applied.push(`Restored ${socketNames.length} socket type name${socketNames.length>1?'s':''} found in existing records: ${socketNames.map(c=>c.name).join(', ')}`);
   }
+  // Backfill pass for rows already broken by the old bug (WB005/006/007-class): if the
+  // ledger holds a real price/vendor for this batch+size but the stored row still shows the
+  // placeholder, pull it in now. Silent and safe — additive only, qty untouched.
+  Object.entries(state.materials||{}).forEach(([size, mat])=>{
+    (mat.batches||[]).forEach(b=>{
+      if(b.pricePerPiece>0) return; // already has a real price, nothing to do
+      const info = findLedgerPurchaseInfo(size, b.batchNo);
+      if(info && info.price>0){
+        b.pricePerPiece = info.price;
+        if(!b.vendor || b.vendor==='(restored from ledger)') b.vendor = info.vendor;
+        applied.push(`${size}" batch ${b.batchNo}: price Rs.${info.price}/pc and vendor recovered from its ledger purchase receipt (was showing as not recorded)`);
+        fixedBatchNos.push(b.batchNo);
+      }
+    });
+  });
+
   materialsFix.forEach(d=>{
     if(!state.materials[d.size]) state.materials[d.size] = {name:d.size+'" Planks', size:+d.size, low:50, batches:[]};
     const batches = state.materials[d.size].batches || [];
@@ -9244,7 +9283,11 @@ function runAutoFixCycle(){
       if(idx>=0){ batches.splice(idx,1); applied.push(`${d.size}" batch ${d.batchNo}: removed stale stock row (Ledger shows this batch fully consumed)`); }
     } else {
       if(idx>=0){ batches[idx] = {...batches[idx], qty:d.ledgerQty}; }
-      else { batches.push({batchNo:d.batchNo, qty:d.ledgerQty, dateAdded:new Date().toISOString().slice(0,10), vendor:'(restored from ledger)', pricePerPiece:0}); }
+      else {
+        const info = findLedgerPurchaseInfo(d.size, d.batchNo);
+        batches.push({batchNo:d.batchNo, qty:d.ledgerQty, dateAdded:new Date().toISOString().slice(0,10),
+          vendor: info?.vendor || '(restored from ledger)', pricePerPiece: info?.price || 0});
+      }
       applied.push(`${d.size}" batch ${d.batchNo}: stock corrected from ${d.currentQty} to ${d.ledgerQty} pcs to match the Ledger`);
     }
     state.materials[d.size].batches = batches;
