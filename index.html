@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1789198788429;
+const APP_BUILD = 1789207450967;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -457,7 +457,7 @@ function recordsOf(stateKey){
     // position onto every record meant one unshifted finding re-numbered ~100 existing 60-73KB
     // docs -> a ~7MB batch the write stream refused (resource-exhausted, network-independent).
     // Findings order is derived from ts at render instead.
-    const noOrd = stateKey==='systemFindings';
+    const noOrd = stateKey==='systemFindings' || stateKey==='dataSnapshots'; // both prepend-newest; _ord stamping made every insert rewrite the whole collection (~84 snapshot docs every 2h = the ~620 writes/day on the usage graph)
     (val||[]).forEach((r,i)=>{
       const k = recKey(r);
       if(k!==null){ if(noOrd){ if(r._ord!==undefined) delete r._ord; } else { r._ord = i; } out[k]=r; }
@@ -487,7 +487,12 @@ function doFirestoreSync(){
   // itself refused with "Write stream exhausted maximum allowed queued writes". Only one
   // commit may be in flight; every caller shares its promise. The next diff after it settles
   // naturally picks up anything newer.
-  if(window._syncCommitInFlight) return window._syncCommitInFlight;
+  if(window._syncCommitInFlight){
+    // 12/09 (5th-pass): don't swallow this request — changes made DURING an in-flight commit
+    // must get their own pass the moment it settles, not wait for the next unrelated action.
+    window._syncRunAgain = true;
+    return window._syncCommitInFlight;
+  }
   clearTimeout(syncTimeout);
   syncTimeout = null;
   syncStatus='saving';
@@ -561,8 +566,12 @@ function doFirestoreSync(){
       });
       // On success, THIS chunk's records (and only this chunk's) get marked synced. On
       // failure, none of them do — so the diff picks them right back up next attempt.
+      // 12/09 (5th-pass): chunks commit SEQUENTIALLY — firing ten 800KB batches in parallel
+      // is the same multi-MB flood the byte-cap exists to prevent, just sliced. Each chunk
+      // waits for the previous one to settle (success OR failure) before sending.
+      const prevChunk = chunkPromises.length ? chunkPromises[chunkPromises.length-1].catch(()=>{}) : Promise.resolve();
       chunkPromises.push(
-        batch.commit()
+        prevChunk.then(()=>batch.commit())
           .then(()=>{
             chunk.forEach(o=>{
               if(!syncShadow[o.stateKey]) syncShadow[o.stateKey] = {};
@@ -594,7 +603,15 @@ function doFirestoreSync(){
     window._lastPendingOpsBreakdown = Object.entries(byKey).sort((a,b)=>b[1]-a[1]).map(([k,n])=>k+'×'+n).join(', ');
     if(ops.length>20) console.warn('Large sync batch ('+ops.length+' ops):', window._lastPendingOpsBreakdown);
     const pr = Promise.allSettled(chunkPromises).then(results=>{
-      if(results.every(r=>r.status==='fulfilled')){ lastSyncOkAt = Date.now(); lastSyncErrText = null; window._lastPendingOps = 0; window._lastPendingOpsBreakdown = ''; }
+      const anyOk = results.some(r=>r.status==='fulfilled');
+      if(anyOk) lastSyncOkAt = Date.now(); // 12/09: ANY committed chunk proves writes work — keeps the stuck-write lock honest during partial recovery
+      if(results.every(r=>r.status==='fulfilled')){ lastSyncErrText = null; window._lastPendingOps = 0; window._lastPendingOpsBreakdown = ''; }
+      else {
+        // Pending = only what actually failed to commit
+        let stillPending = 0;
+        results.forEach((r,i)=>{ if(r.status==='rejected') stillPending += chunks[i].length; });
+        window._lastPendingOps = stillPending;
+      }
       const failed = results.filter(r=>r.status==='rejected');
       if(failed.length===0){
         syncStatus='saved'; syncConsecutiveFailures=0; lastSyncError=null;
@@ -616,7 +633,13 @@ function doFirestoreSync(){
       throw lastSyncError;
     });
     window._syncCommitInFlight = pr;
-    const _clearInFlightPr = ()=>{ window._syncCommitInFlight = null; };
+    const _clearInFlightPr = ()=>{
+      window._syncCommitInFlight = null;
+      if(window._syncRunAgain){
+        window._syncRunAgain = false;
+        setTimeout(()=>{ try{ doFirestoreSync().catch(()=>{}); }catch(e){} }, 300);
+      }
+    };
     pr.then(_clearInFlightPr, _clearInFlightPr);
     return pr;
   } catch(err){
@@ -688,7 +711,17 @@ function saveAllConfirmed(){
 // already gates the action, confirmation normally lands in a second or two unnoticed.
 const CRIT_JOURNAL_KEY = 'wbt_critical_journal_v1';
 function critJournalLoad(){ try{ const j=JSON.parse(localStorage.getItem(CRIT_JOURNAL_KEY)); return Array.isArray(j)?j:[]; }catch(e){ return []; } }
-function critJournalStore(j){ try{ localStorage.setItem(CRIT_JOURNAL_KEY, JSON.stringify(j)); }catch(e){} }
+function critJournalStore(j){
+  try{
+    if(j.length>40) j = j.slice(-40); // never let the journal grow unbounded
+    localStorage.setItem(CRIT_JOURNAL_KEY, JSON.stringify(j));
+    return true;
+  }catch(e){
+    console.error('critical journal store failed', e);
+    if(typeof critToast==='function') critToast('⚠️ Could not write the on-device safety journal (storage full?). The change is still applied and syncing normally — but if this tab is closed before the green confirmation, it may not survive. Free up browser storage soon.', 'err');
+    return false;
+  }
+}
 window._critPending = {}; // critId -> {label, remaining:{stateKey|docId:true}, onSettled, timer, settled}
 
 function critToast(msg, kind){ // kind: 'saving' | 'ok' | 'err'
@@ -771,7 +804,7 @@ function critFileDelayFinding(p){
     }).filter(Boolean))];
     addSystemFinding(
       'crit_save_delayed',
-      'crit_'+(p.critId||startedAt),
+      'crit_'+p.label.replace(/\s+/g,'_')+'_'+(batches.join('-')||'x')+'_'+new Date().toISOString().slice(0,10),
       'Delayed cloud save: '+p.label,
       p.label.charAt(0).toUpperCase()+p.label.slice(1)+' was applied on '+((currentUser&&currentUser.name)||'a device')+"'s device but took "+Math.round(delayMs/1000)+'s to confirm in the cloud (connection stall). During that window another device could have written the same stock totals with pre-'+p.label+' numbers. The ledger receipts are correct either way — what needs a look is the STORED batch totals'+(batches.length?(' for: '+batches.join(', ')):'')+'. Compare stored qty vs the ledger story (trace modal) and correct via Owner Adjustment if they disagree.',
       'Admin'
@@ -832,7 +865,10 @@ function withConfirmedSave(label, onSettled){
   }
   const critId = 'c'+Date.now().toString(36)+Math.random().toString(36).slice(2,7);
   const journal = critJournalLoad();
-  journal.push({critId, label, ts:new Date().toISOString(), docs:cap.docs});
+  // Journal only reasonably-sized payloads (protection for oversized docs comes from the
+  // sync engine itself; a 200KB+ doc in localStorage risks the quota that guards everything)
+  const journalDocs = cap.docs.filter(d=>(d.j||'').length <= 200000);
+  journal.push({critId, label, ts:new Date().toISOString(), docs:journalDocs});
   critJournalStore(journal);
   const remaining = {};
   cap.docs.forEach(d=>{ remaining[d.stateKey+'|'+d.docId] = true; });
@@ -848,10 +884,31 @@ function withConfirmedSave(label, onSettled){
   if(fbDb) doFirestoreSync().catch(()=>{}); // failures auto-retry via scheduleSyncRetry
 }
 
+// Reconcile: a journaled doc whose payload EQUALS the server's copy (shadow) is already
+// saved — a previous session's commit landed but the journal outlived it, or the first
+// snapshot delivered it. Without this, such entries never confirm (nothing re-commits an
+// unchanged doc) and the journal stays stuck forever, re-toasting and re-filing findings
+// every session.
+function critReconcileJournal(){
+  try{
+    const journal = critJournalLoad();
+    if(!journal.length) return;
+    journal.forEach(entry=>{
+      (entry.docs||[]).slice().forEach(d=>{
+        const sh = syncShadow[d.stateKey];
+        if(sh && sh[String(d.docId)] === d.j){
+          clearInFlight(d.stateKey, String(d.docId));
+          critMarkConfirmed(d.stateKey, String(d.docId));
+        }
+      });
+    });
+  }catch(e){}
+}
+
 // Journal watchdog: as long as unconfirmed critical saves exist, keep nudging the sync
 // (doFirestoreSync recomputes the diff from state each time, so journaled docs -- whose shadow
 // still holds the pre-change value or nothing -- get resent automatically).
-setInterval(()=>{ try{ if(critJournalLoad().length>0 && fbDb) doFirestoreSync().catch(()=>{}); }catch(e){} }, 30000);
+setInterval(()=>{ try{ if(critJournalLoad().length>0){ critReconcileJournal(); if(critJournalLoad().length>0 && fbDb) doFirestoreSync().catch(()=>{}); } }catch(e){} }, 30000);
 
 // Safety net: flush a pending debounced sync immediately if the tab is hidden or closed.
 function flushPendingSync(){
@@ -868,6 +925,14 @@ window.addEventListener('pagehide', flushPendingSync);
 // impossible. Proof of life: a server-delivered snapshot or a successful write commit within
 // the last 30 seconds (window._lastServerContact / lastSyncOkAt).
 function requireLiveCloud(actionLabel){
+  // 12/09: a fresh READ is no longer enough on its own — if this device has writes pending
+  // that haven't committed for 90s, the write path is dead even though reads work, and an
+  // entry made now would join the stuck queue.
+  const pending = (typeof window._lastPendingOps==='number') ? window._lastPendingOps : 0;
+  if(pending>0 && (Date.now()-(lastSyncOkAt||0)) > 90000){
+    alert('🔌 '+(actionLabel||'This entry')+' is blocked: this device has '+pending+' unsaved change'+(pending>1?'s':'')+' stuck for over 90 seconds — saves are not reaching the database right now even though viewing works. The app is retrying by itself; entries unlock the moment a save goes through.');
+    return false;
+  }
   const last = Math.max(window._lastServerContact||0, lastSyncOkAt||0);
   const fresh = last && (Date.now()-last) < 30*1000;
   if(fresh) return true;
@@ -1046,7 +1111,13 @@ function attachFirestoreListeners(onAllFirstSnapshots){
         // deletion/update stands until its OWN write is confirmed, at which point clearInFlight
         // removes it from this set and future snapshots are trusted normally again).
         const inFlight = inFlightWrites[stateKey];
-        if(inFlight && !isFirst){
+        // 12/09 (4th-pass fix): the !isFirst exclusion here silently voided the critical
+        // journal's cross-session protection — replay marks journaled docs in-flight BEFORE
+        // listeners attach, and the FIRST snapshot is precisely the one that must not
+        // overwrite them with the server's pre-void value. In-flight marks are in-memory, so
+        // at boot the only possible marks ARE the journal's — honoring them on the first
+        // snapshot is always correct.
+        if(inFlight){
           const currentByDocId = {};
           const currentVal = MAP_COLLECTIONS[stateKey] ? (state[stateKey]||{}) : recordsOf(stateKey);
           Object.entries(currentVal).forEach(([k,v])=>{ currentByDocId[k]=v; });
@@ -1510,7 +1581,7 @@ function setRejectionLock(on){
       bar = document.createElement('div');
       bar.id = 'rejectionLockBar';
       bar.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:#c0392b;color:#fff;padding:10px 14px;font-size:12px;font-weight:700;text-align:center;z-index:998;';
-      bar.innerHTML = '⛔ The database is REJECTING this device\'s saves — it is running an outdated version. Entries are disabled so nothing typed here can be lost. '
+      bar.innerHTML = '⛔ This device\'s saves are NOT reaching the database right now (outdated version, or writes stuck/rejected). Entries are disabled so nothing typed here can be lost — viewing still works. This clears by itself the moment a save goes through. '
         + '<button onclick="location.replace(location.pathname + \'?v=\' + Date.now())" style="background:#fff;color:#c0392b;border:none;border-radius:8px;padding:6px 14px;font-size:12px;font-weight:700;cursor:pointer;margin-left:8px;">⬇️ Update now</button>';
       document.body.appendChild(bar);
     }
@@ -1525,6 +1596,20 @@ function evaluateRejectionLock(){
 window.addEventListener('offline', ()=>setOfflineLock(true));
 window.addEventListener('online', ()=>refreshOfflineLock(true));
 setInterval(()=>{ if(offlineLockOn || navigator.onLine===false) refreshOfflineLock(true); }, 20000);
+// 12/09 STUCK-WRITE WATCHDOG: today's jam proved writes can HANG (not fail) while reads stay
+// alive — so requireLiveCloud kept passing and the rejection lock (which needs completed
+// failures) never engaged. If ops are pending with no successful commit for 90s, entries
+// lock until a real commit proves writes work again (the commit-success path already clears
+// the rejection lock).
+setInterval(()=>{
+  try{
+    const pending = (typeof window._lastPendingOps==='number') ? window._lastPendingOps : 0;
+    const lastOk = lastSyncOkAt || 0;
+    if(pending>0 && (Date.now()-lastOk) > 90000 && navigator.onLine!==false && !offlineLockOn){
+      setRejectionLock(true);
+    }
+  }catch(e){}
+}, 20000);
 setTimeout(()=>refreshOfflineLock(true), 6000);
 
 // Shown when we couldn't reach Firestore on startup. With offline persistence enabled,
@@ -1769,11 +1854,18 @@ function isAdminOrOwner(){
 // date pickers render disabled (locked to today), AND — since UI can be bypassed — the value
 // is force-clamped to today again at read time before anything is saved.
 function dateLockAttrs(){
-  return isAdminOrOwner() ? '' : 'disabled title="Locked to today — only Admin/Owner can back-date"';
+  // Staff dates stay locked to today (anti-backdating rule); Admin/Owner can back-date.
+  // Future dates are refused for everyone via max (and clamped again on save).
+  const maxAttr = 'max="'+new Date().toISOString().slice(0,10)+'"';
+  return isAdminOrOwner() ? maxAttr : maxAttr+' disabled title="Locked to today — only Admin/Owner can back-date"';
 }
 function resolveEntryDate(raw){
-  if(!isAdminOrOwner()) return new Date().toISOString().slice(0,10);
-  return raw;
+  // Staff: always today. Admin/Owner: any PAST date allowed; future clamped to today for
+  // everyone (12/09 Owner rule — an entry can't happen on a day that hasn't happened).
+  const today = new Date().toISOString().slice(0,10);
+  if(!isAdminOrOwner()) return today;
+  if(!raw || !/^\d{4}-\d{2}-\d{2}$/.test(raw)) return today;
+  return raw > today ? today : raw;
 }
 
 function getDeptPerm(dept){
@@ -4078,7 +4170,8 @@ function renderMaterials(){
     </select>
 
     <div class="label">Purchase Date</div>
-    <input type="date" id="purchDate" value="${isAdminOrOwner()?(state.newPurchDate||new Date().toISOString().slice(0,10)):new Date().toISOString().slice(0,10)}" ${dateLockAttrs()} oninput="state.newPurchDate=this.value" style="margin-bottom:12px;"/>
+    <input type="date" id="purchDate" value="${state.newPurchDate||new Date().toISOString().slice(0,10)}" max="${new Date().toISOString().slice(0,10)}" oninput="state.newPurchDate=this.value" style="margin-bottom:12px;"/>
+    <div style="font-size:10px;color:#999;margin-top:-8px;margin-bottom:10px;">Late-arriving delivery? Pick the real delivery date — past dates are allowed here, future dates are not.</div>
 
     <div style="font-size:11px;font-weight:700;color:#7a5230;text-transform:uppercase;margin-bottom:6px;">Sizes in this Lot (leave blank to skip)</div>
     ${PLANK_SIZES.map(s=>`
@@ -4394,7 +4487,7 @@ function renderLedger(){
         const dept = ledgerDeptOf(e);
         return `<tr style="border-bottom:1px solid #f5f0eb;">
           <td style="padding:5px 6px;color:#888;white-space:nowrap;vertical-align:top;">${e.date}<div style="font-size:9px;color:#bbb;">${e.time||''}</div></td>
-          <td style="padding:5px 6px;color:#444;vertical-align:top;">${e.note}
+          <td style="padding:5px 6px;color:#444;vertical-align:top;">${e.note}${e.voidedByOwner?' <span style="background:#c0392b;color:#fff;font-size:9px;font-weight:700;padding:1px 5px;border-radius:4px;">VOIDED (Owner)</span>':''}
             <div style="font-size:9px;font-weight:700;color:${deptBadgeColors[dept]||'#888'};margin-top:1px;">${dept}${e.vendor?' · '+e.vendor:''}</div></td>
           <td style="padding:5px 6px;text-align:right;font-weight:700;color:#27ae60;vertical-align:top;">${isIn?e.qty:''}</td>
           <td style="padding:5px 6px;text-align:right;font-weight:700;color:#e74c3c;vertical-align:top;">${!isIn?e.qty:''}</td>
@@ -4606,7 +4699,7 @@ function _actAggregateWindow(win){
   (state.socketProcessingLog||[]).filter(r=>r&&!r.voided&&instOK(r.date,r.time)).forEach(r=>_actApplySocket(p,r));
   (state.wastage||[]).filter(w=>w&&!w.voided&&instOK(w.date,w.time)).forEach(w=>_actApplyWastage(p,w));
   (state.sales||[]).filter(s=>s&&!s.voided&&s.status!=='pending'&&s.status!=='rejected'&&instOK(s.date,s.time)).forEach(s=>_actApplySale(p,s));
-  (state.ledger||[]).filter(l=>l&&l.type==='plank'&&l.direction==='IN'&&l.vendor&&instOK(l.date,l.time)).forEach(l=>_actApplyPurchase(p,l));
+  (state.ledger||[]).filter(l=>l&&l.type==='plank'&&l.direction==='IN'&&l.vendor&&!l.voidedByOwner&&instOK(l.date,l.time)).forEach(l=>_actApplyPurchase(p,l)); // 12/09: voided purchases excluded — a voided duplicate must not inflate purchase totals/costing
   (state.packingLog||[]).filter(r=>r&&!r.voided&&instOK(r.date,r.time)).forEach(r=>_actApplyPacking(p,r));
   (state.dispatches||[]).filter(x=>x&&!x.voided&&instOK(x.date,x.time)).forEach(x=>_actApplyDispatch(p,x));
   (state.packingVariances||[]).filter(v=>v&&instOK(v.date,v.time)).forEach(v=>_actApplyVariance(p,v));
@@ -4633,7 +4726,7 @@ function compileActivityData(){
   (state.socketProcessingLog||[]).filter(r=>r&&!r.voided).forEach(r=>buckets(r.date).forEach(b=>_actApplySocket(b,r)));
   (state.wastage||[]).filter(w=>w&&!w.voided).forEach(w=>buckets(w.date).forEach(b=>_actApplyWastage(b,w)));
   (state.sales||[]).filter(s=>s&&!s.voided&&s.status!=='pending'&&s.status!=='rejected').forEach(s=>buckets(s.date).forEach(b=>_actApplySale(b,s)));
-  (state.ledger||[]).filter(l=>l&&l.type==='plank'&&l.direction==='IN'&&l.vendor).forEach(l=>buckets(l.date).forEach(b=>_actApplyPurchase(b,l)));
+  (state.ledger||[]).filter(l=>l&&l.type==='plank'&&l.direction==='IN'&&l.vendor&&!l.voidedByOwner).forEach(l=>buckets(l.date).forEach(b=>_actApplyPurchase(b,l))); // 12/09: voided purchases excluded
   (state.packingLog||[]).filter(r=>r&&!r.voided).forEach(r=>buckets(r.date).forEach(b=>_actApplyPacking(b,r)));
   (state.dispatches||[]).filter(x=>x&&!x.voided).forEach(x=>buckets(x.date).forEach(b=>_actApplyDispatch(b,x)));
   (state.packingVariances||[]).forEach(v=>buckets(v.date).forEach(b=>_actApplyVariance(b,v)));
@@ -5130,7 +5223,7 @@ function renderVendorCardHTML(){
   // Past vendor names already on ledger purchases but not yet in the list — one-tap adopt.
   const known = new Set(active.map(v=>v.name.toLowerCase()));
   const historic = [...new Set((state.ledger||[])
-    .filter(e=>e.type==='plank' && e.direction==='IN' && e.vendor)
+    .filter(e=>e.type==='plank' && e.direction==='IN' && e.vendor && !e.voidedByOwner)
     .map(e=>e.vendor.trim()).filter(n=>n && !known.has(n.toLowerCase())))].sort();
   let html = `<div class="card" style="border:2px solid #8e44ad;">
     <div class="label" style="color:#8e44ad;">🏷️ Approved Vendors</div>
@@ -9133,7 +9226,12 @@ function addPurchaseBatch(){
   setTimeout(()=>{isSubmittingPurchase=false;}, 1000);
 
   const vendor = (document.getElementById('purchVendor')?.value || state.newPurchVendor || '').trim();
-  const date = resolveEntryDate(document.getElementById('purchDate')?.value || state.newPurchDate) || new Date().toISOString().slice(0,10);
+  // 12/09 (Owner rule): PURCHASES ONLY — every role may back-date (deliveries get recorded
+  // late), future dates clamped to today for everyone. All other entry forms keep the
+  // staff locked-to-today rule via resolveEntryDate.
+  const rawDate = document.getElementById('purchDate')?.value || state.newPurchDate || '';
+  const todayStr = new Date().toISOString().slice(0,10);
+  const date = (!rawDate || !/^\d{4}-\d{2}-\d{2}$/.test(rawDate)) ? todayStr : (rawDate > todayStr ? todayStr : rawDate);
   const msg = document.getElementById('matMsg');
 
   // Vendor must come from the approved list — the field is a dropdown, and this re-check
