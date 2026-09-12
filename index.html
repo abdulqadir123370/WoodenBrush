@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1789207450967;
+const APP_BUILD = 1789219495700;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -4487,7 +4487,7 @@ function renderLedger(){
         const dept = ledgerDeptOf(e);
         return `<tr style="border-bottom:1px solid #f5f0eb;">
           <td style="padding:5px 6px;color:#888;white-space:nowrap;vertical-align:top;">${e.date}<div style="font-size:9px;color:#bbb;">${e.time||''}</div></td>
-          <td style="padding:5px 6px;color:#444;vertical-align:top;">${e.note}${e.voidedByOwner?' <span style="background:#c0392b;color:#fff;font-size:9px;font-weight:700;padding:1px 5px;border-radius:4px;">VOIDED (Owner)</span>':''}
+          <td style="padding:5px 6px;color:#444;vertical-align:top;">${e.note}${e.voidedByOwner?' <span style="background:#c0392b;color:#fff;font-size:9px;font-weight:700;padding:1px 5px;border-radius:4px;">VOIDED (Owner)</span>':''}${e.amendedByOwner?` <span style="background:#b9770e;color:#fff;font-size:9px;font-weight:700;padding:1px 5px;border-radius:4px;" title="Originally ${e.amendedByOwner.original?.qty} pcs, ${e.amendedByOwner.original?.vendor||'—'}, ${e.amendedByOwner.original?.date||''} — ${(e.amendedByOwner.edits||[]).length} edit(s)">EDITED (Owner)</span>`:''}
             <div style="font-size:9px;font-weight:700;color:${deptBadgeColors[dept]||'#888'};margin-top:1px;">${dept}${e.vendor?' · '+e.vendor:''}</div></td>
           <td style="padding:5px 6px;text-align:right;font-weight:700;color:#27ae60;vertical-align:top;">${isIn?e.qty:''}</td>
           <td style="padding:5px 6px;text-align:right;font-weight:700;color:#e74c3c;vertical-align:top;">${!isIn?e.qty:''}</td>
@@ -7448,6 +7448,102 @@ function applyOwnerAdjustment(){
   re();
   withConfirmedSave('ADJ-'+adjNo, (ok)=>{ const m2=document.getElementById('adjMsg'); if(m2){ if(ok){ m2.textContent=`✅ ADJ-${adjNo} applied and confirmed saved to the cloud.`; m2.className='msg ok'; } else { m2.textContent=`⚠️ ADJ-${adjNo} applied locally but not yet confirmed saved — see the alert.`; m2.className='msg err'; } } });
 }
+// ==================== OWNER EDIT — PURCHASE ENTRY (12/09) ====================
+// Owner-only correction of a purchase entry's qty / price / vendor / date without void +
+// re-enter. The ledger stays append-only in spirit: the entry is corrected IN PLACE (so the
+// receipt replay reads clean history) while the ORIGINAL values are stamped permanently
+// onto the entry (amendedByOwner) with reason, and a corrections-log line is written. Every
+// ledger story row shows an EDITED (Owner) badge with the old values. Stock effect of a qty
+// change is applied to the batch row, guarded so it can never make remaining stock negative.
+function ownerEditCandidates(){
+  return [...(state.ledger||[])].filter(e=>e && e.type==='plank' && e.direction==='IN' && !e.voidedByOwner && !/restored/i.test(e.note||''))
+    .sort((a,b)=>(b.id||0)-(a.id||0)).slice(0,40);
+}
+function applyOwnerEditPurchase(id, upd, reason){
+  const entry = (state.ledger||[]).find(e=>e && e.id===id && e.type==='plank' && e.direction==='IN' && !e.voidedByOwner);
+  if(!entry) return {error:'Entry not found or already voided.'};
+  const newQty = Math.round(+upd.qty);
+  if(!(newQty>0)) return {error:'Quantity must be a whole number greater than 0.'};
+  const todayStr = new Date().toISOString().slice(0,10);
+  let newDate = upd.date;
+  if(!newDate || !/^\d{4}-\d{2}-\d{2}$/.test(newDate)) newDate = entry.date;
+  if(newDate > todayStr) newDate = todayStr; // future never allowed
+  const newPrice = (upd.price===''||upd.price===undefined||upd.price===null) ? entry.pricePerPiece : +upd.price;
+  if(newPrice!==undefined && !(newPrice>=0)) return {error:'Price cannot be negative.'};
+  const newVendor = (upd.vendor||entry.vendor||'').trim();
+
+  // Stock effect of the qty change on the batch row
+  const delta = newQty - (entry.qty||0);
+  const mat = state.materials?.[entry.size];
+  const b = (mat?.batches||[]).find(x=>x.batchNo===entry.batchNo);
+  if(delta!==0){
+    if(!b) return {error:'Batch row '+entry.batchNo+' not found for '+entry.size+'" — stock effect cannot be applied. Use Owner Adjustment instead.'};
+    if(b.qty + delta < 0) return {error:'Cannot reduce to '+newQty+' pcs: only '+b.qty+' pcs remain in the batch (the rest is already consumed). Largest allowed reduction leaves qty at '+((entry.qty||0)-b.qty)+' pcs, or reverse consumption first / use Owner Adjustment.'};
+    b.qty += delta; // keep-zero-rows: row stays even at 0
+  }
+
+  // Permanent stamp of what it used to say (first edit keeps the true original forever)
+  const prev = { qty: entry.qty, pricePerPiece: entry.pricePerPiece, vendor: entry.vendor, date: entry.date };
+  entry.amendedByOwner = entry.amendedByOwner || { original: prev, edits: [] };
+  entry.amendedByOwner.edits.push({ by: currentUser?.loginName || currentUser?.name || 'Owner', at: new Date().toISOString(), reason, prev });
+  entry.qty = newQty;
+  if(newPrice!==undefined) entry.pricePerPiece = newPrice;
+  entry.vendor = newVendor;
+  entry.date = newDate;
+  return { ok:true, delta, size: entry.size, batchNo: entry.batchNo, newQty, prev };
+}
+function confirmOwnerEditPurchase(){
+  if(currentUser?.role!=='owner'){ alert('Only the Owner can edit entries.'); return; }
+  if(!requireLiveCloud('The edit')) return;
+  const id = +state.oeId;
+  if(!id){ alert('Pick an entry to edit.'); return; }
+  const reason = (state.oeReason||'').trim();
+  if(reason.length < 10){ alert('A written reason (at least 10 characters) is mandatory — it is stamped on the entry forever.'); return; }
+  const upd = { qty: state.oeQty, price: state.oePrice, vendor: state.oeVendor, date: state.oeDate };
+  const res = applyOwnerEditPurchase(id, upd, reason);
+  if(!res || res.error){ alert('❌ Edit not applied: '+(res?.error||'unknown')); return; }
+  state.correctionsLog = [...(state.correctionsLog||[]), {
+    id: Date.now()+Math.random(), at: new Date().toISOString(), by: currentUser?.name||'Owner',
+    action: 'OWNER EDIT (purchase): '+res.size+'" batch '+res.batchNo+' — '+res.prev.qty+' pcs → '+res.newQty+' pcs'+(res.delta!==0?(' (stock '+(res.delta>0?'+':'')+res.delta+' pcs)'):'')+' — '+reason
+  }];
+  state.oeId=''; state.oeReason=''; state.oeQty=''; state.oePrice=''; state.oeVendor=''; state.oeDate='';
+  re();
+  withConfirmedSave('the edit', ()=>{});
+}
+function ownerEditPrefill(idStr){
+  state.oeId = idStr;
+  const e = (state.ledger||[]).find(x=>x && x.id===+idStr);
+  if(e){ state.oeQty=e.qty; state.oePrice=(e.pricePerPiece??''); state.oeVendor=e.vendor||''; state.oeDate=e.date||''; }
+  re();
+}
+function renderOwnerEditCardHTML(){
+  if(currentUser?.role!=='owner') return '';
+  const candidates = ownerEditCandidates();
+  const sel = (state.ledger||[]).find(x=>x && x.id===+state.oeId);
+  const todayStr = new Date().toISOString().slice(0,10);
+  return `<div class="card" style="border:2px solid #b9770e;">
+    <div class="label" style="color:#b9770e;">✏️ Owner Edit — purchase entry</div>
+    <div style="font-size:11px;color:#888;margin-bottom:10px;">Fix a typo in a purchase (quantity, price, vendor, date) without void + re-enter. The original values stay stamped on the entry forever with your reason, a correction line is logged, and the entry shows an EDITED badge everywhere. Quantity changes adjust remaining batch stock — never below what's already consumed.</div>
+    <div class="label">Entry</div>
+    <select onchange="ownerEditPrefill(this.value)" style="margin-bottom:8px;">
+      <option value="">— Select —</option>
+      ${candidates.map(r=>`<option value="${r.id}" ${+state.oeId===r.id?'selected':''}>${r.date} — ${r.size}&quot; batch ${r.batchNo} — ${r.qty} pcs from ${r.vendor||'—'}${r.amendedByOwner?' (edited)':''}</option>`).join('')}
+    </select>
+    ${sel?`<div class="grid2">
+      <div><div class="label">Quantity (pcs)</div><input type="number" min="1" step="1" value="${state.oeQty}" oninput="state.oeQty=this.value"/></div>
+      <div><div class="label">Price per piece (Rs.)</div><input type="number" min="0" step="0.01" value="${state.oePrice}" oninput="state.oePrice=this.value"/></div>
+      <div><div class="label">Vendor</div>
+        <select onchange="state.oeVendor=this.value">
+          ${[...new Set([sel.vendor||'', ...getActiveVendors()])].filter(v=>v!=='').map(v=>`<option value="${v}" ${state.oeVendor===v?'selected':''}>${v}</option>`).join('')}
+        </select></div>
+      <div><div class="label">Date</div><input type="date" value="${state.oeDate}" max="${todayStr}" oninput="state.oeDate=this.value"/></div>
+    </div>
+    <div class="label">Reason — mandatory, stamped forever</div>
+    <input placeholder="e.g. vendor slip shows 4008 pcs, 4080 was typed by mistake" value="${state.oeReason||''}" oninput="state.oeReason=this.value" style="margin-bottom:10px;"/>
+    <button class="btn" style="width:100%;background:#b9770e;color:#fff;" onclick="confirmOwnerEditPurchase()">✏️ Apply Edit (stamped + logged)</button>`:''}
+  </div>`;
+}
+
 // ==================== OWNER VOID — ANY AGE ====================
 // Rule change (Owner decision 12/8): the 24-hour void wall stays absolute for every role in
 // the normal flow, but the OWNER can void any non-voided entry of any age from here — the
@@ -10501,6 +10597,7 @@ function renderAdminPanel(){
     ${renderFleetStatusHTML()}
     ${renderFleetLockCardHTML()}
     ${renderOwnerAdjustmentCardHTML()}
+    ${renderOwnerEditCardHTML()}
     ${renderOwnerVoidCardHTML()}
     ${renderGhostCorrectionsCardHTML()}
     ${renderScrapRestorationCardHTML()}
