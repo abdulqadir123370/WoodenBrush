@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1789111241866;
+const APP_BUILD = 1789193909733;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -629,6 +629,15 @@ function forceFullResync(){
 function saveAllConfirmed(){
   saveAll();
   clearTimeout(syncTimeout); syncTimeout = null; // this action shouldn't wait through the debounce
+  // 12/09 hardening: doFirestoreSync SILENTLY SKIPS any collection whose listener never became
+  // ready (collectionReady=false, e.g. a listener error at startup). For background saves that
+  // conservatism is right — but a CONFIRMED save must never report success while part of the
+  // change was quietly left behind on this device (that is exactly the WB006/WB007 "voided but
+  // came back" signature). If anything isn't live, fail loudly instead.
+  if(IS_FILE_COPY) return Promise.reject(new Error('downloaded file copies never write'));
+  if(!fbDb) return Promise.reject(new Error('no cloud connection'));
+  const notReady = Object.keys(SK).filter(k=>!collectionReady[k]);
+  if(notReady.length) return Promise.reject(new Error('collections not live on this device: '+notReady.join(', ')));
   return doFirestoreSync();
 }
 function withConfirmedSave(label, onSettled){
@@ -6297,15 +6306,21 @@ function applyVoidToPlankPurchase(id, reason){
   const by = currentUser?.loginName || currentUser?.name || 'Unknown';
   const entry = (state.ledger||[]).find(e=>e && e.id===id && e.type==='plank' && e.direction==='IN');
   if(!entry || entry.voidedByOwner) return null;
+  // 12/09 fix (WB007 incident): the old guard `if(!b || !(b.qty>0)) return null` made the void
+  // a SILENT NO-OP whenever the batch's remaining qty was already 0 (all pieces consumed by
+  // production) — the preview showed "No stock changes are needed", Confirm ran the whole
+  // success theater (corrections log, confirmed-save overlay), yet the voidedByOwner flag was
+  // never set, so the entry reappeared in the list looking like a lost void. A purchase whose
+  // stock is fully used up must STILL be voidable as a record: flag the receipt, reverse the
+  // 0 remaining pieces, and say so plainly.
   const mat = state.materials?.[entry.size];
   const b = (mat?.batches||[]).find(x=>x.batchNo===entry.batchNo);
-  if(!b || !(b.qty>0)) return null; // nothing left to void
-  const qtyVoided = b.qty;
+  const qtyVoided = (b && b.qty>0) ? b.qty : 0;
   const usedAlready = Math.max(0, (entry.qty||0)-qtyVoided);
-  b.qty = 0; // keep the row, don't delete
+  if(qtyVoided>0) b.qty = 0; // keep the row, don't delete
   entry.voidedByOwner = true; entry.voidedByOwnerBy = by; entry.voidedByOwnerReason = reason;
-  addLedgerEntry('plank', mat.name, entry.batchNo, qtyVoided, 'OUT', reason, entry.size, entry.vendor||'');
-  return { plankVoidedPcs: qtyVoided, plankUsedAlreadyPcs: usedAlready, plankSize: entry.size, plankBatch: entry.batchNo };
+  if(qtyVoided>0) addLedgerEntry('plank', mat.name, entry.batchNo, qtyVoided, 'OUT', reason, entry.size, entry.vendor||'');
+  return { plankVoidedPcs: qtyVoided, plankUsedAlreadyPcs: usedAlready, plankSize: entry.size, plankBatch: entry.batchNo, plankAllUsed: qtyVoided===0 };
 }
 
 // ==================== FLAG (works across every kind: wood/brush/socket/wastage/sales) ====================
@@ -6372,6 +6387,7 @@ function formatVoidSummary(summary){
   if(summary.wastageEntryKgRemoved>0) msg += `${summary.wastageEntryKgRemoved.toFixed(1)} KG of ${summary.wasteType||'wastage'} will be removed from the wastage tally.\n`;
   if(summary.saleKgRestored>0) msg += `${summary.saleKgRestored} KG of ${summary.wasteType||'wastage'} will be added back to available wastage stock (Rs.${(summary.saleAmountReversed||0).toFixed(0)} removed from revenue).\n`;
   if(summary.plankVoidedPcs>0) msg += `${summary.plankVoidedPcs} pcs will be removed from ${summary.plankSize}" plank stock (batch ${summary.plankBatch}).\n` + (summary.plankUsedAlreadyPcs>0 ? `${summary.plankUsedAlreadyPcs} pcs from this purchase were already used in production and are unaffected.\n` : '');
+  if(summary.plankAllUsed) msg += `0 pcs left to remove — all ${summary.plankUsedAlreadyPcs} pcs of this purchase were already consumed by production. The purchase record itself WILL still be stamped VOID and drop off the lists; stock numbers don't change. If this was a duplicate entry, the phantom pieces already flowed downstream — expect the shadow/Auto-Fix comparisons to surface any resulting difference rather than this void fixing it.\n`;
   const parts = [];
   if(summary.finishedRemoved>0) parts.push(`${summary.finishedRemoved} pcs removed from Wood Finishing output`);
   if(summary.brushRemoved>0) parts.push(`${summary.brushRemoved} pcs removed from Brush Dept stock`);
@@ -7160,7 +7176,9 @@ function ownerVoidEntryLabel(kind, r){
 }
 function ownerVoidCandidates(kind){
   if(kind==='purchase'){
-    return [...(state.ledger||[])].filter(e=>e && e.type==='plank' && e.direction==='IN' && !e.voidedByOwner)
+    // Restore entries written by voids are plank INs too, but they are NOT purchases — voiding
+    // one would re-remove stock a void just gave back. Keep them out of the candidates.
+    return [...(state.ledger||[])].filter(e=>e && e.type==='plank' && e.direction==='IN' && !e.voidedByOwner && !/restored/i.test(e.note||''))
       .sort((a,b)=>(b.id||0)-(a.id||0)).slice(0,40);
   }
   const coll = kind==='wood' ? state.production : kind==='brush' ? state.brushProcessingLog
@@ -7207,6 +7225,9 @@ function previewOwnerVoid(){
 
   cloneKeys.forEach(k=>{ state[k]=backup[k]; }); // discard the clone — nothing real changed yet
 
+  if(summary && summary.blocked) return; // requireLiveCloud already explained itself
+  if(!summary){ say('❌ Nothing was voided — the entry could not be found or is already voided (possibly from another device). Refresh and check the list again.'); return; }
+
   document.getElementById('voidPreviewBody').textContent =
     `OWNER VOID — any age\n${ownerVoidEntryLabel(kind,r)}\n\n` + formatVoidSummary(summary||{});
   document.getElementById('voidPreviewModal').classList.remove('hidden');
@@ -7225,6 +7246,13 @@ function confirmOwnerVoidFinal(){
   else if(kind==='sales') summary = applyVoidToSaleEntry(target.runId, reason);
   else if(kind==='purchase') summary = applyVoidToPlankPurchase(target.runId, reason);
   else summary = applyVoidToRun(target.runId, reason);
+  if(summary && summary.blocked){ document.getElementById('voidPreviewModal').classList.add('hidden'); state.pendingVoid = null; return; }
+  if(!summary){
+    document.getElementById('voidPreviewModal').classList.add('hidden');
+    state.pendingVoid = null; re();
+    alert('❌ VOID NOT APPLIED — the entry could not be found or is already voided. Nothing was changed and nothing was saved. Refresh and check the list.');
+    return;
+  }
   state.correctionsLog = [...(state.correctionsLog||[]), {
     id: Date.now()+Math.random(), kind:'owner_void_'+Date.now(),
     details:`OWNER VOID: ${ownerLabel} — ${ownerRawReason}`,
@@ -7234,7 +7262,23 @@ function confirmOwnerVoidFinal(){
   state.pendingVoid = null;
   state.ovId=''; state.ovReason='';
   re();
-  withConfirmedSave('the void', ()=>{});
+  withConfirmedSave('the void', (ok)=>{ if(ok && kind==='purchase') verifyPurchaseVoidOnServer(target.runId); });
+}
+// 12/09: end-to-end proof for purchase voids — after the commit is confirmed, read the exact
+// ledger doc BACK FROM THE SERVER (bypassing every cache) and check the voidedByOwner flag is
+// really there. This is the strongest possible answer to "voided but came back": either the
+// cloud copy is stamped, or the owner is told immediately that it is not.
+function verifyPurchaseVoidOnServer(id){
+  try{
+    fbDb.collection(SK.ledger).doc(String(id)).get({source:'server'}).then(doc=>{
+      let flagged=false;
+      try{ flagged = !!(doc.exists && JSON.parse(doc.data().v).voidedByOwner); }catch(e){}
+      if(flagged) alert('✅ Double-checked on the server: the cloud copy of this purchase is stamped VOID.');
+      else alert('❌ SERVER CHECK FAILED: the cloud copy of this entry is NOT stamped void even though the save reported success. Screenshot this and report it — do not assume the void stuck.');
+    }).catch(()=>{
+      alert('⚠️ The void was saved and confirmed, but the extra server double-check could not run (connection). Re-open Owner Void in a minute and make sure the entry no longer appears in the list.');
+    });
+  }catch(e){}
 }
 // The shared preview modal's Confirm button routes here so the normal staff flow
 // (confirmVoidFinal) is completely untouched — zero regression risk to tested behavior.
