@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1789225048542;
+const APP_BUILD = 1789225561582;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -3577,10 +3577,14 @@ function renderInventory(){
       if(b.vendor && !batchGroups[b.batchNo].vendor) batchGroups[b.batchNo].vendor = b.vendor;
     });
   });
-  const batchList = Object.values(batchGroups).sort((a,b)=>(b.dateAdded||'').localeCompare(a.dateAdded||''));
+  const allLots = Object.values(batchGroups).sort((a,b)=>(b.dateAdded||'').localeCompare(a.dateAdded||''));
+  // 12/09: emptied lots (0 pcs across all sizes — fully consumed, voided, or moved to
+  // another batch number) are kept forever as tombstones but collapsed out of the way.
+  const emptyLots = allLots.filter(g=>g.sizes.reduce((s,x)=>s+x.qty,0)<=0);
+  const batchList = state.showEmptyLots ? allLots : allLots.filter(g=>g.sizes.reduce((s,x)=>s+x.qty,0)>0);
 
   let html=`<div class="card"><div class="label">📦 Stock by Purchase Batch</div>`;
-  if(batchList.length===0){
+  if(allLots.length===0){
     html+=`<div style="font-size:12px;color:#aaa;">No purchases recorded yet.</div>`;
   } else {
     batchList.forEach(g=>{
@@ -3602,6 +3606,9 @@ function renderInventory(){
         </div>
       </div>`;
     });
+    if(emptyLots.length>0){
+      html+=`<button class="btn btn-gray" style="width:100%;font-size:11px;padding:6px;" onclick="state.showEmptyLots=!state.showEmptyLots;re()">${state.showEmptyLots?'Hide':'Show'} ${emptyLots.length} emptied lot${emptyLots.length>1?'s':''} (0 pcs — consumed, voided, or moved)</button>`;
+    }
   }
   html+=`</div>`;
 
@@ -7604,8 +7611,19 @@ function applyOwnerEditPurchase(id, upd, reason){
     if(consumedOut || oldRow.qty < (entry.qty||0)){
       return {error:'Batch number cannot be edited: pieces from '+entry.size+'\" '+entry.batchNo+' are already consumed (production receipts reference it). Void this purchase and re-enter it under the correct batch instead.'};
     }
-    oldRow.qty -= (entry.qty||0); // keep-zero-rows: row stays even at 0
+    oldRow.qty -= (entry.qty||0);
     const carryPrice = (entry.pricePerPiece>0) ? entry.pricePerPiece : (parsePriceFromNote(entry.note) || oldRow.pricePerPiece || 0);
+    // 12/09 (Owner rule: a renamed batch "is no more"): the move is only allowed when this
+    // entry is the batch's entire story (no consumption, full qty present). Once re-keyed,
+    // the old number has zero ledger references — deleting its empty row is safe and correct.
+    // (Different from consumed/voided tombstones, which receipts still point at — those stay.)
+    if(oldRow.qty<=0){
+      const stillReferenced = (state.ledger||[]).some(x=>x && x.batchNo===entry.batchNo && x.size===entry.size && x.id!==entry.id);
+      if(!stillReferenced){
+        const oi = mat.batches.indexOf(oldRow);
+        if(oi>=0) mat.batches.splice(oi,1);
+      }
+    }
     let tRow = (mat?.batches||[]).find(x=>x.batchNo===newBatchNo);
     if(!tRow){ tRow = {batchNo:newBatchNo, qty:0, dateAdded: entry.date || oldRow.dateAdded, vendor: entry.vendor || oldRow.vendor || '', pricePerPiece: carryPrice}; mat.batches.push(tRow); }
     else if(!(tRow.pricePerPiece>0) && carryPrice>0){ tRow.pricePerPiece = carryPrice; if(!tRow.vendor) tRow.vendor = entry.vendor||''; }
@@ -9288,6 +9306,20 @@ function runAutoFixCycle(){
     state.socketTypes = [...(state.socketTypes||[]), ...socketNames.map(c=>c.name)];
     applied.push(`Restored ${socketNames.length} socket type name${socketNames.length>1?'s':''} found in existing records: ${socketNames.map(c=>c.name).join(', ')}`);
   }
+  // Orphan-tombstone cleanup (12/09): an empty batch row whose batch+size appears NOWHERE in
+  // the ledger is a leftover from a batch rename (the entry was re-keyed away) — a number
+  // that never really existed. Remove it. Rows with any ledger story (consumed, voided,
+  // restored) are untouched — receipts reference those and they stay forever.
+  Object.entries(state.materials||{}).forEach(([size, mat])=>{
+    const before = (mat.batches||[]).length;
+    mat.batches = (mat.batches||[]).filter(b=>{
+      if(b.qty>0) return true;
+      const referenced = (state.ledger||[]).some(x=>x && x.batchNo===b.batchNo && x.size===size);
+      if(!referenced){ applied.push(`${size}" batch ${b.batchNo}: removed empty orphan row — its entry was renamed to another batch, so this number has no history and no longer exists`); fixedBatchNos.push(b.batchNo); return false; }
+      return true;
+    });
+  });
+
   // Ledger self-heal (12/09): every plank-IN entry made before addLedgerEntry stored a real
   // price field has it ONLY in its note text. Persist it onto the entry itself once, so the
   // ledger becomes reliable everywhere it's read (Owner Edit prefill, story badges, AI
