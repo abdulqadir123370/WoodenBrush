@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1789223864317;
+const APP_BUILD = 1789225048542;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -1804,11 +1804,20 @@ function saveAll(){
   if(typeof scheduleHealthBadgeUpdate==='function') scheduleHealthBadgeUpdate();
 }
 
-function addLedgerEntry(type, material, batchNo, qty, direction, note, size='', vendor=''){
+function addLedgerEntry(type, material, batchNo, qty, direction, note, size='', vendor='', pricePerPiece, dateOverride){
+  // 12/09 FIX: pricePerPiece used to live ONLY inside the human-readable `note` text
+  // ("@ Rs.44/pc") — the ledger ENTRY OBJECT never got a real numeric field, even though
+  // Owner Edit, findLedgerPurchaseInfo, and the story-row badge all read entry.pricePerPiece
+  // as if it existed. That mismatch is why the auto-heal for WB005-008 never actually
+  // recovered anything: it was reading a field that was never written. Now stored for real.
   const now = new Date();
-  const date = now.toISOString().slice(0,10);
+  // 12/09: a back-dated purchase carries its chosen date into the ledger (that's what daily
+  // purchase reports bucket by); datetime and id stay the true entry moment, so audit order
+  // and the shadow's genesis replay are untouched. Never a future date.
+  const todayStr = now.toISOString().slice(0,10);
+  const date = (dateOverride && /^\d{4}-\d{2}-\d{2}$/.test(dateOverride) && dateOverride <= todayStr) ? dateOverride : todayStr;
   const time = now.toTimeString().slice(0,5);
-  state.ledger = [...(state.ledger||[]), {
+  const rec = {
     id: Date.now() + Math.random(),
     type,        // 'plank' | 'scrap' | 'finished'
     material,    // e.g. '24" Planks' or 'Commando Broom'
@@ -1821,7 +1830,9 @@ function addLedgerEntry(type, material, batchNo, qty, direction, note, size='', 
     date,
     time,
     datetime: now.toISOString()
-  }];
+  };
+  if(pricePerPiece>0) rec.pricePerPiece = pricePerPiece;
+  state.ledger = [...(state.ledger||[]), rec];
 }
 
 function getNextBatchNo(prefix){
@@ -7566,8 +7577,12 @@ function applyOwnerEditPurchase(id, upd, reason){
   let newDate = upd.date;
   if(!newDate || !/^\d{4}-\d{2}-\d{2}$/.test(newDate)) newDate = entry.date;
   if(newDate > todayStr) newDate = todayStr; // future never allowed
-  const newPrice = (upd.price===''||upd.price===undefined||upd.price===null) ? entry.pricePerPiece : +upd.price;
-  if(newPrice!==undefined && !(newPrice>=0)) return {error:'Price cannot be negative.'};
+  // 12/09 (Owner rule: no purchase recorded without a price) — an edit can correct the price,
+  // it can never clear it to 0. If the entry never had a real price field (pre-fix history),
+  // fall back to parsing its note so "leave price unchanged" doesn't silently mean "erase it".
+  const existingPrice = (entry.pricePerPiece>0) ? entry.pricePerPiece : parsePriceFromNote(entry.note);
+  const newPrice = (upd.price===''||upd.price===undefined||upd.price===null) ? existingPrice : +upd.price;
+  if(!(newPrice>0)) return {error:'Price per piece must be greater than 0 — a purchase can never be saved without a real price.'};
   const newVendor = (upd.vendor||entry.vendor||'').trim();
 
   // Batch-number change (12/09): allowed ONLY while nothing has been consumed from the old
@@ -7590,8 +7605,10 @@ function applyOwnerEditPurchase(id, upd, reason){
       return {error:'Batch number cannot be edited: pieces from '+entry.size+'\" '+entry.batchNo+' are already consumed (production receipts reference it). Void this purchase and re-enter it under the correct batch instead.'};
     }
     oldRow.qty -= (entry.qty||0); // keep-zero-rows: row stays even at 0
+    const carryPrice = (entry.pricePerPiece>0) ? entry.pricePerPiece : (parsePriceFromNote(entry.note) || oldRow.pricePerPiece || 0);
     let tRow = (mat?.batches||[]).find(x=>x.batchNo===newBatchNo);
-    if(!tRow){ tRow = {batchNo:newBatchNo, qty:0}; mat.batches.push(tRow); }
+    if(!tRow){ tRow = {batchNo:newBatchNo, qty:0, dateAdded: entry.date || oldRow.dateAdded, vendor: entry.vendor || oldRow.vendor || '', pricePerPiece: carryPrice}; mat.batches.push(tRow); }
+    else if(!(tRow.pricePerPiece>0) && carryPrice>0){ tRow.pricePerPiece = carryPrice; if(!tRow.vendor) tRow.vendor = entry.vendor||''; }
     tRow.qty += (entry.qty||0);
     entry.batchNo = newBatchNo;
   }
@@ -7611,9 +7628,13 @@ function applyOwnerEditPurchase(id, upd, reason){
   entry.amendedByOwner = entry.amendedByOwner || { original: prev, edits: [] };
   entry.amendedByOwner.edits.push({ by: currentUser?.loginName || currentUser?.name || 'Owner', at: new Date().toISOString(), reason, prev });
   entry.qty = newQty;
-  if(newPrice!==undefined) entry.pricePerPiece = newPrice;
+  entry.pricePerPiece = newPrice;
   entry.vendor = newVendor;
   entry.date = newDate;
+  // Sync onto the materials.batches row too — that's what Inventory display and Cost
+  // Analysis actually read. Editing the ledger alone (the old behavior) left them stale.
+  const bRow = (mat?.batches||[]).find(x=>x.batchNo===entry.batchNo);
+  if(bRow){ bRow.pricePerPiece = newPrice; bRow.vendor = newVendor; }
   return { ok:true, delta, size: entry.size, batchNo: entry.batchNo, newQty, prev };
 }
 function confirmOwnerEditPurchase(){
@@ -8599,12 +8620,21 @@ function collectMaterialsStockDiscrepancies(){
 // even when the real purchase price and vendor already existed on the ledger's own IN
 // receipt for that batch+size. The price was never actually missing — it was being thrown
 // away at reconstruction time. This looks it up instead of guessing.
+function parsePriceFromNote(note){
+  const m = /@\s*Rs\.?\s*([\d,.]+)\s*\/\s*pc/i.exec(note||'');
+  if(!m) return 0;
+  const v = parseFloat(m[1].replace(/,/g,''));
+  return (v>0) ? v : 0;
+}
 function findLedgerPurchaseInfo(size, batchNo){
   const matches = (state.ledger||[]).filter(e=>e && e.type==='plank' && e.direction==='IN' && e.size===size && e.batchNo===batchNo && !e.voidedByOwner);
   if(!matches.length) return null;
   const best = matches.reduce((a,b)=>(b.id||0)>(a.id||0)?b:a); // most recent (an edit/correction wins)
-  if(!(best.pricePerPiece>0) && !best.vendor) return null;
-  return { vendor: best.vendor || '(restored from ledger)', price: best.pricePerPiece || 0 };
+  // 12/09: fall back to parsing the note — every purchase made before this fix has its real
+  // price embedded there ("Purchased from X @ Rs.44/pc") and nowhere else.
+  const price = (best.pricePerPiece>0) ? best.pricePerPiece : parsePriceFromNote(best.note);
+  if(!(price>0) && !best.vendor) return null;
+  return { vendor: best.vendor || '(restored from ledger)', price };
 }
 function restoreMaterialsStockFromLedger(){
   const discrepancies = collectMaterialsStockDiscrepancies();
@@ -9258,6 +9288,17 @@ function runAutoFixCycle(){
     state.socketTypes = [...(state.socketTypes||[]), ...socketNames.map(c=>c.name)];
     applied.push(`Restored ${socketNames.length} socket type name${socketNames.length>1?'s':''} found in existing records: ${socketNames.map(c=>c.name).join(', ')}`);
   }
+  // Ledger self-heal (12/09): every plank-IN entry made before addLedgerEntry stored a real
+  // price field has it ONLY in its note text. Persist it onto the entry itself once, so the
+  // ledger becomes reliable everywhere it's read (Owner Edit prefill, story badges, AI
+  // reports, and the materials-row backfill just below).
+  (state.ledger||[]).forEach(e=>{
+    if(e && e.type==='plank' && e.direction==='IN' && !(e.pricePerPiece>0)){
+      const parsed = parsePriceFromNote(e.note);
+      if(parsed>0){ e.pricePerPiece = parsed; applied.push(`Ledger: batch ${e.batchNo} (${e.size}" planks) — price Rs.${parsed}/pc recovered from its own purchase note`); }
+    }
+  });
+
   // Backfill pass for rows already broken by the old bug (WB005/006/007-class): if the
   // ledger holds a real price/vendor for this batch+size but the stored row still shows the
   // placeholder, pull it in now. Silent and safe — additive only, qty untouched.
@@ -9526,7 +9567,7 @@ function addPurchaseBatch(){
       batchNo:bno, qty, dateAdded:date, vendor, pricePerPiece:price
     }];
     addLedgerEntry('plank', state.materials[size].name, bno, qty, 'IN',
-      `Purchased from ${vendor}${price>0?` @ Rs.${price}/pc`:''}`, size, vendor);
+      `Purchased from ${vendor}${price>0?` @ Rs.${price}/pc`:''}`, size, vendor, price, date);
   });
 
   // Reset form fields
