@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1789220280118;
+const APP_BUILD = 1789222379881;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -4878,6 +4878,7 @@ async function runAiReport(presetQuestion){
     }
     state.lastAiReport = res.report;
     state.lastAiReportQuestion = question;
+    state.aiChatThread = []; // new report = fresh follow-up conversation
     if(out){
       let footer = '';
       if(Array.isArray(res.unverified) && res.unverified.length>0){
@@ -4932,7 +4933,76 @@ function renderAiReportCardHTML(){
     <div id="aiReportMsg" class="msg"></div>
     <div id="aiReportResult" style="display:${state.lastAiReportShown?'block':'none'};white-space:pre-wrap;background:#f4f9fd;border-radius:8px;padding:12px;font-size:12px;line-height:1.5;margin-top:8px;max-height:60vh;overflow-y:auto;">${state.lastAiReportShown?(state.lastAiReportQuestion?'❓ '+state.lastAiReportQuestion.replace(/&/g,'&amp;').replace(/</g,'&lt;')+'\n\n':'')+state.lastAiReportShown.replace(/&/g,'&amp;').replace(/</g,'&lt;'):''}</div>
     <button class="btn btn-gray" style="font-size:11px;padding:5px 12px;margin-top:6px;" onclick="copyAiReport()">📋 Copy Report</button>
+    ${state.lastAiReportShown?`
+    <div style="margin-top:10px;border-top:1px dashed #cdE0ee;padding-top:8px;">
+      <div style="font-size:11px;font-weight:700;color:#2980b9;margin-bottom:6px;">💬 Didn't understand something? Ask about this report</div>
+      <div id="aiChatThread">${(state.aiChatThread||[]).map(m=>`
+        <div style="margin-bottom:6px;display:flex;${m.role==='user'?'justify-content:flex-end;':''}">
+          <div style="max-width:85%;padding:7px 10px;border-radius:10px;font-size:12px;line-height:1.45;white-space:pre-wrap;${m.role==='user'?'background:#2980b9;color:#fff;':'background:#eef4f9;color:#333;'}">${String(m.text).replace(/&/g,'&amp;').replace(/</g,'&lt;')}</div>
+        </div>`).join('')}</div>
+      <div id="aiChatMsg" class="msg"></div>
+      <div style="display:flex;gap:6px;">
+        <input id="aiChatInput" placeholder="e.g. 'rejected 1182 kyun itna zyada hai?', 'WB006 kis product main laga?'" value="${(state.aiChatDraft||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;')}" oninput="state.aiChatDraft=this.value" onkeydown="if(event.key==='Enter'){runAiChat();}" style="flex:1;"/>
+        <button class="btn" style="background:#2980b9;color:#fff;padding:8px 14px;" onclick="runAiChat()">Send</button>
+      </div>
+    </div>`:''}
   </div>`;
+}
+
+// Follow-up chat about the last report — same endpoint, same data, same verification;
+// the earlier report + running conversation ride along as context so the AI can explain
+// its own report instead of starting fresh. Thread is session-local (not synced).
+async function runAiChat(){
+  if(!isAdminOrOwner()){ alert('Admin/Owner only.'); return; }
+  const inputEl = document.getElementById('aiChatInput');
+  const q = (inputEl && inputEl.value.trim()) || '';
+  const msg = document.getElementById('aiChatMsg');
+  if(!q){ if(msg){msg.textContent='⚠️ Type your question first.'; msg.className='msg err';} return; }
+  if(!state.lastAiReport){ if(msg){msg.textContent='⚠️ Generate a report first — then ask about it.'; msg.className='msg err';} return; }
+  state.aiChatThread = [...(state.aiChatThread||[]), {role:'user', text:q}];
+  state.aiChatDraft = '';
+  re();
+  const url = WEIGHT_SLIP_READER_URL.replace('/read-slip','/report');
+  const history = (state.aiChatThread||[]).slice(-8).map(m=>(m.role==='user'?'Q: ':'A: ')+m.text).join('\n');
+  const contextQuestion =
+    'FOLLOW-UP QUESTION about a report you already generated from this same dataset. '+
+    'Answer ONLY the follow-up, briefly and plainly (match the language the user asked in — English / Urdu / Roman Urdu). Use figures from the dataset only.\n\n'+
+    '=== The report being discussed ===\n'+state.lastAiReport+'\n\n'+
+    '=== Conversation so far ===\n'+history+'\n\n'+
+    '=== The follow-up to answer now ===\n'+q;
+  let data;
+  try{ data = compileReportData();
+    let len = JSON.stringify(data).length;
+    if(len>320000 && data.activity){ data.activity.recentEntriesLast3Days = 'omitted (dataset too large)'; len = JSON.stringify(data).length; }
+    if(len>380000 && data.activity){ const d=data.activity.dailyActivity||{}; data.activity.dailyActivity = Object.fromEntries(Object.entries(d).slice(0,14)); }
+  }catch(e){ if(msg){msg.textContent='⚠️ Could not compile the data: '+e.message; msg.className='msg err';} return; }
+  const t0 = Date.now();
+  const ctrl = new AbortController();
+  const killer = setTimeout(()=>ctrl.abort(), 100000);
+  const ticker = setInterval(()=>{ const m=document.getElementById('aiChatMsg'); if(m && m.className==='msg'){ m.textContent='🤖 Thinking — '+Math.round((Date.now()-t0)/1000)+'s...'; } }, 1000);
+  if(msg){ msg.textContent='🤖 Thinking...'; msg.className='msg'; }
+  try{
+    const resp = await fetch(url, { method:'POST', signal: ctrl.signal,
+      headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+WEIGHT_SLIP_READER_SECRET },
+      body: JSON.stringify({ question: contextQuestion, data }) });
+    const res = await resp.json().catch(()=>null);
+    if(!resp.ok || !res || !res.success){
+      const detail = res && res.error ? res.error : ('HTTP '+resp.status);
+      state.aiChatThread = [...state.aiChatThread, {role:'ai', text:'⚠️ Could not answer: '+detail+' — try again.'}];
+    } else {
+      let answer = res.report;
+      if(Array.isArray(res.unverified) && res.unverified.length>0){
+        answer += '\n\n⚠️ Unverified figures in this answer (check the tab before acting): '+res.unverified.join(', ');
+      }
+      state.aiChatThread = [...state.aiChatThread, {role:'ai', text:answer}];
+    }
+  }catch(e){
+    state.aiChatThread = [...state.aiChatThread, {role:'ai', text:(e&&e.name==='AbortError')?'⚠️ Timed out — the free AI service is slow right now. Ask again in a minute.':'⚠️ Connection dropped before the answer came back — check signal and try again.'}];
+  } finally {
+    clearTimeout(killer); clearInterval(ticker);
+    re();
+    setTimeout(()=>{ const t=document.getElementById('aiChatThread'); if(t) t.scrollIntoView({block:'end'}); const i=document.getElementById('aiChatInput'); if(i) i.focus(); }, 60);
+  }
 }
 
 function renderSales(){
