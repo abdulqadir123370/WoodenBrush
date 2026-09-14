@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1789372588150;
+const APP_BUILD = 1789373620666;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -4921,18 +4921,23 @@ async function runAiReport(presetQuestion){
     state.lastAiReport = res.report;
     state.lastAiReportQuestion = question;
     state.aiChatThread = []; // new report = fresh follow-up conversation
-    if(out){
-      let footer = '';
-      if(Array.isArray(res.unverified) && res.unverified.length>0){
-        footer = `\n\n──────────\n⚠️ VERIFICATION: even after 3 attempts these figures could not be matched to the app's own computed data — do NOT act on them without checking the relevant tab: ${res.unverified.join(', ')}`;
-      } else {
-        footer = `\n\n──────────\n✅ Verified: every figure quoted above matches the app's own computed data.`;
-      }
-      out.textContent = res.report + footer;
-      out.style.display='block';
-      state.lastAiReportShown = res.report + footer;
+    let footer = '';
+    if(Array.isArray(res.unverified) && res.unverified.length>0){
+      footer = `\n\n──────────\n⚠️ VERIFICATION: even after 3 attempts these figures could not be matched to the app's own computed data — do NOT act on them without checking the relevant tab: ${res.unverified.join(', ')}`;
+    } else {
+      footer = `\n\n──────────\n✅ Verified: every figure quoted above matches the app's own computed data.`;
     }
-    if(msg){msg.textContent=`✅ ${Math.round((Date.now()-t0)/1000)}s`; msg.className='msg';}
+    state.lastAiReportShown = res.report + footer;
+    // 14/09 FIX: the report used to be written straight into its own box via out.textContent
+    // without a full re-render — that showed the report text fine, but the chat section below
+    // it only appears in the FRESHLY-BUILT HTML for this whole card (it's conditional on
+    // state.lastAiReportShown), which a direct DOM write never regenerates. Report generated,
+    // chat box silently never rendered — exactly the bug just reported. re() rebuilds the
+    // card properly, chat box included; the success time is set on the element AFTER re()
+    // rebuilds it, since the old reference is now detached.
+    re();
+    const msg2 = document.getElementById('aiReportMsg');
+    if(msg2){msg2.textContent=`✅ ${Math.round((Date.now()-t0)/1000)}s`; msg2.className='msg';}
   }catch(e){
     console.error('AI report failed:', e);
     const secs = Math.round((Date.now()-t0)/1000);
