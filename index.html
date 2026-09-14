@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1789226144759;
+const APP_BUILD = 1789369604924;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -6715,11 +6715,20 @@ function applyVoidToPlankPurchase(id, reason){
   // 0 remaining pieces, and say so plainly.
   const mat = state.materials?.[entry.size];
   const b = (mat?.batches||[]).find(x=>x.batchNo===entry.batchNo);
+  // 14/09 (duplicate-void incident: the same void landed 5x during the 12/09 write-jam —
+  // local flags were wiped by the since-fixed replay hole, so the flag alone wasn't enough):
+  // the ledger itself is now the guard. Every void OUT stamps the voided entry's id; if one
+  // already exists for this entry, the void is refused as already done.
+  const priorVoidOut = (state.ledger||[]).find(x=>x && x.type==='plank' && x.direction==='OUT' && String(x.voidOfEntryId)===String(entry.id));
+  if(priorVoidOut){ entry.voidedByOwner = true; entry.voidedByOwnerBy = entry.voidedByOwnerBy||by; entry.voidedByOwnerReason = entry.voidedByOwnerReason||reason; return null; }
   const qtyVoided = (b && b.qty>0) ? b.qty : 0;
   const usedAlready = Math.max(0, (entry.qty||0)-qtyVoided);
   if(qtyVoided>0) b.qty = 0; // keep the row, don't delete
   entry.voidedByOwner = true; entry.voidedByOwnerBy = by; entry.voidedByOwnerReason = reason;
-  if(qtyVoided>0) addLedgerEntry('plank', mat.name, entry.batchNo, qtyVoided, 'OUT', reason, entry.size, entry.vendor||'');
+  if(qtyVoided>0){
+    addLedgerEntry('plank', mat.name, entry.batchNo, qtyVoided, 'OUT', reason, entry.size, entry.vendor||'');
+    const vo = state.ledger[state.ledger.length-1]; if(vo) vo.voidOfEntryId = entry.id;
+  }
   return { plankVoidedPcs: qtyVoided, plankUsedAlreadyPcs: usedAlready, plankSize: entry.size, plankBatch: entry.batchNo, plankAllUsed: qtyVoided===0 };
 }
 
@@ -8556,66 +8565,75 @@ function renderGhostCorrectionsCardHTML(){
 // One-tap correction, Owner-authorized via chat 12/09: write the two backfill ledger INs
 // (documenting the phantom as receipts) and restore the 12" row to the real delivery figure.
 // Live-gated: only offered while the device's data still shows the evidenced condition.
-function _adj10Evidence(){
-  // Known phantom constants from the 12/09 shadow findings: 12\" hole = 1,830 pcs,
-  // 24\" hole = 33,960 pcs. The 12\" stored row may be in either state: clamped to the
-  // derived value (100) by the 12/09 auto-fix, or already restored (1,930). Anything else
-  // means the world changed since the evidence — refuse and leave it to a person.
-  const HOLE12 = 1830, HOLE24 = 33960;
-  const balOf = (size)=>{ let b=0; (state.ledger||[]).forEach(e=>{ if(e && e.type==='plank' && e.size===size && e.batchNo==='WB007'){ b += e.direction==='IN'?(e.qty||0):-(e.qty||0); } }); return Math.round(b); };
-  const bal12 = balOf('12'), bal24 = balOf('24');
-  const row12=(state.materials?.['12']?.batches||[]).find(b=>b.batchNo==='WB007');
-  const row24=(state.materials?.['24']?.batches||[]).find(b=>b.batchNo==='WB007');
-  if(!row12 || !row24) return null;
-  // 12\": ledger must still carry the 1,830 hole (derived = real delivery − hole), row either clamped or restored
-  const target12 = bal12 + HOLE12;
-  const twelveOk = (row12.qty===bal12 /* clamped */ || row12.qty===target12 /* restored */);
-  // 24\": derived must sit exactly one 33,960 hole below the stored real delivery
-  const twentyFourOk = (row24.qty - bal24 === HOLE24);
-  if(!twelveOk && !twentyFourOk) return null;
-  return {
-    bal12, bal24, row12, row24,
-    fill12: twelveOk ? HOLE12 : 0,
-    fill24: twentyFourOk ? HOLE24 : 0,
-    target12,
-    restore12: twelveOk && row12.qty===bal12 ? (target12 - row12.qty) : 0
-  };
+function _adj11Evidence(){
+  // 14/09 rewrite: no hardcoded constants (the 12/09 version demanded a snapshot of the
+  // evidence that had already moved by tap-time, so 24\" was refused). Computed live from
+  // the ledger: for WB007 per size — Owner-void OUT receipts beyond the voided INs they
+  // reverse are DUPLICATES from the 12/09 write-jam (the same void landed repeatedly).
+  // correction = duplicate OUT total − correction INs already written (ADJ-10 covered 12\").
+  // The stock row may only be force-restored when the batch has ZERO real consumption
+  // (every OUT is a void receipt) — true for WB007; anything else is refused.
+  const out = {};
+  ['12','24'].forEach(size=>{
+    const es = (state.ledger||[]).filter(e=>e && e.type==='plank' && e.size===size && e.batchNo==='WB007');
+    const voidOutSum = es.filter(e=>e.direction==='OUT' && /^OWNER VOID/i.test(e.note||'')).reduce((s,e)=>s+(e.qty||0),0);
+    const otherOutSum = es.filter(e=>e.direction==='OUT' && !/^OWNER VOID/i.test(e.note||'')).reduce((s,e)=>s+(e.qty||0),0);
+    const voidedInSum = es.filter(e=>e.direction==='IN' && e.voidedByOwner).reduce((s,e)=>s+(e.qty||0),0);
+    const adjInSum = es.filter(e=>e.direction==='IN' && /^ADJ-1\d/i.test(e.note||'')).reduce((s,e)=>s+(e.qty||0),0);
+    const bal = es.reduce((s,e)=>s+(e.direction==='IN'?(e.qty||0):-(e.qty||0)),0);
+    const extra = voidOutSum - voidedInSum - adjInSum; // duplicate void receipts not yet cancelled
+    out[size] = {extra: Math.max(0,extra), bal: Math.round(bal), otherOutSum,
+      row: (state.materials?.[size]?.batches||[]).find(b=>b.batchNo==='WB007') || null};
+  });
+  if(out['12'].extra<=0 && out['24'].extra<=0) return null;
+  return out;
 }
 function renderAdj10CardHTML(){
   if(!currentUser || currentUser.role!=='owner') return '';
-  if((state.correctionsLog||[]).some(c=>c && c.kind==='owner_adj_10')) return '';
-  const ev=_adj10Evidence(); if(!ev) return '';
-  return `<div class="card" style="border:2px solid #c0392b;background:#fff5f5;">
-    <div class="label" style="color:#c0392b;">🧾 ADJ-10/11 — WB007 phantom backfill (one tap)</div>
-    <div style="font-size:11px;color:#666;margin-bottom:8px;">Verified live on this device right now — WB007's receipts run short by the duplicate-entry phantom:</div>
-    <table style="width:100%;font-size:12px;border-collapse:collapse;">
-      ${ev.fill12?`<tr><td>12" planks backfill receipt (ADJ-10)</td><td style="text-align:right;"><b>${ev.fill12} pcs</b></td></tr>`:''}
-      ${ev.restore12?`<tr><td>12" stock restore (auto-clamped 1,930 → ${ev.row12.qty} on 12/09)</td><td style="text-align:right;"><b>+${ev.restore12} pcs</b></td></tr>`:''}
-      ${ev.fill24?`<tr><td>24" planks backfill receipt (ADJ-11)</td><td style="text-align:right;"><b>${ev.fill24} pcs</b></td></tr>`:''}
-    </table>
-    <div style="font-size:11px;color:#666;margin:6px 0;">One tap: books become consistent (derived == stored), 12" stock ends at ${ev.target12} pcs, 24" stays at ${ev.row24.qty} pcs, and the two RECEIPT SHADOW findings close at the next check. Verify against the physical count when convenient; any floor difference is a normal deduct-adjustment afterwards.</div>
-    <button class="btn btn-full" style="background:#c0392b;color:#fff;" onclick="applyAdj10()">Apply ADJ-10/11 — backfill receipts + restore clamped stock</button>
+  if((state.correctionsLog||[]).some(c=>c && c.kind==='owner_adj_11')) return '';
+  const ev=_adj11Evidence(); if(!ev) return '';
+  const rows=[];
+  ['12','24'].forEach(size=>{
+    const d=ev[size]; if(d.extra<=0) return;
+    const target=d.bal+d.extra;
+    rows.push(`<tr><td>${size}\" — cancel duplicate void receipts from the 12/09 write-jam</td><td style=\"text-align:right;\"><b>+${d.extra} pcs</b></td></tr>`+
+      (d.otherOutSum===0?`<tr><td style=\"color:#888;font-size:11px;\">${size}\" stock row restored to the resulting balance (no real consumption exists on this batch)</td><td style=\"text-align:right;color:#888;font-size:11px;\">${target} pcs</td></tr>`:''));
+  });
+  return `<div class=\"card\" style=\"border:2px solid #c0392b;background:#fff5f5;\">
+    <div class=\"label\" style=\"color:#c0392b;\">🧾 ADJ-11 — cancel WB007's duplicate void receipts (one tap)</div>
+    <div style=\"font-size:11px;color:#666;margin-bottom:8px;\">During the 12/09 write-jam the same void saved multiple times (5× on 24\", 2× on 12\"). Computed live from this device's ledger right now:</div>
+    <table style=\"width:100%;font-size:12px;border-collapse:collapse;\">${rows.join('')}</table>
+    <div style=\"font-size:11px;color:#666;margin:6px 0;\">One tap writes the cancelling receipt(s), the books balance, WB007 reappears in the production batch list, and the shadow findings close at the next check.</div>
+    <button class=\"btn btn-full\" style=\"background:#c0392b;color:#fff;\" onclick=\"applyAdj10()\">Apply ADJ-11 — cancel duplicates + restore stock</button>
   </div>`;
 }
 function applyAdj10(){
-  if(!requireLiveCloud('ADJ-10/11')) return;
+  if(!requireLiveCloud('ADJ-11')) return;
   if(!currentUser || currentUser.role!=='owner'){ alert('Owner only.'); return; }
-  const ev=_adj10Evidence();
-  if(!ev){ alert('Live verification failed — the evidenced condition no longer holds on this device. Not applying.'); re(); return; }
-  if(!confirm('ADJ-10/11: write WB007 backfill receipts — '+ev.fill12+' pcs (12") and '+ev.fill24+' pcs (24")'+(ev.restore12?', and restore the 12" stock row to '+ev.target12+' pcs':'')+'?\n\nThis documents the duplicate-entry phantom as ledger receipts so derived and stored stock agree. Stamped permanently.')) return;
-  if(ev.fill12>0){
-    addLedgerEntry('plank','12" Planks','WB007',ev.fill12,'IN','ADJ-10: duplicate-entry phantom backfill — receipts reconciliation per 12/09 shadow findings; pairs with restoring the 1,830 pcs auto-clamped 12/09','12','');
-    if(ev.restore12>0) ev.row12.qty = ev.target12;
-  }
-  if(ev.fill24>0){
-    addLedgerEntry('plank','24" Planks','WB007',ev.fill24,'IN','ADJ-11: duplicate-entry phantom backfill — receipts reconciliation per 12/09 shadow findings','24','');
-  }
+  const ev=_adj11Evidence();
+  if(!ev){ alert('Live verification failed — no duplicate void receipts remain uncancelled on this device. Not applying.'); re(); return; }
+  const parts=['12','24'].filter(s=>ev[s].extra>0).map(s=>ev[s].extra+' pcs ('+s+'\")');
+  if(!confirm('ADJ-11: write cancelling receipt(s) for WB007 duplicate voids — '+parts.join(' and ')+'?\n\nEach cancels void receipts that saved more than once during the 12/09 write-jam. Stamped permanently; stock rows restore to the resulting balance where the batch has no real consumption.')) return;
+  ['12','24'].forEach(size=>{
+    const d=ev[size]; if(d.extra<=0) return;
+    addLedgerEntry('plank', size+'\" Planks', 'WB007', d.extra, 'IN',
+      'ADJ-11: cancels duplicate OWNER VOID receipts written repeatedly during the 12/09 write-jam (same void saved multiple times) — receipts reconciliation', size, '');
+    if(d.otherOutSum===0){
+      const target=d.bal+d.extra;
+      let row=d.row;
+      if(!row){ const info=(typeof findLedgerPurchaseInfo==='function')?findLedgerPurchaseInfo(size,'WB007'):null;
+        row={batchNo:'WB007', qty:0, dateAdded:new Date().toISOString().slice(0,10), vendor:info?.vendor||'', pricePerPiece:info?.price||0};
+        (state.materials[size]=state.materials[size]||{name:size+'\" Planks',size:+size,low:50,batches:[]}).batches.push(row); }
+      row.qty = target;
+      if(!(row.pricePerPiece>0)){ const info=(typeof findLedgerPurchaseInfo==='function')?findLedgerPurchaseInfo(size,'WB007'):null; if(info&&info.price>0){ row.pricePerPiece=info.price; if(!row.vendor) row.vendor=info.vendor; } }
+    }
+  });
   state.correctionsLog=[...(state.correctionsLog||[]),{
-    id:Date.now()+Math.random(), kind:'owner_adj_10', by:currentUser.name||'Owner', at:new Date().toISOString(),
-    details:'ADJ-10/11: WB007 phantom backfill receipts written — 12": '+ev.fill12+' pcs (row restored to '+ev.target12+'), 24": '+ev.fill24+' pcs. Books reconciled (derived==stored); physical count remains the final verification. Owner-authorized 12/09.'
+    id:Date.now()+Math.random(), kind:'owner_adj_11', by:currentUser.name||'Owner', at:new Date().toISOString(),
+    details:'ADJ-11: WB007 duplicate void receipts cancelled — '+parts.join(', ')+'. Root cause: 12/09 write-jam saved the same void repeatedly (5x on 24\", 2x on 12\"; 12\" was already balanced by ADJ-10). Stock rows restored to ledger balance (batch has zero real consumption). Owner-authorized 14/09 via chat.'
   }];
   re();
-  withConfirmedSave('ADJ-10/11', (ok)=>{ if(ok) alert('ADJ-10/11 applied and confirmed saved. The two WB007 shadow findings will close at the next System Watch check — then "Mark handled" them.'); });
+  withConfirmedSave('ADJ-11', (ok)=>{ if(ok) alert('ADJ-11 applied and confirmed saved. WB007 is back in the production batch list; the shadow findings close at the next System Watch check.'); });
 }
 
 // ==================== ADJ-9 (09/09/2026): WB002 Jumbo phantom stored stock ====================
@@ -8727,16 +8745,28 @@ function parsePriceFromNote(note){
 function findLedgerPurchaseInfo(size, batchNo){
   const matches = (state.ledger||[]).filter(e=>e && e.type==='plank' && e.direction==='IN' && e.size===size && e.batchNo===batchNo && !e.voidedByOwner);
   if(!matches.length) return null;
-  const best = matches.reduce((a,b)=>(b.id||0)>(a.id||0)?b:a); // most recent (an edit/correction wins)
-  // 12/09: fall back to parsing the note — every purchase made before this fix has its real
-  // price embedded there ("Purchased from X @ Rs.44/pc") and nowhere else.
-  const price = (best.pricePerPiece>0) ? best.pricePerPiece : parsePriceFromNote(best.note);
-  if(!(price>0) && !best.vendor) return null;
-  return { vendor: best.vendor || '(restored from ledger)', price };
+  // 12/09 fix #2 (WB006 24" incident): "newest IN wins" picked a VOID-RESTORE entry (599 pcs
+  // restored 11/09, no price, no vendor) over the actual purchase (@ Rs.43/pc, 05/09) — so
+  // the heal gave up on exactly the batches that had been through a void. Restore/ADJ/seed
+  // entries are not purchases; prefer entries that carry a resolvable price, newest of those.
+  const scored = matches.map(e=>({e, price:(e.pricePerPiece>0)?e.pricePerPiece:parsePriceFromNote(e.note)}));
+  const purchases = scored.filter(s=>!/restored|^ADJ-|adjustment|existing stock/i.test(s.e.note||''));
+  const pool = purchases.length ? purchases : scored;
+  const withPrice = pool.filter(s=>s.price>0);
+  const best = (withPrice.length ? withPrice : pool).reduce((a,b)=>(b.e.id||0)>(a.e.id||0)?b:a);
+  if(!(best.price>0) && !best.e.vendor) return null;
+  return { vendor: best.e.vendor || '(restored from ledger)', price: best.price };
 }
 function restoreMaterialsStockFromLedger(){
-  const discrepancies = collectMaterialsStockDiscrepancies();
-  if(discrepancies.length===0){ alert('Nothing to restore — current stock already matches the ledger for every batch.'); return; }
+  // 12/09-14/09 (WB007 row-wipe incident): this manual path applied EVERY discrepancy,
+  // including ones the auto path refuses (negative derived balance / voided history /
+  // open shadow findings) — restoring "to match the ledger" against a known-broken ledger
+  // story wiped a real 4,008-pc row to 0. Broken-history batches are now skipped here too.
+  const allDisc = collectMaterialsStockDiscrepancies();
+  const skipped = allDisc.filter(d=>d.unfixable);
+  const discrepancies = allDisc.filter(d=>!d.unfixable);
+  if(skipped.length){ alert('Skipping '+skipped.length+' batch(es) with a broken ledger story (negative balance, voided entries, or open shadow findings) — those need a person (Owner Adjustment), never a forced match:\n\n'+skipped.map(d=>'• '+d.size+'" '+d.batchNo+' (ledger says '+d.ledgerQty+')').join('\n')); }
+  if(discrepancies.length===0){ alert('Nothing safe to restore — every remaining mismatch is a broken-history batch listed above.'); return; }
   const lines = discrepancies.map(d=>`• ${d.size}" batch ${d.batchNo}: shows ${d.currentQty} pcs → ledger says ${d.ledgerQty} pcs`);
   const ok = confirm(`Restore stock to match the ledger for ${discrepancies.length} batch${discrepancies.length>1?'es':''}?\n\n${lines.join('\n')}\n\nThis only updates the CURRENT STOCK numbers to match your purchase/production history — it does not change the ledger itself, and does not touch any other data.`);
   if(!ok) return;
