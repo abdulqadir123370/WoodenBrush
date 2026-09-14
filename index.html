@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1789369604924;
+const APP_BUILD = 1789372588150;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -481,6 +481,8 @@ function syncToFirestore(){
 function doFirestoreSync(){
   if(IS_FILE_COPY) return Promise.resolve();
   if(!fbDb) return Promise.resolve();
+  if(window._zombieBuild) return Promise.resolve(); // 14/09: below fleet minimum = READ-ONLY. A stale build must never write.
+
   // 12/09 SINGLE-FLIGHT GUARD (queued-writes explosion, resource-exhausted incident): the
   // watchdog + auto-retry could start a NEW batch.commit while the previous one was still
   // sitting in the SDK's backoff queue — each attempt queued more mutations until Firestore
@@ -1314,8 +1316,16 @@ function attachMinBuildListener(){
     fbDb.collection(META_COLLECTION).doc('config').onSnapshot(doc=>{
       const minBuild = doc.exists ? +((doc.data()||{}).minBuild||0) : 0;
       currentMinBuildFloor = minBuild; // remembered for the Owner's fleet-lock button display
-      if(minBuild && APP_BUILD < minBuild){ showMinBuildWall(minBuild); }
-      else { hideMinBuildWall(); }
+      if(minBuild && APP_BUILD < minBuild){
+        showMinBuildWall(minBuild);
+        // 14/09 ZOMBIE KILL SWITCH: the wall alone only blocked the screen — this device's
+        // background timers (old-logic auto-fix, outbound sync) kept RUNNING and kept
+        // pushing stale computations over data the fleet had already fixed (the WB007
+        // row-wipe engine). Below minimum now means: hard read-only + forced self-update.
+        window._zombieBuild = true;
+        setTimeout(()=>{ try{ location.reload(); }catch(e){} }, 60000); // pick up the new build within a minute
+      }
+      else { window._zombieBuild = false; hideMinBuildWall(); }
     }, err=>{ /* ignore — the wall is an extra safety, never a point of failure */ });
   }catch(e){}
 }
@@ -8550,7 +8560,7 @@ function renderGhostCorrectionsCardHTML(){
   if(applied.length>0){
     const receipts = [...applied].sort((a,b)=>(b.id||0)-(a.id||0));
     const shownReceipts = state.showAllReceipts ? receipts : receipts.slice(0,3);
-    html += `<div style="font-size:11px;color:#888;">Applied (${applied.length}): ${shownReceipts.map(c=>`<div style="margin-top:3px;">✅ ${c.details} <span style="color:#aaa;">(${c.by}, ${String(c.at).slice(0,10)})</span></div>`).join('')}
+    html += `<div style="font-size:11px;color:#888;">Applied (${applied.length}): ${shownReceipts.map(c=>`<div style="margin-top:3px;">✅ ${c.details||c.action||c.desc||'(correction)'} <span style="color:#aaa;">(${c.by}, ${String(c.at).slice(0,10)})</span></div>`).join('')}
     ${applied.length>3?`<div style="margin-top:5px;text-decoration:underline;cursor:pointer;" onclick="state.showAllReceipts=!state.showAllReceipts;re()">${state.showAllReceipts?'show latest 3 only':`show all ${applied.length} receipts`}</div>`:''}</div>`;
   }
   html += `</div>`;
@@ -8585,7 +8595,12 @@ function _adj11Evidence(){
     out[size] = {extra: Math.max(0,extra), bal: Math.round(bal), otherOutSum,
       row: (state.materials?.[size]?.batches||[]).find(b=>b.batchNo==='WB007') || null};
   });
-  if(out['12'].extra<=0 && out['24'].extra<=0) return null;
+  // A size needs the card if duplicates remain uncancelled OR the stored row has drifted
+  // from the ledger balance (zombie-build overwrites) — restorable only when the batch has
+  // zero real consumption (every OUT is a void receipt), which holds for WB007.
+  const needs = s => out[s].extra>0 || (out[s].otherOutSum===0 && ((out[s].row?.qty||0) !== (out[s].bal + out[s].extra)));
+  if(!needs('12') && !needs('24')) return null;
+  out.needs = needs;
   return out;
 }
 function renderAdj10CardHTML(){
@@ -8594,10 +8609,10 @@ function renderAdj10CardHTML(){
   const ev=_adj11Evidence(); if(!ev) return '';
   const rows=[];
   ['12','24'].forEach(size=>{
-    const d=ev[size]; if(d.extra<=0) return;
+    const d=ev[size]; if(!ev.needs(size)) return;
     const target=d.bal+d.extra;
-    rows.push(`<tr><td>${size}\" — cancel duplicate void receipts from the 12/09 write-jam</td><td style=\"text-align:right;\"><b>+${d.extra} pcs</b></td></tr>`+
-      (d.otherOutSum===0?`<tr><td style=\"color:#888;font-size:11px;\">${size}\" stock row restored to the resulting balance (no real consumption exists on this batch)</td><td style=\"text-align:right;color:#888;font-size:11px;\">${target} pcs</td></tr>`:''));
+    if(d.extra>0) rows.push(`<tr><td>${size}\" — cancel duplicate void receipts from the 12/09 write-jam</td><td style=\"text-align:right;\"><b>+${d.extra} pcs</b></td></tr>`);
+    if(d.otherOutSum===0 && (d.row?.qty||0)!==target) rows.push(`<tr><td style=\"color:#888;font-size:11px;\">${size}\" stock row restored from ${d.row?.qty||0} to its ledger balance (no real consumption exists on this batch)</td><td style=\"text-align:right;\"><b>${target} pcs</b></td></tr>`);
   });
   return `<div class=\"card\" style=\"border:2px solid #c0392b;background:#fff5f5;\">
     <div class=\"label\" style=\"color:#c0392b;\">🧾 ADJ-11 — cancel WB007's duplicate void receipts (one tap)</div>
@@ -8612,11 +8627,11 @@ function applyAdj10(){
   if(!currentUser || currentUser.role!=='owner'){ alert('Owner only.'); return; }
   const ev=_adj11Evidence();
   if(!ev){ alert('Live verification failed — no duplicate void receipts remain uncancelled on this device. Not applying.'); re(); return; }
-  const parts=['12','24'].filter(s=>ev[s].extra>0).map(s=>ev[s].extra+' pcs ('+s+'\")');
-  if(!confirm('ADJ-11: write cancelling receipt(s) for WB007 duplicate voids — '+parts.join(' and ')+'?\n\nEach cancels void receipts that saved more than once during the 12/09 write-jam. Stamped permanently; stock rows restore to the resulting balance where the batch has no real consumption.')) return;
+  const parts=['12','24'].filter(s=>ev.needs(s)).map(s=>{ const d=ev[s]; const t=d.bal+d.extra; return s+'\": '+(d.extra>0?('cancel +'+d.extra+' pcs, '):'')+'stock -> '+t+' pcs'; });
+  if(!confirm('ADJ-11 (WB007 repair): '+parts.join(' | ')+'?\n\nCancels void receipts that saved more than once during the 12/09 write-jam and restores stock rows to the ledger balance (only possible because this batch has zero real consumption). Stamped permanently.')) return;
   ['12','24'].forEach(size=>{
-    const d=ev[size]; if(d.extra<=0) return;
-    addLedgerEntry('plank', size+'\" Planks', 'WB007', d.extra, 'IN',
+    const d=ev[size]; if(!ev.needs(size)) return;
+    if(d.extra>0) addLedgerEntry('plank', size+'\" Planks', 'WB007', d.extra, 'IN',
       'ADJ-11: cancels duplicate OWNER VOID receipts written repeatedly during the 12/09 write-jam (same void saved multiple times) — receipts reconciliation', size, '');
     if(d.otherOutSum===0){
       const target=d.bal+d.extra;
@@ -8882,6 +8897,12 @@ function anyRecordedActivity(key, sinceId, untilId){
     || String(r.sourceBatchTag||'')===batchNo; // production runs sourced FROM scrap/rejected stock (added 22/8)
   const collections = [state.ledger, state.production, state.brushProcessingLog, state.socketProcessingLog, state.wastage, state.sales, state.voidLog];
   if(collections.some(col => (col||[]).some(r => inWin(r) && touches(r)))) return true;
+  // 14/09: Owner Edits are recorded activity too — a batch-move/qty edit changes stock rows
+  // legitimately (stamped + logged), and previously looked like a silent wipe to this check.
+  const corrInWin = c => c && c.at && (new Date(c.at).getTime()>=sinceId-60000) && (new Date(c.at).getTime()<=untilId+60000);
+  if((state.correctionsLog||[]).some(c=>corrInWin(c) && /OWNER EDIT|ADJ-1\d/i.test(String(c.action||c.details||'')) && String(c.action||c.details||'').includes(batchNo))) return true;
+  const editInWin = e => e && e.amendedByOwner && (e.amendedByOwner.edits||[]).some(ed=>{ const t=new Date(ed.at).getTime(); return t>=sinceId-60000 && t<=untilId+60000; });
+  if((state.ledger||[]).some(e=>editInWin(e) && (String(e.batchNo||'')===batchNo || (e.amendedByOwner.edits||[]).some(ed=>String(ed.prev?.batchNo||'')===batchNo)))) return true;
   // Voids don't create new records — they stamp existing ones. A void in the window counts as activity.
   const voidInWin = r => r && r.voided && r.voidedDate && (new Date(r.voidedDate+'T'+(r.voidedTime||'00:00')+':00').getTime()>=sinceId-60000);
   return [state.production, state.brushProcessingLog, state.socketProcessingLog, state.wastage, state.sales]
@@ -9372,6 +9393,8 @@ function resolveAmbiguousBatchName(batchNo, stray, target){
 }
 
 function runAutoFixCycle(){
+  if(window._zombieBuild) return; // 14/09: stale builds must not compute or "fix" anything
+
   // HARD GATE: never act on data that hasn't been confirmed loaded from the live cloud.
   // On the offline/timeout fallback (or a file:// copy where Firestore is unreachable), the
   // local picture can be stale or partial — "fixing" against an incomplete ledger and later
@@ -11141,7 +11164,9 @@ function runDataHealthCheck(){
   // intact. Compare them directly rather than trusting the (more fragile) current-stock figure.
   collectMaterialsStockDiscrepancies().forEach(d=>{
     if(d.unfixable){
-      add('error','Stock',`The Ledger's own history for ${d.size}" plank batch ${d.batchNo} doesn't add up: more planks recorded as used than were ever recorded as purchased (balance comes to ${d.ledgerQty}). This usually means a purchase entry is missing from the ledger — a person needs to review this batch's purchase records. Stock numbers are deliberately left untouched.`);
+      add('error','Stock', d.historyBroken && d.ledgerQty>=0
+        ? `${d.size}" plank batch ${d.batchNo}: auto-correction is DISABLED for this batch because its history contains owner-voided entries or open shadow findings — the machine won't touch it either way. Stored stock shows ${d.currentQty} pcs, ledger balance says ${d.ledgerQty}. If these match after the pending one-tap correction, this note disappears by itself; otherwise settle it with Owner Adjustment.`
+        : `The Ledger's own history for ${d.size}" plank batch ${d.batchNo} doesn't add up: more planks recorded as used than were ever recorded as purchased (balance comes to ${d.ledgerQty}). This usually means a purchase entry is missing from the ledger — a person needs to review this batch's purchase records. Stock numbers are deliberately left untouched.`);
     } else {
       add('error','Stock',`${d.size}" plank batch ${d.batchNo} shows ${d.currentQty} pcs in stock, but the Ledger's purchase/production history says it should be ${d.ledgerQty} pcs. Auto-Fix corrects this automatically on its next pass; if it keeps reappearing, something is repeatedly overwriting the stock and needs a person to investigate.`);
     }
