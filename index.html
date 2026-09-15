@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1789373620666;
+const APP_BUILD = 1789469494344;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -507,8 +507,14 @@ function doFirestoreSync(){
     // to be updated. Batches that fail leave their shadow untouched — meaning those exact
     // records look "changed" again on the next attempt and get resent automatically, instead
     // of being silently forgotten forever.
+    const MAP_STALE_MS = 4*60*60*1000; // 4h with no server-confirmed snapshot = don't trust this device's copy for a write
+    const staleMapKeys = [];
     Object.keys(SK).forEach(stateKey=>{
       if(!collectionReady[stateKey]) return;
+      if(MAP_COLLECTIONS[stateKey]){
+        const last = window._lastSnapshotAt && window._lastSnapshotAt[stateKey];
+        if(!last || (Date.now()-last) > MAP_STALE_MS){ staleMapKeys.push(stateKey); return; }
+      }
       const col = SK[stateKey];
       const recs = recordsOf(stateKey);
       const shadow = syncShadow[stateKey] || {};
@@ -604,6 +610,10 @@ function doFirestoreSync(){
     ops.forEach(o=>{ const k=o.stateKey+':'+o.t; byKey[k]=(byKey[k]||0)+1; });
     window._lastPendingOpsBreakdown = Object.entries(byKey).sort((a,b)=>b[1]-a[1]).map(([k,n])=>k+'×'+n).join(', ');
     if(ops.length>20) console.warn('Large sync batch ('+ops.length+' ops):', window._lastPendingOpsBreakdown);
+    if(staleMapKeys.length){
+      console.warn('Skipped writing (listener stale >4h, would risk overwriting fresh cloud data with an old local copy): '+staleMapKeys.join(', '));
+      if(typeof critToast==='function') critToast('⚠️ This device hasn\'t heard from the cloud for a while on: '+staleMapKeys.join(', ')+'. Skipping those to avoid overwriting anything — reload this device when convenient to refresh it.', 'err');
+    }
     const pr = Promise.allSettled(chunkPromises).then(results=>{
       const anyOk = results.some(r=>r.status==='fulfilled');
       if(anyOk) lastSyncOkAt = Date.now(); // 12/09: ANY committed chunk proves writes work — keeps the stuck-write lock honest during partial recovery
@@ -1078,6 +1088,19 @@ function startHealthPeriodicCheck(){
 
 // ---- Real-time listeners: one per collection ----
 function attachFirestoreListeners(onAllFirstSnapshots){
+  // 15/09 ARCHITECTURAL FIX (recurring WB007 wipe, 3rd distinct cause): materials/openBatches/
+  // batchGenealogy are MAP_COLLECTIONS — one Firestore doc per SIZE, holding ALL that size's
+  // batches in one array field. A device whose LISTENER for that doc goes silently stale
+  // (long backgrounding, OS tab suspension, a dropped subscription that doesn't hard-error)
+  // still holds an old value for a batch nobody told it changed. The moment that device
+  // legitimately edits ANY OTHER batch of the same size and syncs, it must push the WHOLE
+  // array — dragging its stale value for the untouched batch along and overwriting the true
+  // cloud value. This is NOT a build-version problem (the zombie kill switch doesn't catch
+  // it) and NOT a duplicate-write problem (ADJ-11's guard doesn't catch it either) — it's a
+  // silently-stale LISTENER on an otherwise-current device. Fix: track per-collection
+  // server-confirmed freshness; refuse to include a MAP_COLLECTIONS doc in an outbound sync
+  // once its listener has gone quiet for too long, until a fresh snapshot restores trust.
+  window._lastSnapshotAt = window._lastSnapshotAt || {};
   const firstSeen = {};
   const allKeys = Object.keys(SK);
   let announced = false;
@@ -1093,7 +1116,7 @@ function attachFirestoreListeners(onAllFirstSnapshots){
     fbDb.collection(col).onSnapshot({includeMetadataChanges:false}, snap=>{
       // Live-cloud proof: a snapshot delivered from the SERVER (not the local cache) is the
       // strongest evidence the connection is real right now. Feeds requireLiveCloud().
-      if(!snap.metadata || !snap.metadata.fromCache) window._lastServerContact = Date.now();
+      if(!snap.metadata || !snap.metadata.fromCache){ window._lastServerContact = Date.now(); window._lastSnapshotAt[stateKey] = Date.now(); }
       const changes = snap.docChanges();
       const isLocalEcho = changes.length>0 && changes.every(c=>c.doc.metadata.hasPendingWrites);
       const isFirst = !firstSeen[stateKey];
@@ -8610,7 +8633,10 @@ function _adj11Evidence(){
 }
 function renderAdj10CardHTML(){
   if(!currentUser || currentUser.role!=='owner') return '';
-  if((state.correctionsLog||[]).some(c=>c && c.kind==='owner_adj_11')) return '';
+  // 15/09: no once-only gate — yesterday's application logged owner_adj_11, then today's
+  // stale-device wipe recreated the damage, and the consumed gate hid the only repair tool.
+  // The card's visibility follows the live EVIDENCE alone: it appears exactly when WB007's
+  // stored rows disagree with its (now-correct) ledger balance, and disappears when clean.
   const ev=_adj11Evidence(); if(!ev) return '';
   const rows=[];
   ['12','24'].forEach(size=>{
