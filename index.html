@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1789469494344;
+const APP_BUILD = 1789631603179;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -285,7 +285,8 @@ const SK = {
   packedBoxes:"wbt_packed_boxes",         // Packed-box inventory (PK batches) awaiting dispatch — pcs family 'packed' in ledger/shadow
   packingLog:"wbt_packing_log",           // Append-only log of every packing run
   dispatches:"wbt_dispatches",            // Permanent dispatch records (gate pass, customer, vehicle) — voidable, never deleted
-  packingVariances:"wbt_packing_variances" // Physical-count differences found at packing — permanent, flagged to Admin/Owner
+  packingVariances:"wbt_packing_variances", // Physical-count differences found at packing — permanent, flagged to Admin/Owner
+  receiptVouchers:"wbt_receipt_vouchers"   // Receipt Vouchers (RV series, 15/09): cash-handover-to-Owner records against sales — printable, append-only
 };
 
 const DEFAULT_USERS = [
@@ -1779,6 +1780,7 @@ let state = {
   packingLog: ld(SK.packingLog, []),
   dispatches: ld(SK.dispatches, []),
   packingVariances: ld(SK.packingVariances, []),
+  receiptVouchers: ld(SK.receiptVouchers, []),
   saleModal: null,
   ledgerFilterFrom: '', ledgerFilterTo: '', ledgerFilterSection: 'all',
   ledgerFilterSize: 'all', ledgerFilterBatch: 'all', ledgerFilterDirection: 'all',
@@ -1828,7 +1830,7 @@ function saveAll(){
   sv(SK.socketProcessingLog,state.socketProcessingLog);
   sv(SK.colors,state.colors); sv(SK.boxTypes,state.boxTypes);
   sv(SK.packedBoxes,state.packedBoxes); sv(SK.packingLog,state.packingLog);
-  sv(SK.dispatches,state.dispatches); sv(SK.packingVariances,state.packingVariances);
+  sv(SK.dispatches,state.dispatches); sv(SK.packingVariances,state.packingVariances); sv(SK.receiptVouchers,state.receiptVouchers);
   // Always sync: writes are per-record diffs (never whole-list overwrites), and Firestore's
   // offline persistence durably queues them if there's no connection right now.
   syncToFirestore();
@@ -1880,6 +1882,7 @@ function getNextBatchNo(prefix){
     ...(state.packedBoxes||[]).map(b=>b.batchNo),
     ...(state.packingLog||[]).map(b=>b.packBatchNo),
     ...(state.dispatches||[]).map(d=>d.challanNo),
+    ...(state.receiptVouchers||[]).map(v=>v.rvNo),
     ...Object.keys(state.batchGenealogy||{}),
   ];
   const re = new RegExp("^"+prefix+"(\\d+)$");
@@ -5085,6 +5088,126 @@ async function runAiChat(){
   }
 }
 
+// ==================== RECEIPT VOUCHER (RV series, 15/09/2026) ====================
+// Cash handover to the Owner, documented per sale: pick which sales' received payments are
+// being handed over, generate a sequential printable voucher (RV001...) with signatures.
+// Each voucher line bumps that sale's ownerReceivedAmount — the same field the "owed to
+// Owner" figure already uses — so the Sales summary reconciles automatically. Vouchers are
+// append-only records, synced like everything else, reprintable forever.
+function rvAmountInWords(n){
+  n = Math.round(+n||0);
+  if(n===0) return 'Zero rupees only';
+  const ones=['','One','Two','Three','Four','Five','Six','Seven','Eight','Nine','Ten','Eleven','Twelve','Thirteen','Fourteen','Fifteen','Sixteen','Seventeen','Eighteen','Nineteen'];
+  const tens=['','','Twenty','Thirty','Forty','Fifty','Sixty','Seventy','Eighty','Ninety'];
+  const two=x=> x<20?ones[x]:(tens[Math.floor(x/10)]+(x%10?' '+ones[x%10]:''));
+  const three=x=> (x>=100?ones[Math.floor(x/100)]+' Hundred'+(x%100?' ':''):'')+(x%100?two(x%100):'');
+  let out='';
+  const crore=Math.floor(n/10000000); n%=10000000;
+  const lakh=Math.floor(n/100000); n%=100000;
+  const thou=Math.floor(n/1000); n%=1000;
+  if(crore) out+=two(crore)+' Crore ';
+  if(lakh) out+=two(lakh)+' Lakh ';
+  if(thou) out+=two(thou)+' Thousand ';
+  if(n) out+=three(n);
+  return out.trim()+' rupees only';
+}
+function saleOwedToOwner(s){ return Math.max(0,(s.amountReceived||0)-(s.ownerReceivedAmount||0)); }
+function rvEligibleSales(){
+  return [...(state.sales||[])].filter(s=>!s.voided && s.status!=='pending' && s.status!=='rejected' && saleOwedToOwner(s)>0)
+    .sort((a,b)=>String(a.datetime).localeCompare(String(b.datetime)));
+}
+function createReceiptVoucher(){
+  if(!requireLiveCloud('The receipt voucher')) return;
+  const sel = state.rvSel||{};
+  const lines=[];
+  rvEligibleSales().forEach(s=>{
+    const raw = sel[s.id];
+    if(raw===undefined || raw===null || raw==='' || raw===false) return;
+    const amt = Math.round(+raw);
+    const owed = saleOwedToOwner(s);
+    if(!(amt>0)){ return; }
+    if(amt>owed){ alert('Sale '+(s.date||'')+' ('+(s.buyer||'')+'): amount Rs.'+amt+' exceeds the Rs.'+owed+' still owed to the Owner from this sale. Fix it and try again.'); throw new Error('rv-abort'); }
+    lines.push({saleId:s.id, saleDate:s.date, buyer:s.buyer||'', wasteType:s.wasteType||'', slipSerialNo:s.slipSerialNo||'', gatePassNo:s.gatePassNo||'', amount:amt});
+  });
+  if(lines.length===0){ alert('Tick at least one sale and give it an amount.'); return; }
+  const total = lines.reduce((a,l)=>a+l.amount,0);
+  const rvNo = getNextBatchNo('RV');
+  if(!confirm('Create Receipt Voucher '+rvNo+' — Rs.'+total.toLocaleString()+' ('+lines.length+' sale'+(lines.length>1?'s':'')+') handed over to the Owner?')) return;
+  const now=new Date();
+  const v = { id: Date.now()+Math.random(), rvNo, date: now.toISOString().slice(0,10), time: now.toTimeString().slice(0,5),
+    datetime: now.toISOString(), by: currentUser?.name||'?', receivedBy: 'Owner', lines, total, notes:(state.rvNotes||'').trim() };
+  state.receiptVouchers = [...(state.receiptVouchers||[]), v];
+  lines.forEach(l=>{ const s=(state.sales||[]).find(x=>x.id===l.saleId); if(s) s.ownerReceivedAmount = (s.ownerReceivedAmount||0) + l.amount; });
+  state.rvSel = {}; state.rvNotes='';
+  re();
+  withConfirmedSave('receipt voucher '+rvNo, (ok)=>{});
+  printReceiptVoucher(v.id);
+}
+function printReceiptVoucher(id){
+  const v=(state.receiptVouchers||[]).find(x=>x.id===id); if(!v){ alert('Voucher not found.'); return; }
+  const w=window.open('','_blank','width=800,height=900'); if(!w){ alert('Allow popups to print.'); return; }
+  w.document.write(`<!DOCTYPE html><html><head><title>Receipt Voucher ${v.rvNo}</title><style>
+    body{font-family:Georgia,serif;margin:12mm;color:#111;}
+    h1{font-size:16pt;margin:0;} h2{font-size:12pt;margin:1mm 0 0;font-weight:400;color:#444;}
+    .hdr{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #111;padding-bottom:4mm;margin-bottom:6mm;}
+    .meta{font-size:10.5pt;line-height:1.7;text-align:right;}
+    table{width:100%;border-collapse:collapse;margin-top:4mm;}
+    th,td{border:1px solid #999;padding:2mm 3mm;font-size:10.5pt;text-align:left;}
+    th{background:#f2f2f2;} .r{text-align:right;}
+    .tot{font-weight:700;background:#f9f9f9;}
+    .words{margin-top:4mm;font-size:10.5pt;font-style:italic;}
+    .sig{display:flex;justify-content:space-between;margin-top:22mm;}
+    .sigbox{width:42%;border-top:1px solid #111;padding-top:2mm;font-size:10pt;text-align:center;}
+    @media print{ .noprint{display:none;} }
+  </style></head><body>
+  <div class="noprint" style="margin-bottom:6mm;"><button onclick="window.print()" style="font-size:13pt;padding:3mm 7mm;">🖨️ Print</button></div>
+  <div class="hdr">
+    <div><h1>Royal Plastics &amp; Household</h1><h2>RECEIPT VOUCHER — Cash Handover</h2></div>
+    <div class="meta"><b>Voucher No:</b> ${v.rvNo}<br><b>Date:</b> ${v.date} ${v.time}</div>
+  </div>
+  <div style="font-size:11pt;line-height:1.8;">
+    <b>Received by:</b> Owner &nbsp;&nbsp;·&nbsp;&nbsp; <b>Handed over by:</b> ${v.by}
+  </div>
+  <table>
+    <tr><th style="width:8mm;">#</th><th>Sale Date</th><th>Buyer</th><th>Type</th><th>Slip #</th><th>Gate Pass</th><th class="r">Amount (Rs.)</th></tr>
+    ${v.lines.map((l,i)=>`<tr><td>${i+1}</td><td>${l.saleDate||''}</td><td>${l.buyer}</td><td>${l.wasteType}</td><td>${l.slipSerialNo||'—'}</td><td>${l.gatePassNo||'—'}</td><td class="r">${l.amount.toLocaleString()}</td></tr>`).join('')}
+    <tr class="tot"><td colspan="6">TOTAL RECEIVED</td><td class="r">Rs. ${v.total.toLocaleString()}</td></tr>
+  </table>
+  <div class="words"><b>Amount in words:</b> ${rvAmountInWords(v.total)}</div>
+  ${v.notes?`<div style="margin-top:3mm;font-size:10.5pt;"><b>Notes:</b> ${String(v.notes).replace(/</g,'&lt;')}</div>`:''}
+  <div class="sig">
+    <div class="sigbox">Handed over by (${v.by})<br>Signature</div>
+    <div class="sigbox">Received by — Owner<br>Signature</div>
+  </div>
+  </body></html>`);
+  w.document.close();
+}
+function renderReceiptVoucherCardHTML(){
+  const eligible = rvEligibleSales();
+  const sel = state.rvSel||{};
+  const vouchers = [...(state.receiptVouchers||[])].sort((a,b)=>String(b.datetime).localeCompare(String(a.datetime)));
+  const selectedTotal = eligible.reduce((a,s)=>{ const v=Math.round(+ (sel[s.id]??0)); return a + ((v>0 && v<=saleOwedToOwner(s))?v:0); },0);
+  return `<div class="card" style="border:2px solid #1e8449;">
+    <div class="label" style="color:#1e8449;">🧾 Receipt Voucher — cash handover to Owner</div>
+    <div style="font-size:11px;color:#888;margin-bottom:8px;">Tick the sales whose received payment is being handed to the Owner. Each voucher gets a sequential RV number, prints in full voucher format with signatures, and reduces that sale's "owed to Owner" figure. Permanent record, reprintable.</div>
+    ${eligible.length===0?`<div style="font-size:12px;color:#1e8449;">✅ Nothing pending — every received payment is already handed over to the Owner.</div>`:`
+    <table style="width:100%;font-size:12px;border-collapse:collapse;">
+      <tr style="color:#888;font-size:10px;text-transform:uppercase;"><td></td><td>Sale</td><td style="text-align:right;">Owed to Owner</td><td style="text-align:right;width:90px;">Hand over (Rs.)</td></tr>
+      ${eligible.map(s=>{ const owed=saleOwedToOwner(s); const cur = sel[s.id]??''; return `
+      <tr style="border-top:1px solid #eee;">
+        <td style="width:24px;"><input type="checkbox" ${cur!==''?'checked':''} onchange="state.rvSel=state.rvSel||{}; state.rvSel[${s.id}]=this.checked?${owed}:''; re();"/></td>
+        <td>${s.date} — ${s.buyer||'—'} · ${s.wasteType||''}${s.slipSerialNo?' · slip #'+s.slipSerialNo:''}</td>
+        <td style="text-align:right;">Rs.${owed.toLocaleString()}</td>
+        <td style="text-align:right;"><input type="number" min="1" max="${owed}" value="${cur}" style="width:85px;text-align:right;" oninput="state.rvSel=state.rvSel||{}; state.rvSel[${s.id}]=this.value;"/></td>
+      </tr>`; }).join('')}
+    </table>
+    <div class="label" style="margin-top:8px;">Notes (optional)</div>
+    <input value="${(state.rvNotes||'').replace(/"/g,'&quot;')}" oninput="state.rvNotes=this.value" placeholder="e.g. cash counted and tallied with slips"/>
+    <button class="btn btn-full" style="background:#1e8449;color:#fff;margin-top:8px;" onclick="createReceiptVoucher()">🧾 Create Receipt Voucher & Print${selectedTotal>0?' — Rs.'+selectedTotal.toLocaleString():''}</button>`}
+    ${vouchers.length?`<div style="margin-top:10px;border-top:1px dashed #cde;padding-top:6px;font-size:11px;color:#888;">Vouchers: ${vouchers.slice(0,12).map(v=>`<button class="btn btn-gray" style="font-size:10px;padding:2px 8px;margin:2px;" onclick="printReceiptVoucher(${v.id})">🧾 ${v.rvNo} · Rs.${v.total.toLocaleString()} · ${v.date}</button>`).join('')}</div>`:''}
+  </div>`;
+}
+
 function renderSales(){
   const sales = [...(state.sales||[])].sort((a,b)=>b.datetime.localeCompare(a.datetime));
   const activeSales = sales.filter(s=>!s.voided && s.status!=='pending' && s.status!=='rejected');
@@ -5094,6 +5217,7 @@ function renderSales(){
   const totalKgSold = activeSales.reduce((s,x)=>s+x.kgSold,0);
   const totalOwedToOwner = activeSales.reduce((s,x)=>s+Math.max(0,(x.amountReceived||0)-(x.ownerReceivedAmount||0)),0);
   let html='';
+  html += renderReceiptVoucherCardHTML();
   if(pendingSales.length>0){
     html+=`<div class="card" style="border:2px solid #c0392b;background:#fdecea;">
       <div class="label" style="color:#c0392b;">⏳ ${pendingSales.length} Sale${pendingSales.length>1?'s':''} Pending Owner Approval</div>
