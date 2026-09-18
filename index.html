@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1789631603179;
+const APP_BUILD = 1789708967137;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -4621,7 +4621,11 @@ function approvePendingSale(id){
     alert(`Cannot approve: only ${avail.toFixed(1)} KG of ${sale.wasteType} is available now (this sale claims ${sale.kgSold} KG). Check the pool first — approve would drive it negative.`);
     return;
   }
-  if(!confirm(`Approve this manually-entered sale?\n\n${sale.buyer} — ${sale.kgSold} KG ${sale.wasteType} for Rs.${sale.totalAmount.toFixed(0)}\nEntered by: ${sale.manualOverrideBy||'?'}\n\nOpen the slip photo and verify the KG matches before approving. On approval it counts in revenue, reduces the pool, and a Gate Pass is issued.`)) return;
+  const rvInfo = sale.slipReenteredFromVoided;
+  const confirmMsg = rvInfo
+    ? `Approve this RE-ENTRY of voided slip #${sale.slipSerialNo}?\n\nVoided original: ${rvInfo.voidedKg} KG, Rs.${(rvInfo.voidedAmount||0).toFixed(0)} (${rvInfo.voidedBuyer}, ${rvInfo.voidedDate})\nRe-entry: ${sale.kgSold} KG, Rs.${sale.totalAmount.toFixed(0)} (${sale.buyer})\nEntered by: ${rvInfo.by}\n${(sale.kgSold < (rvInfo.voidedKg||0)-0.001 || sale.totalAmount < (rvInfo.voidedAmount||0)-0.5)?'\n🚨 RE-ENTRY IS LOWER THAN THE VOIDED ORIGINAL — verify the slip photo before approving.\n':''}\nOn approval it counts in revenue, reduces the pool, and a Gate Pass is issued.`
+    : `Approve this manually-entered sale?\n\n${sale.buyer} — ${sale.kgSold} KG ${sale.wasteType} for Rs.${sale.totalAmount.toFixed(0)}\nEntered by: ${sale.manualOverrideBy||'?'}\n\nOpen the slip photo and verify the KG matches before approving. On approval it counts in revenue, reduces the pool, and a Gate Pass is issued.`;
+  if(!confirm(confirmMsg)) return;
   sale.status = 'applied';
   sale.approvedBy = currentUser?.name||'Owner';
   sale.approvedAt = new Date().toISOString();
@@ -4739,6 +4743,18 @@ function _actShiftBoundary(nowMs){
   if(h<8 || (h===8&&mn<30)) midnight -= 86400000; // before 8:30am: current shift started yesterday
   return midnight + 8*3600000 + 30*60000 - PKT_OFFSET_MS;
 }
+// 17/9 (Owner rule): the BUSINESS DAY is 8:30 AM - 11:00 PM PKT. The shift itself ends
+// 8:30 PM, but staff often type the day's entries afterwards — those belong to that day.
+// Implementation: an entry's business day is the PKT date of (instant − 8h30m), i.e. the
+// day whose 8:30 AM most recently passed. So 9:45 PM, 11:50 PM, even a 1 AM straggler all
+// credit the day the work happened; only from the next 8:30 AM does a new day begin. This
+// also immunizes day-bucketing against device-clock/UTC date drift, since it uses the
+// entry's own date+time instant instead of its raw calendar date string.
+function _actBusinessDayKey(dateStr, timeStr){
+  const inst = _actInstant(dateStr, timeStr);
+  if(inst==null) return dateStr; // date-only records: calendar date is the best we have
+  return new Date(inst + PKT_OFFSET_MS - (8*3600000+30*60000)).toISOString().slice(0,10);
+}
 function _actWindow(startMs, endMs){
   return { start:startMs, end:endMs, shiftStartLocalDate:_actLocalDateAt(startMs), nowLocalDate:_actLocalDateAt(endMs), label:_actFmtPKT(startMs)+' through '+_actFmtPKT(endMs) };
 }
@@ -4773,18 +4789,18 @@ function compileActivityData(){
     const mo=dateStr.slice(0,7); if(mo>=cutoffMonthly){ out.push(monthly[mo]=monthly[mo]||_actEmptyPeriod()); }
     return out;
   };
-  (state.production||[]).filter(r=>r&&!r.voided).forEach(r=>buckets(r.date).forEach(b=>_actApplyProduction(b,r)));
-  (state.brushProcessingLog||[]).filter(r=>r&&!r.voided).forEach(r=>buckets(r.date).forEach(b=>_actApplyBrushLog(b,r)));
+  (state.production||[]).filter(r=>r&&!r.voided).forEach(r=>buckets(_actBusinessDayKey(r.date,r.time)).forEach(b=>_actApplyProduction(b,r)));
+  (state.brushProcessingLog||[]).filter(r=>r&&!r.voided).forEach(r=>buckets(_actBusinessDayKey(r.date,r.time)).forEach(b=>_actApplyBrushLog(b,r)));
   (state.reworkStock||[]).forEach(r=>{ if(!r) return; buckets(r.dateAdded).forEach(b=>_actApplyRework(b,r));
     if(r.status==='completed'&&r.completedDate){ buckets(r.completedDate).forEach(b=>_actApplyReworkCompleted(b,r)); } });
   (state.brushScrapLog||[]).forEach(r=>{ if(!r) return; buckets(r.date).forEach(b=>_actApplyBrushScrap(b,r)); });
-  (state.socketProcessingLog||[]).filter(r=>r&&!r.voided).forEach(r=>buckets(r.date).forEach(b=>_actApplySocket(b,r)));
-  (state.wastage||[]).filter(w=>w&&!w.voided).forEach(w=>buckets(w.date).forEach(b=>_actApplyWastage(b,w)));
-  (state.sales||[]).filter(s=>s&&!s.voided&&s.status!=='pending'&&s.status!=='rejected').forEach(s=>buckets(s.date).forEach(b=>_actApplySale(b,s)));
-  (state.ledger||[]).filter(l=>l&&l.type==='plank'&&l.direction==='IN'&&l.vendor&&!l.voidedByOwner).forEach(l=>buckets(l.date).forEach(b=>_actApplyPurchase(b,l))); // 12/09: voided purchases excluded
-  (state.packingLog||[]).filter(r=>r&&!r.voided).forEach(r=>buckets(r.date).forEach(b=>_actApplyPacking(b,r)));
-  (state.dispatches||[]).filter(x=>x&&!x.voided).forEach(x=>buckets(x.date).forEach(b=>_actApplyDispatch(b,x)));
-  (state.packingVariances||[]).forEach(v=>buckets(v.date).forEach(b=>_actApplyVariance(b,v)));
+  (state.socketProcessingLog||[]).filter(r=>r&&!r.voided).forEach(r=>buckets(_actBusinessDayKey(r.date,r.time)).forEach(b=>_actApplySocket(b,r)));
+  (state.wastage||[]).filter(w=>w&&!w.voided).forEach(w=>buckets(_actBusinessDayKey(w.date,w.time)).forEach(b=>_actApplyWastage(b,w)));
+  (state.sales||[]).filter(s=>s&&!s.voided&&s.status!=='pending'&&s.status!=='rejected').forEach(s=>buckets(_actBusinessDayKey(s.date,s.time)).forEach(b=>_actApplySale(b,s)));
+  (state.ledger||[]).filter(l=>l&&l.type==='plank'&&l.direction==='IN'&&l.vendor&&!l.voidedByOwner).forEach(l=>buckets(_actBusinessDayKey(l.date,l.time)).forEach(b=>_actApplyPurchase(b,l))); // 12/09: voided purchases excluded
+  (state.packingLog||[]).filter(r=>r&&!r.voided).forEach(r=>buckets(_actBusinessDayKey(r.date,r.time)).forEach(b=>_actApplyPacking(b,r)));
+  (state.dispatches||[]).filter(x=>x&&!x.voided).forEach(x=>buckets(_actBusinessDayKey(x.date,x.time)).forEach(b=>_actApplyDispatch(b,x)));
+  (state.packingVariances||[]).forEach(v=>buckets(_actBusinessDayKey(v.date,v.time)).forEach(b=>_actApplyVariance(b,v)));
   const sortDesc = o => Object.keys(o).sort().reverse().reduce((a,k)=>{a[k]=o[k];return a;},{});
 
   const now = Date.now();
@@ -4808,7 +4824,7 @@ function compileActivityData(){
   };
   return {
     dates:{ shiftLabel: shift.label, previousShiftLabel: prevShift.label, calendarDateUTC: new Date().toISOString().slice(0,10),
-      explanation:'The factory shift starts 8:30 AM Karachi time (fixed UTC+5, no DST). For "today"/"so far today"/"current shift" questions, use currentShift below — it is already computed for exactly [8:30 AM through now]. Do NOT use dailyActivity for "today" — it is a UTC-calendar-date bucket and does not line up with the 8:30 AM shift boundary. For "yesterday" use previousShift (the full prior shift). For a specific named date/week/month ("28 August", "last week", "August"), use dailyActivity/weeklyActivity/monthlyActivity — a date missing there means nothing was recorded that day, say so plainly.' },
+      explanation:'BUSINESS DAY RULE (Owner-set): a business day runs 8:30 AM to 11:00 PM Karachi time (fixed UTC+5, no DST). The physical shift ends 8:30 PM but staff enter the day\'s data afterwards — every entry made after the shift, up to the next morning 8:30 AM, belongs to the SAME business day the work happened. dailyActivity/weeklyActivity/monthlyActivity are already bucketed by this rule, so a date key there means that business day (from its 8:30 AM), not the raw calendar date. For "today"/"so far today"/"current shift" questions, use currentShift below — it is already computed for exactly [8:30 AM through now]. Do NOT use dailyActivity for "today" — it is a UTC-calendar-date bucket and does not line up with the 8:30 AM shift boundary. For "yesterday" use previousShift (the full prior shift). For a specific named date/week/month ("28 August", "last week", "August"), use dailyActivity/weeklyActivity/monthlyActivity — a date missing there means nothing was recorded that day, say so plainly.' },
     departments:{ woodFinishing:'planks cut into brush bodies (production runs)', brushDept:'brush machine output; also sends Color/Regmal to rework, Kharab Maal to scrap, Keere Wala to wastage', socketDept:'fits sockets + screws and moves stock to Ready for Sale (or Nil-BOM straight through)',
       notTracked:'There is NO CNC department in this system — if asked about CNC, say it is not tracked here.' },
     currentShift, previousShift,
@@ -5134,14 +5150,65 @@ function createReceiptVoucher(){
   const rvNo = getNextBatchNo('RV');
   if(!confirm('Create Receipt Voucher '+rvNo+' — Rs.'+total.toLocaleString()+' ('+lines.length+' sale'+(lines.length>1?'s':'')+') handed over to the Owner?')) return;
   const now=new Date();
+  // 17/9 (Owner rule): a sale is settled ONLY when the Owner settles it personally. A
+  // voucher created BY the Owner is personal settlement and applies immediately; a voucher
+  // created by staff records the handover but stays PENDING until the Owner confirms it —
+  // nothing turns green on the Owner's books until then.
+  const isOwnerCreating = currentUser?.role==='owner';
   const v = { id: Date.now()+Math.random(), rvNo, date: now.toISOString().slice(0,10), time: now.toTimeString().slice(0,5),
-    datetime: now.toISOString(), by: currentUser?.name||'?', receivedBy: 'Owner', lines, total, notes:(state.rvNotes||'').trim() };
+    datetime: now.toISOString(), by: currentUser?.name||'?', receivedBy: 'Owner', lines, total, notes:(state.rvNotes||'').trim(),
+    confirmedByOwner: isOwnerCreating ? {at: now.toISOString(), by: currentUser?.name||'Owner', selfCreated:true} : null };
   state.receiptVouchers = [...(state.receiptVouchers||[]), v];
-  lines.forEach(l=>{ const s=(state.sales||[]).find(x=>x.id===l.saleId); if(s) s.ownerReceivedAmount = (s.ownerReceivedAmount||0) + l.amount; });
+  if(isOwnerCreating){
+    lines.forEach(l=>{ const s=(state.sales||[]).find(x=>x.id===l.saleId); if(s) s.ownerReceivedAmount = (s.ownerReceivedAmount||0) + l.amount; });
+  }
   state.rvSel = {}; state.rvNotes='';
   re();
   withConfirmedSave('receipt voucher '+rvNo, (ok)=>{});
   printReceiptVoucher(v.id);
+}
+function confirmVoucherByOwner(id){
+  if(currentUser?.role!=='owner'){ alert('Only the Owner can confirm a handover.'); return; }
+  if(!requireLiveCloud('The voucher confirmation')) return;
+  const v=(state.receiptVouchers||[]).find(x=>x.id===id);
+  if(!v){ alert('Voucher not found.'); return; }
+  if(v.confirmedByOwner){ alert(v.rvNo+' is already confirmed.'); return; }
+  if(!confirm('Confirm you have personally received Rs.'+v.total.toLocaleString()+' — voucher '+v.rvNo+' ('+v.lines.length+' sale'+(v.lines.length>1?'s':'')+', handed over by '+v.by+')?')) return;
+  let capped=false;
+  v.lines.forEach(l=>{
+    const s=(state.sales||[]).find(x=>x.id===l.saleId); if(!s) return;
+    const owed = Math.max(0,(s.amountReceived||0)-(s.ownerReceivedAmount||0));
+    const apply = Math.min(l.amount, owed);
+    if(apply < l.amount){ capped=true; l.appliedAmount = apply; }
+    s.ownerReceivedAmount = (s.ownerReceivedAmount||0) + apply;
+  });
+  v.confirmedByOwner = {at:new Date().toISOString(), by: currentUser?.name||'Owner'};
+  if(capped) v.confirmNote = 'Some line(s) applied partially — the sale changed (void/adjustment) between handover and confirmation.';
+  re();
+  withConfirmedSave('confirmation of '+v.rvNo, ()=>{});
+}
+// Auto-Fix normalizer (17/9): a sale's ownerReceivedAmount is DERIVED truth — the sum of the
+// Owner's direct 💵 collections plus CONFIRMED voucher lines, nothing else. This one pass
+// also unwinds any voucher applied under the pre-17/9 code (created by staff, auto-settled
+// without the Owner) back to PENDING: those sales return to "owed to Owner" until the Owner
+// confirms the voucher personally. Idempotent — safe every cycle.
+function rvNormalizeOwnerAmounts(applied){
+  let changed=0;
+  (state.sales||[]).forEach(s=>{
+    if(!s || s.voided) return;
+    const direct = (s.ownerCollections||[]).reduce((a,c)=>a+(+c.amount||0),0);
+    const viaConfirmed = (state.receiptVouchers||[]).reduce((a,v)=>{
+      if(!v || !v.confirmedByOwner) return a;
+      return a + (v.lines||[]).filter(l=>l.saleId===s.id).reduce((x,l)=>x+((l.appliedAmount!==undefined?l.appliedAmount:l.amount)||0),0);
+    },0);
+    const expected = Math.min((s.amountReceived||0), direct + viaConfirmed);
+    if((s.ownerReceivedAmount||0) !== expected){
+      s.ownerReceivedAmount = expected;
+      changed++;
+    }
+  });
+  if(changed && applied) applied.push('Owner-settlement recomputed on '+changed+' sale(s): only the Owner\'s direct collections and Owner-CONFIRMED vouchers count as settled — staff handovers await personal confirmation');
+  return changed;
 }
 function printReceiptVoucher(id){
   const v=(state.receiptVouchers||[]).find(x=>x.id===id); if(!v){ alert('Voucher not found.'); return; }
@@ -5166,7 +5233,8 @@ function printReceiptVoucher(id){
     <div class="meta"><b>Voucher No:</b> ${v.rvNo}<br><b>Date:</b> ${v.date} ${v.time}</div>
   </div>
   <div style="font-size:11pt;line-height:1.8;">
-    <b>Received by:</b> Owner &nbsp;&nbsp;·&nbsp;&nbsp; <b>Handed over by:</b> ${v.by}
+    <b>Received by:</b> Owner &nbsp;&nbsp;·&nbsp;&nbsp; <b>Handed over by:</b> ${v.by}<br>
+    <b>Owner confirmation:</b> ${v.confirmedByOwner?`CONFIRMED by ${v.confirmedByOwner.by} on ${String(v.confirmedByOwner.at).slice(0,10)}`:'<span style="color:#c0392b;">PENDING — not yet confirmed by the Owner</span>'}${v.confirmNote?`<br><span style="font-size:9.5pt;color:#c0392b;">${v.confirmNote}</span>`:''}
   </div>
   <table>
     <tr><th style="width:8mm;">#</th><th>Sale Date</th><th>Buyer</th><th>Type</th><th>Slip #</th><th>Gate Pass</th><th class="r">Amount (Rs.)</th></tr>
@@ -5204,7 +5272,15 @@ function renderReceiptVoucherCardHTML(){
     <div class="label" style="margin-top:8px;">Notes (optional)</div>
     <input value="${(state.rvNotes||'').replace(/"/g,'&quot;')}" oninput="state.rvNotes=this.value" placeholder="e.g. cash counted and tallied with slips"/>
     <button class="btn btn-full" style="background:#1e8449;color:#fff;margin-top:8px;" onclick="createReceiptVoucher()">🧾 Create Receipt Voucher & Print${selectedTotal>0?' — Rs.'+selectedTotal.toLocaleString():''}</button>`}
-    ${vouchers.length?`<div style="margin-top:10px;border-top:1px dashed #cde;padding-top:6px;font-size:11px;color:#888;">Vouchers: ${vouchers.slice(0,12).map(v=>`<button class="btn btn-gray" style="font-size:10px;padding:2px 8px;margin:2px;" onclick="printReceiptVoucher(${v.id})">🧾 ${v.rvNo} · Rs.${v.total.toLocaleString()} · ${v.date}</button>`).join('')}</div>`:''}
+    ${(function(){ const pend=vouchers.filter(v=>!v.confirmedByOwner); if(!pend.length) return '';
+      return `<div style="margin-top:10px;border:1px solid #e67e22;background:#fef9f3;border-radius:8px;padding:8px;">
+        <div style="font-size:11px;font-weight:700;color:#e67e22;">⏳ Awaiting the Owner's personal confirmation (${pend.length})</div>
+        ${pend.map(v=>`<div style="font-size:12px;margin-top:4px;">🧾 ${v.rvNo} · Rs.${v.total.toLocaleString()} · handed over by ${v.by} on ${v.date}
+          ${currentUser?.role==='owner'?`<button class="btn" style="background:#1e8449;color:#fff;font-size:10px;padding:2px 10px;margin-left:6px;" onclick="confirmVoucherByOwner(${v.id})">✅ Confirm received</button>`:''}
+          <button class="btn btn-gray" style="font-size:10px;padding:2px 8px;margin-left:4px;" onclick="printReceiptVoucher(${v.id})">🖨️</button></div>`).join('')}
+        ${currentUser?.role!=='owner'?`<div style="font-size:10px;color:#888;margin-top:4px;">These sales stay "owed to Owner" until the Owner taps confirm.</div>`:''}
+      </div>`; })()}
+    ${vouchers.length?`<div style="margin-top:10px;border-top:1px dashed #cde;padding-top:6px;font-size:11px;color:#888;">Vouchers: ${vouchers.slice(0,12).map(v=>`<button class="btn btn-gray" style="font-size:10px;padding:2px 8px;margin:2px;" onclick="printReceiptVoucher(${v.id})">🧾 ${v.rvNo}${v.confirmedByOwner?' ✅':' ⏳'} · Rs.${v.total.toLocaleString()} · ${v.date}</button>`).join('')}</div>`:''}
   </div>`;
 }
 
@@ -5329,7 +5405,24 @@ function renderSales(){
       </div>
         <div style="font-size:11px;color:#888;${isVoidedSale?'text-decoration:line-through;':''}">${s.kgSold} KG @ Rs.${s.pricePerKg}/KG${s.weighSlipDate?` · slip dated ${s.weighSlipDate}`:''}${s.slipSerialNo?` · slip #${s.slipSerialNo}`:''}${s.slipCNo?` · C-No ${s.slipCNo}`:''}</div>
         ${s.gatePassNo && !isVoidedSale?`<div style="font-size:12px;font-weight:700;color:#8e44ad;margin-top:2px;">🎫 Gate Pass: ${s.gatePassNo}</div>`:''}
-        ${s.status==='pending' && !isVoidedSale?`<div style="font-size:11px;color:#c0392b;font-weight:700;background:#fdecea;border-radius:6px;padding:6px 8px;margin-top:4px;">⏳ PENDING OWNER APPROVAL — manually-typed KG. Not counted in revenue or the wastage pool. NO GATE PASS issued; the truck must not leave.
+        ${s.status==='pending' && !isVoidedSale && s.slipReenteredFromVoided?(()=>{ const rv=s.slipReenteredFromVoided;
+          const lowerKg = s.kgSold < (rv.voidedKg||0)-0.001; const lowerAmt = (s.totalAmount||0) < (rv.voidedAmount||0)-0.5;
+          return `<div style="font-size:11px;font-weight:700;background:#fdecea;border:1px solid #c0392b;border-radius:6px;padding:6px 8px;margin-top:4px;color:#c0392b;">
+            ⏳ PENDING OWNER APPROVAL — RE-ENTRY OF VOIDED SLIP #${s.slipSerialNo}. Not counted anywhere. NO GATE PASS; the truck must not leave.
+            <table style="width:100%;font-size:11px;margin-top:4px;border-collapse:collapse;color:#333;font-weight:400;">
+              <tr style="color:#888;font-size:9px;text-transform:uppercase;"><td></td><td>Voided original</td><td>This re-entry</td></tr>
+              <tr><td style="color:#888;">KG</td><td>${rv.voidedKg}</td><td style="${lowerKg?'color:#c0392b;font-weight:700;':''}">${s.kgSold}${lowerKg?' ⬇':''}</td></tr>
+              <tr><td style="color:#888;">Amount</td><td>Rs.${(rv.voidedAmount||0).toFixed(0)}</td><td style="${lowerAmt?'color:#c0392b;font-weight:700;':''}">Rs.${(s.totalAmount||0).toFixed(0)}${lowerAmt?' ⬇':''}</td></tr>
+              <tr><td style="color:#888;">Buyer</td><td>${rv.voidedBuyer}</td><td>${s.buyer}</td></tr>
+            </table>
+            ${(lowerKg||lowerAmt)?`<div style="background:#c0392b;color:#fff;border-radius:4px;padding:4px 6px;margin-top:4px;">🚨 RE-ENTRY IS LOWER than the voided original — this is the classic void-and-reduce pattern. Do not approve without the slip photo in front of you.</div>`:''}
+            <div style="color:#666;font-weight:400;margin-top:3px;">Entered by ${rv.by} · original voided sale dated ${rv.voidedDate}</div>
+            ${currentUser?.role==='owner'?`<div style="display:flex;gap:6px;margin-top:6px;">
+              <button class="btn btn-green" style="font-size:11px;padding:5px 12px;flex:1;" onclick="approvePendingSale(${JSON.stringify(s.id)})">✅ Approve re-entry</button>
+              <button class="btn btn-red" style="font-size:11px;padding:5px 12px;flex:1;" onclick="rejectPendingSale(${JSON.stringify(s.id)})">🚫 Reject</button>
+            </div>`:''}
+          </div>`; })():''}
+        ${s.status==='pending' && !isVoidedSale && !s.slipReenteredFromVoided?`<div style="font-size:11px;color:#c0392b;font-weight:700;background:#fdecea;border-radius:6px;padding:6px 8px;margin-top:4px;">⏳ PENDING OWNER APPROVAL — manually-typed KG. Not counted in revenue or the wastage pool. NO GATE PASS issued; the truck must not leave.
           ${currentUser?.role==='owner'?`<div style="display:flex;gap:6px;margin-top:6px;">
             <button class="btn btn-green" style="font-size:11px;padding:5px 12px;flex:1;" onclick="approvePendingSale(${JSON.stringify(s.id)})">✅ Approve (against slip photo)</button>
             <button class="btn btn-red" style="font-size:11px;padding:5px 12px;flex:1;" onclick="rejectPendingSale(${JSON.stringify(s.id)})">🚫 Reject</button>
@@ -5930,17 +6023,48 @@ async function confirmSale(){
   const totalAmount=kg*price;
   const preSnapshot = takeSnapshot(['sales']);
 
-  // ---- DUPLICATE SLIP HARD-BLOCK (fraud control, Owner request 13/8) ----
-  // One physical slip = one sale, forever. A serial that appears on ANY previous sale —
-  // including voided or archived ones (else void-and-reuse would defeat it) — is burned.
+  // ---- DUPLICATE SLIP HARD-BLOCK (fraud control, Owner request 13/8; refined 17/9) ----
+  // One physical slip = one LIVE sale, forever. A serial on any non-voided sale is burned
+  // absolutely, for everyone. A serial whose every prior use was VOIDED is the legitimate
+  // correction case (wrong entry voided, correct one re-entered) — the OWNER may re-enter
+  // it, with explicit confirmation and a permanent re-entry stamp on the new sale; staff
+  // stay blocked and are told to bring it to the Owner. Void-and-reuse by staff remains
+  // impossible, and an Owner re-entry is fully auditable (void record + new sale share the
+  // same serial).
   const serialNo = modal.slipSerialNo || null;
   if(serialNo){
-    const clash = (state.sales||[]).find(s=>s && s.slipSerialNo && String(s.slipSerialNo)===String(serialNo));
-    if(clash){
-      err.textContent = `⚠️ BLOCKED: slip serial "${serialNo}" was already used on a sale dated ${clash.date} (${clash.buyer}, ${clash.kgSold} KG${clash.voided?', since voided':''}). One slip can never justify two sales. If this is genuinely a different slip, retake a clearer photo; otherwise this needs the Owner.`;
+    const clashes = (state.sales||[]).filter(s=>s && s.slipSerialNo && String(s.slipSerialNo)===String(serialNo));
+    const live = clashes.find(s=>!s.voided);
+    if(live){
+      err.textContent = `⚠️ BLOCKED: slip serial "${serialNo}" is already on a LIVE sale dated ${live.date} (${live.buyer}, ${live.kgSold} KG). One slip can never justify two sales. If this is genuinely a different slip, retake a clearer photo.`;
       err.classList.remove('hidden');
       isSubmittingSale = false;
       return;
+    }
+    if(clashes.length){
+      const v = clashes[clashes.length-1];
+      // 17/9 (Owner decision after review): staff CAN enter a voided-slip re-entry, but it
+      // is held PENDING the Owner's approval — no revenue, no pool deduction, no gate pass
+      // until approved. The approval card shows the voided original side-by-side with the
+      // re-entry and flags any drop in KG/amount (the fraud direction). The Owner's own
+      // direct entry applies immediately (personal). A slip on a LIVE sale stays blocked
+      // for everyone, above.
+      if(currentUser?.role!=='owner'){
+        if(!confirm('Slip serial "'+serialNo+'" was on a VOIDED sale ('+v.date+', '+v.buyer+', '+v.kgSold+' KG, Rs.'+((v.totalAmount||0)).toFixed(0)+').\n\nRecord this corrected re-entry now? It will WAIT for the Owner\'s approval — no gate pass, not counted anywhere, the truck must not leave until approved.')){
+          isSubmittingSale = false;
+          return;
+        }
+        modal._slipReenteredFromVoided = { voidedSaleId: v.id, at: new Date().toISOString(), by: currentUser?.name||'?',
+          voidedKg: v.kgSold, voidedAmount: v.totalAmount||0, voidedBuyer: v.buyer||'', voidedDate: v.date||'' };
+        modal._forcePendingVoidedSlip = true;
+      } else {
+        if(!confirm('Slip serial "'+serialNo+'" was on a VOIDED sale ('+v.date+', '+v.buyer+', '+v.kgSold+' KG).\n\nRe-enter it now as the corrected sale? This is recorded permanently as an Owner re-entry of a voided slip.')){
+          isSubmittingSale = false;
+          return;
+        }
+        modal._slipReenteredFromVoided = { voidedSaleId: v.id, at: new Date().toISOString(), by: currentUser?.name||'Owner',
+          voidedKg: v.kgSold, voidedAmount: v.totalAmount||0, voidedBuyer: v.buyer||'', voidedDate: v.date||'' };
+      }
     }
   }
 
@@ -5950,7 +6074,7 @@ async function confirmSale(){
   // where a human types the KG — no longer applies silently: it saves as PENDING, invisible
   // to revenue and the wastage pool, with no gate pass, until the Owner approves it against
   // the photo. Wrong numbers stop being a quiet act and become a request sent to the Owner.
-  const needsApproval = !!modal.manualOverrideUsed && !(currentUser && currentUser.role==='owner');
+  const needsApproval = (!!modal.manualOverrideUsed || !!modal._forcePendingVoidedSlip) && !(currentUser && currentUser.role==='owner');
 
   // Gate pass: sequential GP number minted only for sales that actually apply. The guard's
   // one job at the gate: no wastage truck exits without a GP number that exists in the app.
@@ -5966,6 +6090,7 @@ async function confirmSale(){
     status: needsApproval ? 'pending' : 'applied',
     gatePassNo,
     slipSerialNo: serialNo, slipCNo: modal.slipCNo || null,
+    slipReenteredFromVoided: modal._slipReenteredFromVoided || null, // 17/9: Owner re-entry of a voided slip — permanent audit stamp
     weighSlipUrl: modal.slipUrl, weighSlipReadKg: modal.slipReadKg ?? null,
     weighSlipDate: modal.slipDate ?? null,
     manualOverride: !!modal.manualOverrideUsed,
@@ -6032,7 +6157,8 @@ function confirmCashReceived(){
 
   document.getElementById('cashReceivedModal').classList.add('hidden');
   state.cashReceivedModal = null;
-  saveAll(); re();
+  re();
+  withConfirmedSave('the cash settlement', ()=>{});
 }
 
 // ==================== VOID / FLAG ACTIONS (Wood Finishing production runs) ====================
@@ -9607,6 +9733,8 @@ function runAutoFixCycle(){
       return true;
     });
   });
+
+  try{ rvNormalizeOwnerAmounts(applied); }catch(e){}
 
   // Ledger self-heal (12/09): every plank-IN entry made before addLedgerEntry stored a real
   // price field has it ONLY in its note text. Persist it onto the entry itself once, so the
