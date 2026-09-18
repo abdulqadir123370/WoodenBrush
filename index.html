@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1789708967137;
+const APP_BUILD = 1789710111522;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -5233,8 +5233,7 @@ function printReceiptVoucher(id){
     <div class="meta"><b>Voucher No:</b> ${v.rvNo}<br><b>Date:</b> ${v.date} ${v.time}</div>
   </div>
   <div style="font-size:11pt;line-height:1.8;">
-    <b>Received by:</b> Owner &nbsp;&nbsp;·&nbsp;&nbsp; <b>Handed over by:</b> ${v.by}<br>
-    <b>Owner confirmation:</b> ${v.confirmedByOwner?`CONFIRMED by ${v.confirmedByOwner.by} on ${String(v.confirmedByOwner.at).slice(0,10)}`:'<span style="color:#c0392b;">PENDING — not yet confirmed by the Owner</span>'}${v.confirmNote?`<br><span style="font-size:9.5pt;color:#c0392b;">${v.confirmNote}</span>`:''}
+    <b>Received by:</b> Owner &nbsp;&nbsp;·&nbsp;&nbsp; <b>Handed over by:</b> ${v.by}
   </div>
   <table>
     <tr><th style="width:8mm;">#</th><th>Sale Date</th><th>Buyer</th><th>Type</th><th>Slip #</th><th>Gate Pass</th><th class="r">Amount (Rs.)</th></tr>
@@ -5244,7 +5243,7 @@ function printReceiptVoucher(id){
   <div class="words"><b>Amount in words:</b> ${rvAmountInWords(v.total)}</div>
   ${v.notes?`<div style="margin-top:3mm;font-size:10.5pt;"><b>Notes:</b> ${String(v.notes).replace(/</g,'&lt;')}</div>`:''}
   <div class="sig">
-    <div class="sigbox">Handed over by (${v.by})<br>Signature</div>
+    <div class="sigbox">Handed over by<br>Signature</div>
     <div class="sigbox">Received by — Owner<br>Signature</div>
   </div>
   </body></html>`);
