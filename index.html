@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1789802770112;
+const APP_BUILD = 1789803345902;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -9412,8 +9412,15 @@ function runSystemWatch(explainedBatches){
   // requireLiveCloud). Unsettled devices skip every rule that trusts their own photo of
   // stock (1a/1c/1d, the receipt shadow) and never store a baseline snapshot; catalog
   // checks and fresh-entry review still run — those don't depend on the photo being fresh.
+  const SNAP_SOURCE_KEYS = ['materials','openBatches','finishedBrushes','readyForSale','scrapInventory','socketInventory','screwInventory','packedBoxes','ledger','production'];
+  const listenersFresh = SNAP_SOURCE_KEYS.every(k=>{
+    if(!(k in SK)) return true; // key not in this build's schema — nothing to be stale about
+    const last = window._lastSnapshotAt && window._lastSnapshotAt[k];
+    return !!last && (Date.now()-last) < 30*60*1000; // every stock source heard from the server within 30 min
+  });
   const deviceSettled = (Date.now() - (window._appLoadedAt||0) > 90*1000)
-    && (Math.max(window._lastServerContact||0, lastSyncOkAt||0) > Date.now() - 30*1000);
+    && (Math.max(window._lastServerContact||0, lastSyncOkAt||0) > Date.now() - 30*1000)
+    && listenersFresh; // 19/9: stale-listener devices must never write the watch baseline (18-finding false burst)
 
   // A previous snapshot with NO quantities recorded at all is not a trustworthy "before"
   // picture for the quantities comparison specifically — it means the app captured it before
@@ -9551,7 +9558,7 @@ function runSystemWatch(explainedBatches){
   // Only a settled device may store a baseline — an unsettled photo poisoning this list is
   // exactly what caused the 04/09 false-findings incident.
   if(deviceSettled){ state.dataSnapshots = [curr, ...snapshots].slice(0, 84); }
-  else { console.warn('System Watch: snapshot NOT stored — device not settled/verified yet'); }
+  else { console.warn('System Watch: snapshot NOT stored — device not settled/verified yet'+(typeof listenersFresh!=='undefined'&&!listenersFresh?' (one or more stock listeners stale >30min — old numbers must not become the baseline)':'')); }
   // ============ RECEIPT SHADOW (migration S2, added 20/8) ============
   // The future stock system in rehearsal: derive every stock figure from the last snapshot
   // (opening balance) + ledger receipts since, and compare against the app's actual stored
