@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1789803345902;
+const APP_BUILD = 1790000722576;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -508,13 +508,17 @@ function doFirestoreSync(){
     // to be updated. Batches that fail leave their shadow untouched — meaning those exact
     // records look "changed" again on the next attempt and get resent automatically, instead
     // of being silently forgotten forever.
-    const MAP_STALE_MS = 4*60*60*1000; // 4h with no server-confirmed snapshot = don't trust this device's copy for a write
+    // 19/9: gate recalibrated onto the heartbeat canary. A dead LISTEN PIPE (canary silent
+    // >12 min while online) is the actual danger signal; per-collection quiet is normal on
+    // a slow day (listeners only fire on change). Belt kept: a collection that has NEVER
+    // been heard since load is also untrusted.
+    const pipeDead = !!window._hbEverReceived && (Date.now() - (window._hbLastReceived||0)) > 12*60*1000; // fail-open: unarmed canary never blocks
     const staleMapKeys = [];
     Object.keys(SK).forEach(stateKey=>{
       if(!collectionReady[stateKey]) return;
       if(MAP_COLLECTIONS[stateKey]){
-        const last = window._lastSnapshotAt && window._lastSnapshotAt[stateKey];
-        if(!last || (Date.now()-last) > MAP_STALE_MS){ staleMapKeys.push(stateKey); return; }
+        const heard = window._lastSnapshotAt && window._lastSnapshotAt[stateKey];
+        if(pipeDead || !heard){ staleMapKeys.push(stateKey); return; }
       }
       const col = SK[stateKey];
       const recs = recordsOf(stateKey);
@@ -612,8 +616,12 @@ function doFirestoreSync(){
     window._lastPendingOpsBreakdown = Object.entries(byKey).sort((a,b)=>b[1]-a[1]).map(([k,n])=>k+'×'+n).join(', ');
     if(ops.length>20) console.warn('Large sync batch ('+ops.length+' ops):', window._lastPendingOpsBreakdown);
     if(staleMapKeys.length){
-      console.warn('Skipped writing (listener stale >4h, would risk overwriting fresh cloud data with an old local copy): '+staleMapKeys.join(', '));
-      if(typeof critToast==='function') critToast('⚠️ This device hasn\'t heard from the cloud for a while on: '+staleMapKeys.join(', ')+'. Skipping those to avoid overwriting anything — reload this device when convenient to refresh it.', 'err');
+      console.warn('Skipped writing (pipe dead or collection never heard since load — would risk overwriting fresh cloud data with an old local copy): '+staleMapKeys.join(', '));
+      // Toast only when the pipe is provably DEAD. The other reason (never-heard-yet) is a
+      // normal 1-3s boot window before the first server snapshot — the skipped doc simply
+      // goes out on the next sync pass; a scary toast there would be a false alarm on
+      // every fast first save.
+      if(pipeDead && typeof critToast==='function') critToast('⚠️ This device\'s cloud connection looks broken ('+staleMapKeys.join(', ')+' writes held back to avoid overwriting fresh data). It will self-repair within minutes; your entry is saved locally and will sync then.', 'err');
     }
     const pr = Promise.allSettled(chunkPromises).then(results=>{
       const anyOk = results.some(r=>r.status==='fulfilled');
@@ -1117,7 +1125,7 @@ function attachFirestoreListeners(onAllFirstSnapshots){
     fbDb.collection(col).onSnapshot({includeMetadataChanges:false}, snap=>{
       // Live-cloud proof: a snapshot delivered from the SERVER (not the local cache) is the
       // strongest evidence the connection is real right now. Feeds requireLiveCloud().
-      if(!snap.metadata || !snap.metadata.fromCache){ window._lastServerContact = Date.now(); window._lastSnapshotAt[stateKey] = Date.now(); }
+      if(!snap.metadata || !snap.metadata.fromCache){ window._lastServerContact = Date.now(); if(!snap.metadata || !snap.metadata.hasPendingWrites){ window._lastSnapshotAt[stateKey] = Date.now(); } }
       const changes = snap.docChanges();
       const isLocalEcho = changes.length>0 && changes.every(c=>c.doc.metadata.hasPendingWrites);
       const isFirst = !firstSeen[stateKey];
@@ -1249,6 +1257,7 @@ function loadFromFirestore(){
 
   firebase.auth().signInAnonymously().then(()=>{
     attachMinBuildListener();
+    attachHeartbeat();
     attachFleetListeners();
     reportDeviceStatus();
     setInterval(reportDeviceStatus, 4*60*1000); // heartbeat every 4 minutes
@@ -1323,7 +1332,16 @@ function renderFleetLockCardHTML(){
   if(!currentUser || currentUser.role!=='owner') return '';
   const current = currentMinBuildFloor || 0;
   const upToDate = current === APP_BUILD;
-  return `<div class="card" style="border:2px solid #7d3c98;">
+  return `<div class="card">
+    <div class="label">🎫 Gate Pass Numbering</div>
+    <div style="font-size:11px;color:#888;margin-bottom:6px;">The physical gate-pass book has its own serial. ${currentUser?.role==='owner'?'Set the number the NEXT app-issued pass should get — every device follows it. The app never goes backwards or reuses a number.':'Only the Owner can change the numbering.'}</div>
+    ${currentUser?.role==='owner'?`<div style="display:flex;gap:8px;align-items:center;">
+      <input type="number" id="gatePassNextInput" min="1" style="width:110px;" value="${Math.max(highestGatePassNum(), (+window._gatePassNext||0)-1)+1}"/>
+      <button class="btn" style="background:#333;color:#fff;" onclick="saveGatePassNext()">Save</button>
+      <span style="font-size:11px;color:#888;">next pass will be GP-${String(Math.max(highestGatePassNum(), (+window._gatePassNext||0)-1)+1).padStart(4,'0')}</span>
+    </div>`:`<div style="font-size:12px;">Next pass: <b>GP-${String(Math.max(highestGatePassNum(), (+window._gatePassNext||0)-1)+1).padStart(4,'0')}</b></div>`}
+  </div>
+  <div class="card" style="border:2px solid #7d3c98;">
     <div class="label" style="color:#7d3c98;">🔒 Fleet Build Lock</div>
     <div style="font-size:11px;color:#888;margin-bottom:8px;">Forces every device onto at least this build. Use after pushing a fix that old builds must not keep running (data-corruption bugs, security rules changes). Normal feature updates do NOT need this — devices self-update within minutes anyway.</div>
     <div style="font-size:12px;margin-bottom:4px;">Current fleet minimum: <b>${current || '(none set)'}</b>${current && current<APP_BUILD?' <span style="color:#e67e22;">(older than this device)</span>':''}</div>
@@ -1334,12 +1352,90 @@ function renderFleetLockCardHTML(){
   </div>`;
 }
 
+// ==================== HEARTBEAT CANARY (19/9) — eliminates stale devices ====================
+// The root disease behind every incident this week: a device whose Firestore listeners
+// silently die while its timers keep running, leaving it acting on an old photo of the
+// world. Silence alone can't be diagnosed — a quiet collection and a dead pipe look
+// identical. The canary makes silence diagnostic: wbt_meta/heartbeat provably changes
+// every few minutes (any settled device bumps it when it sees it >3 min old), and every
+// device listens. Canary updates arriving = the listen pipe works (all listeners share one
+// stream and fail together). Canary silent >12 min while online = pipe dead = this device
+// reloads ITSELF, re-attaching everything fresh. Stale devices stop existing as a
+// category; the write gates remain as belt.
+function attachHeartbeat(){
+  if(!fbDb || IS_FILE_COPY) return;
+  window._hbLastReceived = Date.now(); // grace until first snapshot
+  window._hbDocTs = 0;
+  try{
+    fbDb.collection(META_COLLECTION).doc('heartbeat').onSnapshot(doc=>{
+      // CRITICAL (self-caught 19/9): a device's OWN write fires an instant latency-compensated
+      // snapshot even when the server is unreachable — counting that as "pipe alive" would let
+      // a dead-pipe device keep resetting its own watchdog forever. Only server-ACKNOWLEDGED
+      // snapshots count: fromCache false AND no pending writes.
+      if(doc && doc.metadata && (doc.metadata.fromCache || doc.metadata.hasPendingWrites)) return;
+      window._hbEverReceived = true; // fail-open guard: canary only armed after first genuine receipt
+      window._hbLastReceived = Date.now();
+      window._hbDocTs = doc.exists ? +((doc.data()||{}).ts||0) : 0;
+    }, err=>console.warn('heartbeat listener error (canary stays INERT — fail-open)', err));
+  }catch(e){ console.warn('heartbeat attach failed', e); }
+  // Writer: keep the canary alive. Randomized interval + only-if-stale keeps fleet-wide
+  // writes to a few hundred per day regardless of device count.
+  const tick = ()=>{
+    try{
+      const settled = (Date.now() - (window._appLoadedAt||0) > 90*1000) && !window._zombieBuild;
+      if(settled && navigator.onLine!==false && (Date.now() - (window._hbDocTs||0) > 3*60*1000)){
+        fbDb.collection(META_COLLECTION).doc('heartbeat').set({ ts: Date.now(), by: (typeof DEVICE_ID!=='undefined'?DEVICE_ID:(localStorage.getItem('wbt_device_id')||'?')), build: APP_BUILD }).catch(()=>{});
+      }
+    }catch(e){}
+    setTimeout(tick, (4 + Math.random()*2)*60*1000);
+  };
+  setTimeout(tick, (1 + Math.random())*60*1000);
+  // Watchdog: dead pipe -> self-reload (loop-guarded: max one per 10 minutes).
+  ['keydown','pointerdown','touchstart'].forEach(ev=>{ try{ document.addEventListener(ev, ()=>{ window._lastUserActivity = Date.now(); }, {passive:true}); }catch(e){} });
+  setInterval(()=>{
+    try{
+      if(!window._hbEverReceived) return;                       // FAIL-OPEN: canary never confirmed this session (rules/attach issue) — stay inert, never punish the fleet for the canary's own problem
+      if(navigator.onLine===false) return;                      // genuinely offline — not a pipe failure
+      if(Date.now() - (window._appLoadedAt||0) < 5*60*1000) return; // settle grace
+      if(Date.now() - (window._hbLastReceived||0) < 12*60*1000) return; // pipe alive
+      if(Date.now() - (window._lastUserActivity||0) < 2*60*1000) return; // someone is TYPING — never eat a half-filled form; reload waits for idle
+      const last = +(sessionStorage.getItem('wbt_hb_reload')||0);
+      if(Date.now() - last < 10*60*1000) return;                // just reloaded for this — don't loop
+      sessionStorage.setItem('wbt_hb_reload', String(Date.now()));
+      console.warn('HEARTBEAT DEAD >12min while online — listener pipe is broken, reloading to re-attach.');
+      location.reload();
+    }catch(e){}
+  }, 60*1000);
+}
+// Gate-pass numbering (21/9, Owner request): the physical gate-pass book has its own serial
+// (currently at 13) — app numbers must continue that series, not run their own count.
+// The Owner sets "next gate pass #" once (stored in wbt_meta/config, fleet-wide via the
+// existing config listener); minting always takes max(highest already issued, floor).
+// Counting sales was also subtly wrong once voids exist — max-parsing is void-proof.
+function highestGatePassNum(){
+  let m = 0;
+  (state.sales||[]).forEach(s=>{ const x=/^GP-(\d+)$/.exec(String(s?.gatePassNo||'')); if(x) m=Math.max(m, +x[1]); });
+  return m;
+}
+function nextGatePassNo(){
+  const floor = Math.max(0, (+window._gatePassNext||0) - 1);
+  return 'GP-'+String(Math.max(highestGatePassNum(), floor)+1).padStart(4,'0');
+}
+function saveGatePassNext(){
+  if(currentUser?.role!=='owner'){ alert('Owner only.'); return; }
+  const v = Math.round(+document.getElementById('gatePassNextInput')?.value);
+  if(!(v>0)){ alert('Enter the number the NEXT gate pass should get (e.g. 14).'); return; }
+  fbDb.collection(META_COLLECTION).doc('config').set({ gatePassNext: v, gatePassNextSetBy: currentUser?.name||'Owner', gatePassNextSetAt: new Date().toISOString() }, {merge:true})
+    .then(()=>{ window._gatePassNext = v; alert('Saved. The next gate pass issued anywhere in the fleet will be GP-'+String(Math.max(highestGatePassNum(), v-1)+1).padStart(4,'0')+'.'); re(); })
+    .catch(e=>alert('Could not save: '+e.message));
+}
 function attachMinBuildListener(){
   if(!fbDb) return;
   try{
     fbDb.collection(META_COLLECTION).doc('config').onSnapshot(doc=>{
       const minBuild = doc.exists ? +((doc.data()||{}).minBuild||0) : 0;
       currentMinBuildFloor = minBuild; // remembered for the Owner's fleet-lock button display
+      window._gatePassNext = doc.exists ? +((doc.data()||{}).gatePassNext||0) : 0;
       if(minBuild && APP_BUILD < minBuild){
         showMinBuildWall(minBuild);
         // 14/09 ZOMBIE KILL SWITCH: the wall alone only blocked the screen — this device's
@@ -4629,7 +4725,7 @@ function approvePendingSale(id){
   sale.status = 'applied';
   sale.approvedBy = currentUser?.name||'Owner';
   sale.approvedAt = new Date().toISOString();
-  sale.gatePassNo = 'GP-'+String(((state.sales||[]).filter(x=>x&&x.gatePassNo).length)+1).padStart(4,'0');
+  sale.gatePassNo = nextGatePassNo();
   saveAll(); re();
 }
 function rejectPendingSale(id){
@@ -5143,7 +5239,7 @@ function createReceiptVoucher(){
     const owed = saleOwedToOwner(s);
     if(!(amt>0)){ return; }
     if(amt>owed){ alert('Sale '+(s.date||'')+' ('+(s.buyer||'')+'): amount Rs.'+amt+' exceeds the Rs.'+owed+' still owed to the Owner from this sale. Fix it and try again.'); throw new Error('rv-abort'); }
-    lines.push({saleId:s.id, saleDate:s.date, buyer:s.buyer||'', wasteType:s.wasteType||'', slipSerialNo:s.slipSerialNo||'', gatePassNo:s.gatePassNo||'', amount:amt});
+    lines.push({saleId:s.id, saleDate:s.date, buyer:s.buyer||'', wasteType:s.wasteType||'', slipSerialNo:s.slipSerialNo||'', gatePassNo:s.gatePassNo||'', kg:s.kgSold||null, rate:s.pricePerKg||null, amount:amt});
   });
   if(lines.length===0){ alert('Tick at least one sale and give it an amount.'); return; }
   const total = lines.reduce((a,l)=>a+l.amount,0);
@@ -5193,6 +5289,9 @@ function confirmVoucherByOwner(id){
 // without the Owner) back to PENDING: those sales return to "owed to Owner" until the Owner
 // confirms the voucher personally. Idempotent — safe every cycle.
 function rvNormalizeOwnerAmounts(applied){
+  // 21/9 backfill (idempotent): older sales predate the immutable entry-date stamp — set it
+  // once from the record's own creation datetime; never touched again after that.
+  (state.sales||[]).forEach(s=>{ if(s && !s.entryDate && s.datetime){ s.entryDate = String(s.datetime).slice(0,10); s.entryTime = String(s.datetime).slice(11,16); } });
   let changed=0;
   (state.sales||[]).forEach(s=>{
     if(!s || s.voided) return;
@@ -5259,9 +5358,9 @@ function printReceiptVoucher(id){
     <b>Received by:</b> Owner &nbsp;&nbsp;·&nbsp;&nbsp; <b>Handed over by:</b> ${v.by}
   </div>
   <table>
-    <tr><th style="width:8mm;">#</th><th>Sale Date</th><th>Buyer</th><th>Type</th><th>Slip #</th><th>Gate Pass</th><th class="r">Amount (Rs.)</th></tr>
-    ${v.lines.map((l,i)=>`<tr><td>${i+1}</td><td>${l.saleDate||''}</td><td>${l.buyer}</td><td>${l.wasteType}</td><td>${l.slipSerialNo||'—'}</td><td>${l.gatePassNo||'—'}</td><td class="r">${l.amount.toLocaleString()}</td></tr>`).join('')}
-    <tr class="tot"><td colspan="6">TOTAL RECEIVED</td><td class="r">Rs. ${v.total.toLocaleString()}</td></tr>
+    <tr><th style="width:8mm;">#</th><th>Sale Date</th><th>Buyer</th><th>Type</th><th class="r">KG</th><th class="r">Rate</th><th>Slip #</th><th>Gate Pass</th><th class="r">Amount (Rs.)</th></tr>
+    ${v.lines.map((l,i)=>`<tr><td>${i+1}</td><td>${l.saleDate||''}</td><td>${l.buyer}</td><td>${l.wasteType}</td><td class="r">${l.kg!=null?l.kg:'—'}</td><td class="r">${l.rate!=null?('Rs.'+l.rate+'/KG'):'—'}</td><td>${l.slipSerialNo||'—'}</td><td>${l.gatePassNo||'—'}</td><td class="r">${l.amount.toLocaleString()}</td></tr>`).join('')}
+    <tr class="tot"><td colspan="8">TOTAL RECEIVED</td><td class="r">Rs. ${v.total.toLocaleString()}</td></tr>
   </table>
   <div class="words"><b>Amount in words:</b> ${rvAmountInWords(v.total)}</div>
   ${v.notes?`<div style="margin-top:3mm;font-size:10.5pt;"><b>Notes:</b> ${String(v.notes).replace(/</g,'&lt;')}</div>`:''}
@@ -5286,7 +5385,7 @@ function renderReceiptVoucherCardHTML(){
       ${eligible.map(s=>{ const owed=saleOwedToOwner(s); const cur = sel[s.id]??''; return `
       <tr style="border-top:1px solid #eee;">
         <td style="width:24px;"><input type="checkbox" ${cur!==''?'checked':''} onchange="state.rvSel=state.rvSel||{}; state.rvSel[${s.id}]=this.checked?${owed}:''; re();"/></td>
-        <td>${s.date} — ${s.buyer||'—'} · ${s.wasteType||''}${s.slipSerialNo?' · slip #'+s.slipSerialNo:''}</td>
+        <td>${s.date} — ${s.buyer||'—'} · ${s.wasteType||''} · ${s.kgSold||'?'} KG @ Rs.${s.pricePerKg||'?'}/KG${s.slipSerialNo?' · slip #'+s.slipSerialNo:''}</td>
         <td style="text-align:right;">Rs.${owed.toLocaleString()}</td>
         <td style="text-align:right;"><input type="number" min="1" max="${owed}" value="${cur}" style="width:85px;text-align:right;" oninput="state.rvSel=state.rvSel||{}; state.rvSel[${s.id}]=this.value;"/></td>
       </tr>`; }).join('')}
@@ -5426,6 +5525,7 @@ function renderSales(){
         </div>
       </div>
         <div style="font-size:11px;color:#888;${isVoidedSale?'text-decoration:line-through;':''}">${s.kgSold} KG @ Rs.${s.pricePerKg}/KG${s.weighSlipDate?` · slip dated ${s.weighSlipDate}`:''}${s.slipSerialNo?` · slip #${s.slipSerialNo}`:''}${s.slipCNo?` · C-No ${s.slipCNo}`:''}</div>
+        ${s.entryDate && s.entryDate!==s.date?`<div style="font-size:10px;color:#b07d2b;">✍️ entered ${s.entryDate}${s.entryTime?' '+s.entryTime:''} (back-dated sale)</div>`:''}
         ${s.gatePassNo && !isVoidedSale?`<div style="font-size:12px;font-weight:700;color:#8e44ad;margin-top:2px;">🎫 Gate Pass: ${s.gatePassNo}</div>`:''}
         ${s.status==='pending' && !isVoidedSale && s.slipReenteredFromVoided?(()=>{ const rv=s.slipReenteredFromVoided;
           const lowerKg = s.kgSold < (rv.voidedKg||0)-0.001; const lowerAmt = (s.totalAmount||0) < (rv.voidedAmount||0)-0.5;
@@ -5753,7 +5853,7 @@ function openSaleModal(){
     <input type="number" id="salePrice" readonly style="background:#f0f0f0;color:#555;" placeholder="No price set for this type"/>
     <div id="salePriceNote" style="font-size:11px;margin:2px 0 8px;"></div>
     <div class="label">Sale Date</div>
-    <input type="date" id="saleDate" value="${new Date().toISOString().slice(0,10)}" ${dateLockAttrs()}/>
+    <input type="date" id="saleDate" value="${new Date().toISOString().slice(0,10)}" max="${new Date().toISOString().slice(0,10)}" title="Date of sale — can be back-dated (never future). Date of ENTRY is stamped automatically and cannot be changed."/>
     <div style="background:#e8f5e9;border-radius:6px;padding:8px;font-size:11px;color:#27ae60;font-weight:700;">✅ Payment collected in full at time of sale</div>`;
   document.getElementById('saleModal').classList.remove('hidden');
   updateSaleTypeAvailable();
@@ -6003,7 +6103,12 @@ async function confirmSale(){
   // Price is NEVER read from the form — the field is display-only. The fixed Admin-set
   // catalog price is the single source, so nothing typed or injected can alter it.
   const price = getWastagePrice(document.getElementById('saleWasteType')?.value);
-  const date=resolveEntryDate(document.getElementById('saleDate')?.value) || new Date().toISOString().slice(0,10);
+  // 21/9 (Owner rule, mirrors purchase back-dating): DATE OF SALE is editable by every
+  // role, past-only. DATE OF ENTRY is stamped by the system and can never be changed —
+  // any gap between the two is permanently visible.
+  const _todayStr = new Date().toISOString().slice(0,10);
+  const _rawSaleDate = document.getElementById('saleDate')?.value;
+  const date = (_rawSaleDate && /^\d{4}-\d{2}-\d{2}$/.test(_rawSaleDate) && _rawSaleDate <= _todayStr) ? _rawSaleDate : _todayStr;
   const err=document.getElementById('saleErr');
   const available = modal.stock.available[wasteType]||0;
   if(!wasteType){err.textContent="⚠️ Select a wastage type";err.classList.remove('hidden');return;}
@@ -6100,7 +6205,7 @@ async function confirmSale(){
 
   // Gate pass: sequential GP number minted only for sales that actually apply. The guard's
   // one job at the gate: no wastage truck exits without a GP number that exists in the app.
-  const gatePassNo = needsApproval ? null : ('GP-'+String(((state.sales||[]).filter(s=>s&&s.gatePassNo).length)+1).padStart(4,'0'));
+  const gatePassNo = needsApproval ? null : nextGatePassNo();
 
   // Every wastage sale is paid in full at the time of recording — no credit sales.
   state.sales=[...(state.sales||[]),{
@@ -6108,6 +6213,7 @@ async function confirmSale(){
     buyer, kgSold:kg, pricePerKg:price, totalAmount,
     amountReceived:totalAmount, pendingAmount:0,
     payment:'Paid', date, time: new Date().toTimeString().slice(0,5), datetime:new Date().toISOString(),
+    entryDate: _todayStr, entryTime: new Date().toTimeString().slice(0,5), // immutable — stamped by the system, no UI can change it
     voided:false,
     status: needsApproval ? 'pending' : 'applied',
     gatePassNo,
@@ -9413,11 +9519,15 @@ function runSystemWatch(explainedBatches){
   // stock (1a/1c/1d, the receipt shadow) and never store a baseline snapshot; catalog
   // checks and fresh-entry review still run — those don't depend on the photo being fresh.
   const SNAP_SOURCE_KEYS = ['materials','openBatches','finishedBrushes','readyForSale','scrapInventory','socketInventory','screwInventory','packedBoxes','ledger','production'];
-  const listenersFresh = SNAP_SOURCE_KEYS.every(k=>{
-    if(!(k in SK)) return true; // key not in this build's schema — nothing to be stale about
-    const last = window._lastSnapshotAt && window._lastSnapshotAt[k];
-    return !!last && (Date.now()-last) < 30*60*1000; // every stock source heard from the server within 30 min
-  });
+  // 19/9: recalibrated onto the heartbeat canary — the pipe must be provably alive (canary
+  // heard <12 min ago) and every stock source must have been heard at least once since
+  // load. Per-collection recency alone false-alarms on quiet mornings, since listeners
+  // only fire on change.
+  const listenersFresh = (!window._hbEverReceived || (Date.now() - (window._hbLastReceived||0)) < 12*60*1000)
+    && SNAP_SOURCE_KEYS.every(k=>{
+      if(!(k in SK)) return true; // key not in this build's schema — nothing to be stale about
+      return !!(window._lastSnapshotAt && window._lastSnapshotAt[k]); // heard at least once since load
+    });
   const deviceSettled = (Date.now() - (window._appLoadedAt||0) > 90*1000)
     && (Math.max(window._lastServerContact||0, lastSyncOkAt||0) > Date.now() - 30*1000)
     && listenersFresh; // 19/9: stale-listener devices must never write the watch baseline (18-finding false burst)
