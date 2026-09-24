@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1790176000377;
+const APP_BUILD = 1790228488588;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -298,6 +298,15 @@ const DEFAULT_USERS = [
 ];
 const PLANK_SIZES = ["12","24","36"];
 const WASTE_TYPES = ["Bhusa", "Patti", "Gitta"];
+// 22/9 (Owner): Bhusa and Patti are the SAME material sold as one thing — one account.
+// History is never rewritten: old records keep their label; pooling, availability, rates,
+// sale entry and report grouping all treat Patti as Bhusa via this mapping.
+const WASTE_ACCOUNT_OF = t => (t==='Patti' ? 'Bhusa' : t);
+const SALE_WASTE_ACCOUNTS = ["Bhusa", "Gitta"]; // what the sale form offers
+const WASTE_ACCOUNT_LABEL = { Bhusa: 'Bhusa/Patti', Gitta: 'Gitta' };
+// Display helper: any record labelled Bhusa OR Patti shows as the single name "Bhusa/Patti".
+// Stored values stay untouched (history never rewritten).
+const wasteTypeDisplay = t => (WASTE_ACCOUNT_OF(t)==='Bhusa' ? 'Bhusa/Patti' : (t||''));
 const DEFAULT_WOOD_PIECES = [
   {id:1,name:"Commando Broom",size:11},
   {id:2,name:"Commando Gittuk",size:5.5},
@@ -3985,9 +3994,9 @@ function renderWastage(){
   html+=`<div class="card" style="background:#fff8f0;border:2px solid #e67e22;">
     <div class="label">🗑️ Wastage by Type</div>
     <div class="grid3" style="margin-bottom:14px;">
-      ${WASTE_TYPES.map(t=>`
+      ${SALE_WASTE_ACCOUNTS.map(t=>`
       <div style="background:#fff;border-radius:8px;padding:10px;text-align:center;border-top:3px solid ${typeColors[t]};">
-        <div style="font-size:11px;font-weight:700;color:${typeColors[t]};margin-bottom:4px;">${t}</div>
+        <div style="font-size:11px;font-weight:700;color:${typeColors[t]};margin-bottom:4px;">${WASTE_ACCOUNT_LABEL[t]||t}</div>
         <div style="font-size:18px;font-weight:700;color:#e74c3c;">${typeStock.available[t].toFixed(1)}</div>
         <div style="font-size:9px;color:#aaa;">KG available</div>
         <div style="font-size:9px;color:#27ae60;margin-top:2px;">Sold: ${typeStock.sold[t].toFixed(1)} KG</div>
@@ -4712,7 +4721,7 @@ function approvePendingSale(id){
   if(!currentUser || currentUser.role!=='owner'){ alert('Owner only.'); return; }
   const sale = (state.sales||[]).find(x=>x && x.id===id && x.status==='pending' && !x.voided);
   if(!sale) return;
-  const avail = getWasteTypeStock().available[sale.wasteType]||0;
+  const avail = getWasteTypeStock().available[WASTE_ACCOUNT_OF(sale.wasteType)]||0;
   if(sale.kgSold > avail+0.001){
     alert(`Cannot approve: only ${avail.toFixed(1)} KG of ${sale.wasteType} is available now (this sale claims ${sale.kgSold} KG). Check the pool first — approve would drive it negative.`);
     return;
@@ -4800,9 +4809,9 @@ function _actApplyRework(p,r){ const f=r.category==='Color'?'colorRework':'regma
 function _actApplyReworkCompleted(p,r){ _actAdd(p.rework,'completedPcs',r.qty); _actAdd(p.rework.completedByCategory,r.category||'?',r.qty); }
 function _actApplyBrushScrap(p,r){ _actAdd(p.brushDept,'kharabMaalScrap',r.qty); _actProd(p.brushDept.byProduct,r.productName,'kharabMaalScrap',r.qty); }
 function _actApplySocket(p,r){ const sd=p.socketDept; _actAdd(sd,'readyForSaleOut',r.qty); _actAdd(sd,'socketsUsed',r.socketQty); _actAdd(sd,'screwsUsed',r.screwQty); _actProd(sd.byProduct,r.productName,'readyForSaleOut',r.qty); }
-function _actApplyWastage(p,w){ const ws=p.wastage; ws.entries++; _actAdd(ws,'totalKg',w.wastageKg); const split=w.typeSplit||{}; ['Bhusa','Patti','Gitta'].forEach(t=>_actAdd(ws.byType,t,split[t])); _actAdd(ws.bySource,w.type||'Other',w.wastageKg);
+function _actApplyWastage(p,w){ const ws=p.wastage; ws.entries++; _actAdd(ws,'totalKg',w.wastageKg); const split=w.typeSplit||{}; ['Bhusa','Patti','Gitta'].forEach(t=>_actAdd(ws.byType,(typeof wasteTypeDisplay==='function'?wasteTypeDisplay(t):t),split[t])); _actAdd(ws.bySource,w.type||'Other',w.wastageKg);
   if(w.type==='BrushDeptWastage'){ _actAdd(p.brushDept,'keereWalaWastagePcs',w.rejectedPieces); _actAdd(p.brushDept,'keereWalaWastageKg',w.wastageKg); } }
-function _actApplySale(p,s){ const x=p.wastageSales; x.count++; _actAdd(x,'kg',s.kgSold); _actAdd(x,'amountRs',s.totalAmount); _actAdd(x.byType,s.wasteType||'?',s.kgSold); }
+function _actApplySale(p,s){ const x=p.wastageSales; x.count++; _actAdd(x,'kg',s.kgSold); _actAdd(x,'amountRs',s.totalAmount); _actAdd(x.byType,(typeof wasteTypeDisplay==='function'?wasteTypeDisplay(s.wasteType):s.wasteType)||'?',s.kgSold); }
 function _actApplyPurchase(p,l){ const x=p.plankPurchases; x.entries++; _actAdd(x,'pcs',l.qty); _actAdd(x.byVendor,l.vendor,l.qty); _actAdd(x.bySize,l.material||l.size,l.qty); }
 function _actApplyPacking(p,r){ const x=p.packing; x.runs++; _actAdd(x,'boxes',r.boxes); _actAdd(x,'pcs',r.totalPcs); _actProd(x.byProduct,r.productName,'boxes',r.boxes); _actProd(x.byProduct,r.productName,'pcs',r.totalPcs); }
 function _actApplyVariance(p,v){ const x=p.packing; x.countVariances++; if(v.diff<0) _actAdd(x,'varianceShortPcs',-v.diff); else _actAdd(x,'varianceExcessPcs',v.diff); }
@@ -5253,7 +5262,7 @@ function createReceiptVoucher(){
     const owed = saleOwedToOwner(s);
     if(!(amt>0)){ return; }
     if(amt>owed){ alert('Sale '+(s.date||'')+' ('+(s.buyer||'')+'): amount Rs.'+amt+' exceeds the Rs.'+owed+' still owed to the Owner from this sale. Fix it and try again.'); throw new Error('rv-abort'); }
-    lines.push({saleId:s.id, saleDate:s.date, buyer:s.buyer||'', wasteType:s.wasteType||'', slipSerialNo:s.slipSerialNo||'', gatePassNo:s.gatePassNo||'', kg:s.kgSold||null, rate:s.pricePerKg||null, amount:amt});
+    lines.push({saleId:s.id, saleDate:s.date, buyer:s.buyer||'', wasteType:wasteTypeDisplay(s.wasteType), slipSerialNo:s.slipSerialNo||'', gatePassNo:s.gatePassNo||'', kg:s.kgSold||null, rate:s.pricePerKg||null, amount:amt});
   });
   if(lines.length===0){ alert('Tick at least one sale and give it an amount.'); return; }
   const total = lines.reduce((a,l)=>a+l.amount,0);
@@ -5399,7 +5408,7 @@ function renderReceiptVoucherCardHTML(){
       ${eligible.map(s=>{ const owed=saleOwedToOwner(s); const cur = sel[s.id]??''; return `
       <tr style="border-top:1px solid #eee;">
         <td style="width:24px;"><input type="checkbox" ${cur!==''?'checked':''} onchange="state.rvSel=state.rvSel||{}; state.rvSel[${s.id}]=this.checked?${owed}:''; re();"/></td>
-        <td>${s.date} — ${s.buyer||'—'} · ${s.wasteType||''} · ${s.kgSold||'?'} KG @ Rs.${s.pricePerKg||'?'}/KG${s.slipSerialNo?' · slip #'+s.slipSerialNo:''}</td>
+        <td>${s.date} — ${s.buyer||'—'} · ${wasteTypeDisplay(s.wasteType)} · ${s.kgSold||'?'} KG @ Rs.${s.pricePerKg||'?'}/KG${s.slipSerialNo?' · slip #'+s.slipSerialNo:''}</td>
         <td style="text-align:right;">Rs.${owed.toLocaleString()}</td>
         <td style="text-align:right;"><input type="number" min="1" max="${owed}" value="${cur}" style="width:85px;text-align:right;" oninput="state.rvSel=state.rvSel||{}; state.rvSel[${s.id}]=this.value;"/></td>
       </tr>`; }).join('')}
@@ -5467,15 +5476,15 @@ function renderSales(){
   const typeColors = {Bhusa:'#8b6f47', Patti:'#e67e22', Gitta:'#5c3d1e'};
   html+=`<div class="card" style="border:1px solid #d4b896;">
     <div class="label">🗑️ By Wastage Type</div>`;
-  WASTE_TYPES.forEach(t=>{
-    const ts = activeSales.filter(s=>s.wasteType===t);
+  SALE_WASTE_ACCOUNTS.forEach(t=>{
+    const ts = activeSales.filter(s=>WASTE_ACCOUNT_OF(s.wasteType)===t);
     if(ts.length===0) return;
     const tTotal = ts.reduce((s,x)=>s+x.totalAmount,0);
     const tKg = ts.reduce((s,x)=>s+x.kgSold,0);
     const avgPrice = tKg>0 ? tTotal/tKg : 0;
     html+=`<div style="padding:10px;background:#f9f5f0;border-radius:8px;margin-bottom:8px;border-left:4px solid ${typeColors[t]};">
       <div class="row" style="margin-bottom:4px;">
-        <div style="font-weight:700;font-size:13px;color:${typeColors[t]};">${t}</div>
+        <div style="font-weight:700;font-size:13px;color:${typeColors[t]};">${WASTE_ACCOUNT_LABEL[t]||t}</div>
         <div style="font-size:13px;font-weight:700;color:#27ae60;">Rs.${tTotal.toLocaleString()}</div>
       </div>
       <div style="font-size:11px;color:#666;">${tKg.toFixed(1)} KG sold · avg Rs.${avgPrice.toFixed(1)}/KG · ${ts.length} sale${ts.length>1?'s':''}</div>
@@ -5531,7 +5540,7 @@ function renderSales(){
       <div class="row" style="margin-bottom:4px;">
         <div>
           <div style="font-size:13px;font-weight:700;${isVoidedSale?'text-decoration:line-through;':''}">${s.buyer}</div>
-          <div style="font-size:11px;color:${typeColors[s.wasteType]||'#666'};font-weight:700;">${s.wasteType||'—'} · ${s.date}</div>
+          <div style="font-size:11px;color:${typeColors[s.wasteType]||'#666'};font-weight:700;">${wasteTypeDisplay(s.wasteType)||'—'} · ${s.date}</div>
         </div>
         <div style="text-align:right;">
           <div style="font-size:14px;font-weight:700;color:#27ae60;${isVoidedSale?'text-decoration:line-through;':''}">Rs.${s.totalAmount.toFixed(0)}</div>
@@ -5617,7 +5626,7 @@ function getWasteTypeStock(){
   (state.wastage||[]).forEach(w=>{
     if(w.voided) return;
     if(w.typeSplit){
-      WASTE_TYPES.forEach(t=>{ produced[t] += (w.typeSplit[t]||0); });
+      WASTE_TYPES.forEach(t=>{ produced[WASTE_ACCOUNT_OF(t)] += (w.typeSplit[t]||0); });
     } else if((w.wastageKg||0)>0){
       // Legacy entries without a type split — treat as unclassified, lump into "Gitta" bucket as fallback
       // (shouldn't happen for new entries, only old data before this feature existed)
@@ -5628,10 +5637,15 @@ function getWasteTypeStock(){
   (state.sales||[]).forEach(s=>{
     if(s.voided) return;
     if(s.status==='pending' || s.status==='rejected') return; // not applied — no gate pass issued, KG hasn't left
-    if(s.wasteType && sold[s.wasteType]!==undefined) sold[s.wasteType] += (s.kgSold||0);
+    const acct = s.wasteType ? WASTE_ACCOUNT_OF(s.wasteType) : null;
+    if(acct && sold[acct]!==undefined) sold[acct] += (s.kgSold||0);
   });
   const available = {};
-  WASTE_TYPES.forEach(t=>{ available[t] = Math.max(0, produced[t]-sold[t]); });
+  // Account keys only: Patti's bucket is 0 (its KG live in the Bhusa account). Mirroring
+  // the merged figure into both keys double-counted the total (which sums all keys) and
+  // created false variances in the physical stock check. Callers holding an old 'Patti'
+  // record must look up via WASTE_ACCOUNT_OF.
+  WASTE_TYPES.forEach(t=>{ available[t] = (WASTE_ACCOUNT_OF(t)===t) ? Math.max(0, produced[t]-sold[t]) : 0; });
   return {produced, sold, available};
 }
 
@@ -5641,7 +5655,11 @@ function getWasteTypeStock(){
 // mid-entry. Every sale stores its own pricePerKg at the moment of sale, so changing a
 // price later affects FUTURE sales only; past entries keep the price they were sold at.
 function getWastagePriceRec(type){
-  return (state.wastagePrices||[]).find(p=>p && p.wasteType===type && !p.voided);
+  const acct = WASTE_ACCOUNT_OF(type);
+  const pool = (state.wastagePrices||[]).filter(p=>p && WASTE_ACCOUNT_OF(p.wasteType)===acct && !p.voided);
+  // Deterministic: the record stored under the account's own name wins; a legacy record
+  // under the merged-away name ('Patti') only applies if no account-named record exists.
+  return pool.find(p=>p.wasteType===acct) || pool[0] || null;
 }
 function getWastagePrice(type){
   const r = getWastagePriceRec(type);
@@ -5652,7 +5670,7 @@ function saveWastagePrices(){
   const now = new Date().toISOString();
   const by = currentUser?.name || 'Admin';
   const changes = [];
-  WASTE_TYPES.forEach(t=>{
+  SALE_WASTE_ACCOUNTS.forEach(t=>{
     const el = document.getElementById('wpPrice_'+t);
     if(!el) return;
     const raw = el.value;
@@ -5761,19 +5779,19 @@ function renderVendorCardHTML(){
 
 function renderWastagePriceCardHTML(){
   const isAdmin = isAdminOrOwner();
-  let rows = WASTE_TYPES.map(t=>{
+  let rows = SALE_WASTE_ACCOUNTS.map(t=>{
     const rec = getWastagePriceRec(t);
     const price = getWastagePrice(t);
     const stamp = rec && rec.updatedAt ? `<div style="font-size:10px;color:#aaa;">set by ${rec.updatedBy||'?'} · ${String(rec.updatedAt).slice(0,10)}${(rec.history||[]).length?` · changed ${(rec.history||[]).length+1}×`:''}</div>` : '';
     if(isAdmin){
       return `<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
-        <div style="flex:1;"><b style="font-size:13px;">${t}</b>${stamp}</div>
+        <div style="flex:1;"><b style="font-size:13px;">${WASTE_ACCOUNT_LABEL[t]||t}</b>${stamp}</div>
         <div style="width:130px;"><input type="number" id="wpPrice_${t}" step="0.01" min="0.01" value="${price!=null?price:''}" placeholder="not set" style="margin-bottom:0;"/></div>
         <div style="font-size:11px;color:#888;">Rs./KG</div>
       </div>`;
     }
     return `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-      <div><b style="font-size:13px;">${t}</b>${stamp}</div>
+      <div><b style="font-size:13px;">${WASTE_ACCOUNT_LABEL[t]||t}</b>${stamp}</div>
       <div style="font-weight:700;color:${price!=null?'#27ae60':'#e74c3c'};">${price!=null?('Rs.'+price+' / KG'):'not set'}</div>
     </div>`;
   }).join('');
@@ -5799,7 +5817,7 @@ function saveWastageRecon(){
   const rec = { id: Date.now()+Math.random(), at: new Date().toISOString(),
     date: new Date().toISOString().slice(0,10), by: currentUser?.name||'?', types:{} };
   let anyEntered = false;
-  for(const t of WASTE_TYPES){
+  for(const t of SALE_WASTE_ACCOUNTS){
     const el = document.getElementById('recon_'+t);
     const v = el && el.value!=='' ? +el.value : null;
     if(v==null || isNaN(v) || v<0) continue;
@@ -5820,8 +5838,8 @@ function renderWastageReconCardHTML(){
   return `<div class="card" style="border:2px solid #16a085;">
     <div class="label" style="color:#16a085;">⚖️ Physical Stock Check (weekly)</div>
     <div style="font-size:11px;color:#888;margin-bottom:10px;">Weigh the actual piles and enter the KG. The app compares against what should exist (produced − sold). A shortfall means KG left the factory without a recorded sale — this is the control that catches off-book sales, so have someone you trust do the weighing, not the person who records sales.</div>
-    ${WASTE_TYPES.map(t=>`<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-      <div style="flex:1;font-size:12px;font-weight:700;">${t}<div style="font-size:10px;color:#888;font-weight:400;">system says ${(stock.available[t]||0).toFixed(1)} KG</div></div>
+    ${SALE_WASTE_ACCOUNTS.map(t=>`<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+      <div style="flex:1;font-size:12px;font-weight:700;">${WASTE_ACCOUNT_LABEL[t]||t}<div style="font-size:10px;color:#888;font-weight:400;">system says ${(stock.available[t]||0).toFixed(1)} KG</div></div>
       <input type="text" inputmode="decimal" id="recon_${t}" placeholder="weighed KG" style="flex:1;margin-bottom:0;"/>
     </div>`).join('')}
     <button class="btn btn-full" style="background:#16a085;" onclick="saveWastageRecon()">⚖️ Record Physical Check</button>
@@ -5847,7 +5865,7 @@ function openSaleModal(){
   document.getElementById('saleModalBody').innerHTML = `
     <div class="label">Wastage Type</div>
     <select id="saleWasteType" onchange="updateSaleTypeAvailable()">
-      ${WASTE_TYPES.map(t=>`<option value="${t}">${t} (${stock.available[t].toFixed(1)} KG available)</option>`).join('')}
+      ${SALE_WASTE_ACCOUNTS.map(t=>`<option value="${t}">${WASTE_ACCOUNT_LABEL[t]||t} (${stock.available[t].toFixed(1)} KG available)</option>`).join('')}
     </select>
     <div id="saleTypeAvailableNote" style="font-size:11px;color:#666;margin:4px 0 10px;"></div>
     <div class="label">Buyer Name</div>
@@ -11567,7 +11585,7 @@ function exportDataPDF(){
 
   html += `<h2>All Sales</h2><table><tr><th>Date</th><th>Buyer</th><th>Type</th><th>KG</th><th>Amount</th></tr>`;
   (state.sales||[]).forEach(s=>{
-    html += `<tr><td>${s.date}</td><td>${s.buyer}</td><td>${s.wasteType||'-'}</td><td>${s.kgSold}</td><td>Rs.${s.totalAmount.toFixed(0)}</td></tr>`;
+    html += `<tr><td>${s.date}</td><td>${s.buyer}</td><td>${wasteTypeDisplay(s.wasteType)||'-'}</td><td>${s.kgSold}</td><td>Rs.${s.totalAmount.toFixed(0)}</td></tr>`;
   });
   html += `</table>`;
 
