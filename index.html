@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1790000722576;
+const APP_BUILD = 1790176000377;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -5043,13 +5043,27 @@ async function runAiReport(presetQuestion){
     for(let attempt=0; attempt<3; attempt++){
       const q = attempt===0 ? question
         : question + '\n\nIMPORTANT CORRECTION (attempt '+(attempt+1)+'): your previous draft quoted figures that do NOT exist in the dataset: '+res.unverified.join(', ')+'. Rewrite the FULL answer using ONLY figures that appear in the dataset exactly as given. NEVER calculate, total, or estimate new numbers yourself. If a figure is not in the dataset, write "not in data" instead of a number.';
-      const resp = await fetch(url, { method:'POST', signal: ctrl.signal,
-        headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+WEIGHT_SLIP_READER_SECRET },
-        body: JSON.stringify({ question: q, data }) });
-      res = await resp.json().catch(()=>null);
+      // 21/9: the free AI tier throws transient 503/429 when busy (evenings especially).
+      // Retry with backoff before ever showing a failure — most 503s clear in seconds.
+      let resp = null;
+      for(let busyTry=0; busyTry<3; busyTry++){
+        resp = await fetch(url, { method:'POST', signal: ctrl.signal,
+          headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+WEIGHT_SLIP_READER_SECRET },
+          body: JSON.stringify({ question: q, data }) });
+        res = await resp.json().catch(()=>null);
+        const errText = (res && res.error ? String(res.error) : '');
+        const busy = resp.status===503 || resp.status===429 || resp.status===502 || /503|429|overload|busy|unavailable/i.test(errText);
+        if(resp.ok && res && res.success) break;
+        if(!busy || busyTry===2) break;
+        const waitS = 4*(busyTry+1);
+        const mB=document.getElementById('aiReportMsg');
+        if(mB){ mB.textContent='⏳ Free AI service is busy (503) — retrying in '+waitS+'s ('+(busyTry+2)+'/3)...'; mB.className='msg'; }
+        await new Promise(r=>setTimeout(r, waitS*1000));
+      }
       if(!resp.ok || !res || !res.success){
         const detail = res && res.error ? res.error : ('HTTP '+resp.status);
-        if(msg){msg.textContent='⚠️ Report failed: '+detail; msg.className='msg err';}
+        const busyFinal = /503|429|overload|busy|unavailable/i.test(String(detail)) || resp.status===503 || resp.status===429;
+        if(msg){msg.textContent = busyFinal ? '⚠️ The free AI service is overloaded right now (tried 3 times). Nothing is wrong on your side — wait a minute and press Generate again.' : ('⚠️ Report failed: '+detail); msg.className='msg err';}
         return;
       }
       if(!Array.isArray(res.unverified) || res.unverified.length===0) break;
