@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1790419156144;
+const APP_BUILD = 1790420279286;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -4805,8 +4805,17 @@ function _actApplyProduction(p,r){ const w=p.woodFinishing; w.runs++; _actAdd(w,
   _actProd(w.byProduct,r.woodPieceName,'planksUsed',r.planksUsed); _actProd(w.byProduct,r.woodPieceName,'produced',r.piecesProduced); _actProd(w.byProduct,r.woodPieceName,'rejected',r.rejectedPieces);
   _actProd(w.byBatch,r.batchNo,'planksUsed',r.planksUsed); _actProd(w.byBatch,r.batchNo,'produced',r.piecesProduced);
   // 26/9: plank SIZE per batch/run, so size questions are answered from the runs themselves
+  // (extended same day per Safiullah: good + rejected pieces size-wise too)
   const szKey = r.batchNo+' @ '+(r.plankSize||'?')+'\" planks';
-  _actProd(w.byBatchSize=w.byBatchSize||{}, szKey, 'planksUsed', r.planksUsed); }
+  w.byBatchSize = w.byBatchSize||{};
+  _actProd(w.byBatchSize, szKey, 'planksUsed', r.planksUsed);
+  _actProd(w.byBatchSize, szKey, 'goodPcs', r.piecesProduced);
+  _actProd(w.byBatchSize, szKey, 'rejected', r.rejectedPieces);
+  const pszKey = (r.woodPieceName||'?')+' @ '+(r.plankSize!=null?r.plankSize:'?')+'\" planks';
+  w.byProductSize = w.byProductSize||{};
+  _actProd(w.byProductSize, pszKey, 'planksUsed', r.planksUsed);
+  _actProd(w.byProductSize, pszKey, 'goodPcs', r.piecesProduced);
+  _actProd(w.byProductSize, pszKey, 'rejected', r.rejectedPieces); }
 function _actApplyBrushLog(p,r){ _actAdd(p.brushDept,'brushMachineOut',r.qty); _actProd(p.brushDept.byProduct,r.productName,'brushMachineOut',r.qty); }
 function _actApplyRework(p,r){ const f=r.category==='Color'?'colorRework':'regmalRework'; _actAdd(p.brushDept,f,r.qty); _actProd(p.brushDept.byProduct,r.productName,f,r.qty); }
 function _actApplyReworkCompleted(p,r){ _actAdd(p.rework,'completedPcs',r.qty); _actAdd(p.rework.completedByCategory,r.category||'?',r.qty); }
@@ -4934,7 +4943,7 @@ function compileActivityData(){
     dates:{ shiftLabel: shift.label, previousShiftLabel: prevShift.label, calendarDateUTC: new Date().toISOString().slice(0,10),
       explanation:'BUSINESS DAY RULE (Owner-set): a business day runs 8:30 AM to 11:00 PM Karachi time (fixed UTC+5, no DST). The physical shift ends 8:30 PM but staff enter the day\'s data afterwards — every entry made after the shift, up to the next morning 8:30 AM, belongs to the SAME business day the work happened. dailyActivity/weeklyActivity/monthlyActivity are already bucketed by this rule, so a date key there means that business day (from its 8:30 AM), not the raw calendar date. For "today"/"so far today"/"current shift" questions, use currentShift below — it is already computed for exactly [8:30 AM through now]. Do NOT use dailyActivity for "today" — it is a UTC-calendar-date bucket and does not line up with the 8:30 AM shift boundary. For "yesterday" use previousShift (the full prior shift). For a specific named date/week/month ("28 August", "last week", "August"), use dailyActivity/weeklyActivity/monthlyActivity — a date missing there means nothing was recorded that day, say so plainly.' },
     sourceOfTruth:'AUTHORITY RULE: for ANY question about a batch\'s planks — which sizes it has, how many were purchased/consumed/remain, when, from which vendor — use plankLedgerByBatch. It contains the actual receipts (the app\'s permanent ledger) per batch and size, and it OVERRIDES openBatches and every summary if they disagree; openBatches is only a pointer to where the next production run will draw from. Piece counts (good/rejected per product) come from the production activity data, not the plank ledger.',
-    departments:{ woodFinishing:'planks cut into brush bodies (production runs). WORDING RULE: the field \'produced\' means GOOD pieces only — rejected pieces are counted separately, never inside produced; when writing a summary say \'good pcs\' so nobody reads produced+rejected as double-counted. PLANK SIZES: every run records which plank size it consumed — per-batch size totals are in woodFinishing.byBatchSize (key \'WB011 @ 12\" planks\'); answer size questions FROM THAT, and if only one size appears there, say plainly that the records show only that size was entered — if the floor physically used another size too, it was not recorded and needs a person to correct.', brushDept:'brush machine output; also sends Color/Regmal to rework, Kharab Maal to scrap, Keere Wala to wastage', socketDept:'fits sockets + screws and moves stock to Ready for Sale (or Nil-BOM straight through)',
+    departments:{ woodFinishing:'planks cut into brush bodies (production runs). WORDING RULE: the field \'produced\' means GOOD pieces only — rejected pieces are counted separately, never inside produced; when writing a summary say \'good pcs\' so nobody reads produced+rejected as double-counted. PLANK SIZES: every run records which plank size it consumed — per-batch size totals (planksUsed, goodPcs, rejected) are in woodFinishing.byBatchSize (key \'WB011 @ 12\" planks\') and per-product-per-size in woodFinishing.byProductSize (key \'Commando Broom @ 24\" planks\'); answer size questions — including size-wise REJECTION breakdowns — FROM THOSE, and in daily summaries list rejections size-wise when sizes differ, and if only one size appears there, say plainly that the records show only that size was entered — if the floor physically used another size too, it was not recorded and needs a person to correct.', brushDept:'brush machine output; also sends Color/Regmal to rework, Kharab Maal to scrap, Keere Wala to wastage', socketDept:'fits sockets + screws and moves stock to Ready for Sale (or Nil-BOM straight through)',
       notTracked:'There is NO CNC department in this system — if asked about CNC, say it is not tracked here.' },
     currentShift, previousShift,
     dailyActivity: sortDesc(daily), weeklyActivity: sortDesc(weekly), monthlyActivity: sortDesc(monthly),
