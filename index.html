@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1790228488588;
+const APP_BUILD = 1790417475051;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -4803,7 +4803,10 @@ function _actR1(v){ return (typeof v==='number' && isFinite(v)) ? +v.toFixed(1) 
 // ---- shared per-record accumulators (used by both calendar buckets and the shift window) ----
 function _actApplyProduction(p,r){ const w=p.woodFinishing; w.runs++; _actAdd(w,'planksUsed',r.planksUsed); _actAdd(w,'piecesProduced',r.piecesProduced); _actAdd(w,'rejectedPieces',r.rejectedPieces);
   _actProd(w.byProduct,r.woodPieceName,'planksUsed',r.planksUsed); _actProd(w.byProduct,r.woodPieceName,'produced',r.piecesProduced); _actProd(w.byProduct,r.woodPieceName,'rejected',r.rejectedPieces);
-  _actProd(w.byBatch,r.batchNo,'planksUsed',r.planksUsed); _actProd(w.byBatch,r.batchNo,'produced',r.piecesProduced); }
+  _actProd(w.byBatch,r.batchNo,'planksUsed',r.planksUsed); _actProd(w.byBatch,r.batchNo,'produced',r.piecesProduced);
+  // 26/9: plank SIZE per batch/run, so size questions are answered from the runs themselves
+  const szKey = r.batchNo+' @ '+(r.plankSize||'?')+'\" planks';
+  _actProd(w.byBatchSize=w.byBatchSize||{}, szKey, 'planksUsed', r.planksUsed); }
 function _actApplyBrushLog(p,r){ _actAdd(p.brushDept,'brushMachineOut',r.qty); _actProd(p.brushDept.byProduct,r.productName,'brushMachineOut',r.qty); }
 function _actApplyRework(p,r){ const f=r.category==='Color'?'colorRework':'regmalRework'; _actAdd(p.brushDept,f,r.qty); _actProd(p.brushDept.byProduct,r.productName,f,r.qty); }
 function _actApplyReworkCompleted(p,r){ _actAdd(p.rework,'completedPcs',r.qty); _actAdd(p.rework.completedByCategory,r.category||'?',r.qty); }
@@ -4930,13 +4933,33 @@ function compileActivityData(){
   return {
     dates:{ shiftLabel: shift.label, previousShiftLabel: prevShift.label, calendarDateUTC: new Date().toISOString().slice(0,10),
       explanation:'BUSINESS DAY RULE (Owner-set): a business day runs 8:30 AM to 11:00 PM Karachi time (fixed UTC+5, no DST). The physical shift ends 8:30 PM but staff enter the day\'s data afterwards — every entry made after the shift, up to the next morning 8:30 AM, belongs to the SAME business day the work happened. dailyActivity/weeklyActivity/monthlyActivity are already bucketed by this rule, so a date key there means that business day (from its 8:30 AM), not the raw calendar date. For "today"/"so far today"/"current shift" questions, use currentShift below — it is already computed for exactly [8:30 AM through now]. Do NOT use dailyActivity for "today" — it is a UTC-calendar-date bucket and does not line up with the 8:30 AM shift boundary. For "yesterday" use previousShift (the full prior shift). For a specific named date/week/month ("28 August", "last week", "August"), use dailyActivity/weeklyActivity/monthlyActivity — a date missing there means nothing was recorded that day, say so plainly.' },
-    departments:{ woodFinishing:'planks cut into brush bodies (production runs)', brushDept:'brush machine output; also sends Color/Regmal to rework, Kharab Maal to scrap, Keere Wala to wastage', socketDept:'fits sockets + screws and moves stock to Ready for Sale (or Nil-BOM straight through)',
+    sourceOfTruth:'AUTHORITY RULE: for ANY question about a batch\'s planks — which sizes it has, how many were purchased/consumed/remain, when, from which vendor — use plankLedgerByBatch. It contains the actual receipts (the app\'s permanent ledger) per batch and size, and it OVERRIDES openBatches and every summary if they disagree; openBatches is only a pointer to where the next production run will draw from. Piece counts (good/rejected per product) come from the production activity data, not the plank ledger.',
+    departments:{ woodFinishing:'planks cut into brush bodies (production runs). WORDING RULE: the field \'produced\' means GOOD pieces only — rejected pieces are counted separately, never inside produced; when writing a summary say \'good pcs\' so nobody reads produced+rejected as double-counted. PLANK SIZES: every run records which plank size it consumed — per-batch size totals are in woodFinishing.byBatchSize (key \'WB011 @ 12\" planks\'); answer size questions FROM THAT, and if only one size appears there, say plainly that the records show only that size was entered — if the floor physically used another size too, it was not recorded and needs a person to correct.', brushDept:'brush machine output; also sends Color/Regmal to rework, Kharab Maal to scrap, Keere Wala to wastage', socketDept:'fits sockets + screws and moves stock to Ready for Sale (or Nil-BOM straight through)',
       notTracked:'There is NO CNC department in this system — if asked about CNC, say it is not tracked here.' },
     currentShift, previousShift,
     dailyActivity: sortDesc(daily), weeklyActivity: sortDesc(weekly), monthlyActivity: sortDesc(monthly),
     recentEntriesLast3Days: recent,
     pendingRework: (state.reworkStock||[]).filter(r=>r && r.status==='pending').map(r=>({product:r.productName,batch:r.batchNo,category:r.category,qty:r.qty,since:r.dateAdded})),
-    openBatches: Object.entries(state.openBatches||{}).filter(([,b])=>b).map(([size,b])=>({plankSize:size+'"',batch:b.batchNo,opened:b.dateOpened,runs:(b.runs||[]).filter(r=>!r.voided).length}))
+    openBatches: Object.entries(state.openBatches||{}).filter(([,b])=>b).map(([size,b])=>({plankSize:size+'"',batch:b.batchNo,opened:b.dateOpened,runs:(b.runs||[]).filter(r=>!r.voided).length})),
+    // 26/9 (Owner insight after WB011: "ledger gives the better answer"): the plank ledger
+    // IS the truth — every receipt with date, size, batch, direction. This digest gives the
+    // AI the receipts themselves per batch+size, so batch/size/consumption questions are
+    // answered from evidence, not from summaries or open-batch pointers.
+    plankLedgerByBatch: (function(){
+      const out = {};
+      (state.ledger||[]).forEach(e=>{
+        if(!e || e.type!=='plank') return;
+        const b = e.batchNo||'?', s = (e.size||'?')+'"';
+        out[b] = out[b] || {};
+        const k = out[b][s] = out[b][s] || {inPcs:0, outPcs:0, balance:0, voidedIn:0, entries:[]};
+        const q = e.qty||0;
+        if(e.direction==='IN'){ k.inPcs+=q; k.balance+=q; if(e.voidedByOwner) k.voidedIn+=q; }
+        else { k.outPcs+=q; k.balance-=q; }
+        k.entries.push({date:e.date, dir:e.direction, pcs:q, note:String(e.note||'').slice(0,70), vendor:e.vendor||undefined});
+      });
+      Object.values(out).forEach(sz=>Object.values(sz).forEach(k=>{ if(k.entries.length>8) k.entries = k.entries.slice(-8); k.balance=Math.round(k.balance); }));
+      return out;
+    })()
   };
 }
 function compileReportData(){
@@ -9678,6 +9701,38 @@ function runSystemWatch(explainedBatches){
         findings.push(addSystemFinding('quantity-outlier', 'prod|'+p.id,
           `Production run of ${p.piecesProduced} pcs (${p.woodPieceName}) — far beyond anything recorded before`,
           `The largest run ever recorded for ${p.woodPieceName} was ${h.max} pcs (across ${h.count} runs). This new entry on batch ${p.batchNo} is more than 3x that. Could be a genuine record day — or a typo that will distort stock. Worth a look while it is still inside the 24-hour void window.`,
+          'Wood Finishing'));
+      }
+    });
+
+    // 2a-ii (26/9, caught first by Safiullah on WB011: 1,700 good pcs from 1,244 planks):
+    // pieces-per-plank RATIO far above this product's own history. A quantity can look
+    // normal while the ratio is physically impossible — more pieces out than the planks
+    // fed in can yield. Judged only against the product's own record (some products may
+    // legitimately cut multiple pieces per plank), never a hardcoded assumption.
+    // 26/9 CORRECTION (WB011 taught this): the ratio depends on PLANK SIZE, not just the
+    // product — a 24\" plank legitimately cuts two 11\" broom bodies (~2.0/plank) while a
+    // 12\" plank cuts one (~0.9). History must be keyed product+size, or every legitimate
+    // 24\" run gets falsely flagged against 12\"-run history.
+    const histRatio = {};
+    const yieldKey = p => (p.woodPieceName||'?')+'|'+(p.plankSize!=null?p.plankSize:'?')+'\"';
+    (state.production||[]).forEach(p=>{
+      if(!p || p.voided || freshWin(p)) return;
+      if(!((p.planksUsed||0)>=50)) return; // tiny runs make noisy ratios
+      const r = ((p.piecesProduced||0)+(p.rejectedPieces||0)) / p.planksUsed;
+      const k = yieldKey(p);
+      histRatio[k] = histRatio[k] || {max:0, count:0};
+      histRatio[k].max = Math.max(histRatio[k].max, r);
+      histRatio[k].count++;
+    });
+    (state.production||[]).filter(p=>freshWin(p) && !p.voided && (p.planksUsed||0)>=50).forEach(p=>{
+      const h = histRatio[yieldKey(p)];
+      if(!h || h.count<3) return;
+      const r = ((p.piecesProduced||0)+(p.rejectedPieces||0)) / p.planksUsed;
+      if(r > Math.max(h.max*1.15, 0.05)){
+        findings.push(addSystemFinding('yield-anomaly', 'prodyield|'+p.id,
+          `Production run yields ${r.toFixed(2)} pcs per plank (${p.woodPieceName} from ${p.plankSize!=null?p.plankSize+'\"':'?'} planks, batch ${p.batchNo}) — above anything this product+size has ever done`,
+          `${p.piecesProduced} good + ${p.rejectedPieces||0} rejected from ${p.planksUsed} planks (${p.plankSize!=null?p.plankSize+'\"':'unknown size'}) = ${r.toFixed(2)} pieces per plank. The highest ratio ever recorded for ${p.woodPieceName} from this plank size was ${h.max.toFixed(2)} (across ${h.count} runs). Either the plank count is under-typed, the pieces are over-typed, or planks of another size/batch were used without being recorded. Check the run while it is inside the 24-hour void window.`,
           'Wood Finishing'));
       }
     });
