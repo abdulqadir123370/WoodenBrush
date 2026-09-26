@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1790417475051;
+const APP_BUILD = 1790419156144;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -6215,7 +6215,31 @@ async function confirmSale(){
   // same serial).
   const serialNo = modal.slipSerialNo || null;
   if(serialNo){
-    const clashes = (state.sales||[]).filter(s=>s && s.slipSerialNo && String(s.slipSerialNo)===String(serialNo));
+    // 26/9 (kanta serial reuse, slip 4574): weighbridge slip BOOKS restart their serial
+    // numbers, so a serial alone is not globally unique forever. A matching serial whose
+    // slip DATE or C-No provably differs (both values present on both slips, and unequal)
+    // is a DIFFERENT physical slip — allowed, with the disambiguation stamped on the sale.
+    // If either distinguishing value is missing or unreadable, the hard block stands: an
+    // unclear photo never unlocks anything.
+    // 26/9 SECOND-PASS HARDENING: the C-No comes from the same OCR scan as the serial —
+    // one misread digit on a RE-PHOTOGRAPHED same slip would "prove" a different slip and
+    // unlock a true duplicate. Only the slip DATE unlocks: both dates present, valid
+    // (yyyy-mm-dd, not future), and different. A missing/invalid/future date proves
+    // nothing and the hard block stands; old sales with no recorded slip date stay
+    // conservatively blocked (Owner paths cover those).
+    modal._slipSerialShared = null; // reset every attempt — a failed attempt's stamp must never ride on a later clean sale
+    const _validSlipDate = d => !!d && /^\d{4}-\d{2}-\d{2}$/.test(String(d)) && String(d) <= new Date().toISOString().slice(0,10);
+    const provablyDifferentSlip = (s)=>{
+      const dNew = modal.slipDate || null, dOld = s.weighSlipDate || null;
+      return _validSlipDate(dNew) && _validSlipDate(dOld) && String(dNew)!==String(dOld);
+    };
+    const allClashes = (state.sales||[]).filter(s=>s && s.slipSerialNo && String(s.slipSerialNo)===String(serialNo));
+    const clashes = allClashes.filter(s=>!provablyDifferentSlip(s));
+    if(allClashes.length && clashes.length===0){
+      const o = allClashes[0];
+      modal._slipSerialShared = { withSaleId:o.id, oldSlipDate:o.weighSlipDate||null, newSlipDate:modal.slipDate||null,
+        note:'Serial '+serialNo+' also appears on sale dated '+o.date+' — different physical slip (printed slip dates differ: '+(o.weighSlipDate||'?')+' vs '+(modal.slipDate||'?')+'); kanta book serial reuse.' };
+    }
     const live = clashes.find(s=>!s.voided);
     if(live){
       err.textContent = `⚠️ BLOCKED: slip serial "${serialNo}" is already on a LIVE sale dated ${live.date} (${live.buyer}, ${live.kgSold} KG). One slip can never justify two sales. If this is genuinely a different slip, retake a clearer photo.`;
@@ -6274,6 +6298,7 @@ async function confirmSale(){
     gatePassNo,
     slipSerialNo: serialNo, slipCNo: modal.slipCNo || null,
     slipReenteredFromVoided: modal._slipReenteredFromVoided || null, // 17/9: Owner re-entry of a voided slip — permanent audit stamp
+    slipSerialShared: modal._slipSerialShared || null, // 26/9: same serial as an older sale but provably a different physical slip (kanta book reuse)
     weighSlipUrl: modal.slipUrl, weighSlipReadKg: modal.slipReadKg ?? null,
     weighSlipDate: modal.slipDate ?? null,
     manualOverride: !!modal.manualOverrideUsed,
