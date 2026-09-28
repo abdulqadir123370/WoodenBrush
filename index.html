@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1790589195768;
+const APP_BUILD = 1790591912979;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -2237,8 +2237,8 @@ function renderProduction(){
   const rework = (state.reworkStock||[]).filter(r=>r.status==='pending');
   if(rework.length>0){
     reworkHtml = `<div class="card" style="border:2px solid #3498db;">
-      <div class="label" style="color:#3498db;">🎨 Rework Pending (Color / Regmal)</div>
-      <div style="font-size:11px;color:#888;margin-bottom:8px;">These pieces came back from Brush Department and need coloring or polishing before they can be used again.</div>`;
+      <div class="label" style="color:#3498db;">🔧 Rework Pending (Kharab from Brush Dept)</div>
+      <div style="font-size:11px;color:#888;margin-bottom:8px;">These pieces came back from Brush Department. Sort/fix them manually (color, regmal, etc.) and Mark Done to return them to the REWORK basket for re-brushing.</div>`;
     rework.forEach(r=>{
       reworkHtml += `<div style="display:flex;justify-content:space-between;align-items:center;background:#e8f4fd;border-radius:6px;padding:8px 10px;margin-bottom:6px;">
         <div>
@@ -2249,6 +2249,23 @@ function renderProduction(){
       </div>`;
     });
     reworkHtml += `</div>`;
+  }
+  // 28/9 DOWNCYCLE EXIT (Owner): the floor sometimes pulls pieces from the REWORK basket
+  // to use as raw material for SMALLER products (the old Kharab-scrap path) instead of
+  // re-brushing them. That movement must be recorded, or the pool watchdog rightly screams.
+  // This button moves pieces REWORK basket -> scrap inventory (selectable in production),
+  // keeping the pool books exactly balanced.
+  const reworkRows = (state.finishedInventory||[]).filter(f=>f && f.batchNo==='REWORK' && f.qty>0);
+  if(reworkRows.length>0){
+    reworkHtml += `<div class="card" style="border:2px solid #7a5230;">
+      <div class="label" style="color:#7a5230;">⤵️ Downcycle from REWORK Basket</div>
+      <div style="font-size:11px;color:#888;margin-bottom:8px;">Pieces taken out of the REWORK basket to be cut into smaller products. They leave the rework loop and appear as scrap material in the batch selector below.</div>
+      <select id="dcProduct" style="margin-bottom:6px;">${reworkRows.map(f=>`<option value="${f.id}">${f.productName} (${f.size}") — ${f.qty} pcs in basket</option>`).join('')}</select>
+      <div style="display:flex;gap:8px;">
+        <input type="number" id="dcQty" min="1" placeholder="pcs" style="flex:1;margin-bottom:0;"/>
+        <button class="btn" style="background:#7a5230;color:#fff;" onclick="downcycleFromRework()">⤵️ Downcycle</button>
+      </div>
+    </div>`;
   }
 
   // scrap batches
@@ -3081,18 +3098,8 @@ function renderBrushDept(){
           <div class="label" style="margin-bottom:6px;">Sort Into Categories</div>
         </div>
 
-        <div style="background:#e8f4fd;border-radius:8px;padding:10px;margin-bottom:8px;">
-          <div class="label" style="margin-bottom:6px;color:#3498db;">🎨 Color (needs coloring)</div>
-          <input type="number" id="catColor" min="0" placeholder="0" oninput="calcBrushSplit()" style="margin-bottom:0;"/>
-        </div>
-
-        <div style="background:#e8f4fd;border-radius:8px;padding:10px;margin-bottom:8px;">
-          <div class="label" style="margin-bottom:6px;color:#3498db;">✨ Regmal (needs polishing)</div>
-          <input type="number" id="catRegmal" min="0" placeholder="0" oninput="calcBrushSplit()" style="margin-bottom:0;"/>
-        </div>
-
         <div style="background:#f0e8de;border-radius:8px;padding:10px;margin-bottom:8px;">
-          <div class="label" style="margin-bottom:6px;color:#7a5230;">⚠️ Kharab Maal (scrap)</div>
+          <div class="label" style="margin-bottom:6px;color:#7a5230;">⚠️ Kharab (rework-able — color/regmal/other sorted manually on the floor)</div>
           <input type="number" id="catScrap" min="0" placeholder="0" oninput="calcBrushSplit()" style="margin-bottom:0;"/>
         </div>
 
@@ -3148,7 +3155,7 @@ function renderBrushDept(){
             ${r.flagged&&!isVoided?'<span style="font-size:10px;padding:2px 8px;border-radius:6px;background:#e8f4fd;color:#3498db;font-weight:700;">🚩 FLAGGED</span>':''}
           </div>
         </div>
-        <div style="color:#666;font-size:11px;${isVoided?'text-decoration:line-through;':''}">${r.qty} pcs → Batch ${r.fbBatchNo} (from ${r.sourceBatch})</div>
+        <div style="color:#666;font-size:11px;${isVoided?'text-decoration:line-through;':''}">${r.totalInput!=null?`${r.totalInput} in → ${r.qty} good${r.kharabPcs?` · ${r.kharabPcs} kharab`:''}${r.keerePcs?` · ${r.keerePcs} keere`:''}`:`${r.qty} pcs`}${r.fbBatchNo?` → Batch ${r.fbBatchNo}`:''} (from ${r.sourceBatch})</div>
         ${isVoided?`<div style="font-size:11px;color:#e74c3c;margin-top:6px;background:#fdecea;border-radius:6px;padding:6px 8px;">Voided by ${r.voidedBy} on ${r.voidedDate}<br/><span style="font-style:italic;">"${r.voidedReason}"</span></div>`:''}
         ${r.flagged&&!isVoided?`<div style="font-size:11px;color:#3498db;margin-top:6px;background:#e8f4fd;border-radius:6px;padding:6px 8px;">Flagged by ${r.flaggedBy} on ${r.flaggedDate} ${r.flaggedTime||''}<br/><span style="font-style:italic;">"${r.flagNote}"</span></div>`:''}
         ${!isVoided?`<div style="display:flex;gap:6px;margin-top:8px;">
@@ -3176,8 +3183,7 @@ function calcBrushSplit(){
   if(total<=0){ splitSection.classList.add('hidden'); return; }
   splitSection.classList.remove('hidden');
 
-  const color = +document.getElementById('catColor')?.value||0;
-  const regmal = +document.getElementById('catRegmal')?.value||0;
+  const color = 0, regmal = 0; // 28/9 Owner: two reject categories only — Kharab + Keere Wala; sub-sorting is manual
   const scrap = +document.getElementById('catScrap')?.value||0;
   const wastageQty = +document.getElementById('catWastageQty')?.value||0;
 
@@ -3211,8 +3217,7 @@ function recordBrushProcessing(){
   if(!stock){ if(msgEl){msgEl.textContent="⚠️ Select finished stock first";msgEl.className="msg err";} return; }
 
   const total = +document.getElementById('brushProcessQty')?.value||0;
-  const color = +document.getElementById('catColor')?.value||0;
-  const regmal = +document.getElementById('catRegmal')?.value||0;
+  const color = 0, regmal = 0; // 28/9: two categories only (see form)
   const scrap = +document.getElementById('catScrap')?.value||0;
   const wastageQty = +document.getElementById('catWastageQty')?.value||0;
   const wastageKg = +document.getElementById('catWastageKg')?.value||0;
@@ -3235,7 +3240,14 @@ function recordBrushProcessing(){
   // DELETE lost — deletes have no later write to self-heal, so the row resurrected at 639 on
   // every other device. A zero-qty row is inert (all pickers/cards filter qty>0), converges
   // like any set, and the periodic cleanup purges it once it's safely old news.
-  state.finishedInventory = finished.map(f=>f.id===stock.id?{...f,qty:f.qty-total}:f).filter(f=>f.qty>0 || f.id===stock.id);
+  // 28/9 REWORK-LOOP ACCOUNTING (Owner): pieces returned from rework re-enter this same
+  // stock row and cycle back through Brush. Every consumption is now SPLIT: rework-origin
+  // pieces are drawn FIRST (they physically get pushed back to Brush next), the remainder
+  // is fresh first-pass input. This split is what makes fate-vs-flow analysis possible:
+  // fresh-in = brush good + keere + kharab + rework-in-loop, exactly, forever.
+  const reworkPart = Math.min(total, stock.reworkQty||0);
+  const freshPart = total - reworkPart;
+  state.finishedInventory = finished.map(f=>f.id===stock.id?{...f,qty:f.qty-total, reworkQty:Math.max(0,(f.reworkQty||0)-reworkPart)}:f).filter(f=>f.qty>0 || f.id===stock.id);
 
   // Color / Regmal → rework stock (pending)
   if(color>0){
@@ -3251,23 +3263,19 @@ function recordBrushProcessing(){
     }];
   }
 
-  // Kharab Maal → scrap log (for record-keeping) AND scrapInventory (so it's selectable back in Wood Finishing)
+  // 28/9 (Owner): Kharab is REWORK-ABLE — it joins the rework loop (pending → Mark Done →
+  // REWORK pool → back through Brush), exactly like the old Color/Regmal path. Its internal
+  // sub-sorting (color/regmal/other) happens manually on the floor and is deliberately NOT
+  // tracked. Keere Wala remains the only terminal reject. Historical BrushScrap inventory
+  // from the old routing stays untouched and remains usable as before.
   if(scrap>0){
     state.brushScrapLog=[...(state.brushScrapLog||[]),{
-      date:today, productName:stock.productName, batchNo:stock.batchNo, qty:scrap, reason:'Kharab Maal'
+      date:today, productName:stock.productName, batchNo:stock.batchNo, qty:scrap, reason:'Kharab (to rework)'
     }];
-    const scrapKey = `${stock.batchNo}-BrushScrap-${stock.productName}`;
-    const scrapSizeVal = stock.size || 0;
-    const sIdx=(state.scrapInventory||[]).findIndex(s=>s.size===scrapSizeVal&&s.batch===scrapKey);
-    if(sIdx>=0){ state.scrapInventory[sIdx].quantity += scrap; }
-    else{
-      state.scrapInventory=[...(state.scrapInventory||[]),{
-        size:scrapSizeVal, quantity:scrap, batch:scrapKey, dateCreated:today
-      }];
-    }
-    // Use the SAME batch key the scrap stock record uses, otherwise the ledger and Scrap
-    // Inventory show the same pieces under two different batch names and can't be reconciled.
-    addLedgerEntry('scrap', `${stock.productName} (Kharab Maal)`, scrapKey, scrap, 'IN', `Rejected in Brush Dept — usable for smaller products`, String(scrapSizeVal));
+    state.reworkStock=[...(state.reworkStock||[]),{
+      id:Date.now()+Math.random()+2, category:'Kharab', productName:stock.productName,
+      size:stock.size, batchNo:stock.batchNo, qty:scrap, dateAdded:today, status:'pending'
+    }];
   }
 
   // Keere Wala → wastage (piece count + KG + Bhusa/Patti/Gitta split)
@@ -3284,9 +3292,9 @@ function recordBrushProcessing(){
   // Brush Machine → brushed stock (gets its own BB batch number, tracing back to the wood batch).
   // This is pre-socket, not yet the final product — it only becomes an FB (Finished) batch
   // once it's actually gone through Socket Dept and is ready for sale.
+  let bbNo;
   if(brushMachine>0){
     const idx=(state.finishedBrushes||[]).findIndex(b=>b.productName===stock.productName&&b.sourceBatch===stock.batchNo);
-    let bbNo;
     if(idx>=0){
       state.finishedBrushes[idx].qty += brushMachine;
       bbNo = state.finishedBrushes[idx].batchNo;
@@ -3302,18 +3310,22 @@ function recordBrushProcessing(){
       };
     }
     addLedgerEntry('finished', stock.productName+' (Brush)', bbNo, brushMachine, 'IN', `Brush machine output from ${total} processed (Wood Batch ${stock.batchNo})`, '');
-    state.brushProcessingLog = [...(state.brushProcessingLog||[]), {
-      id: Date.now()+Math.random(), date: today, time: new Date().toTimeString().slice(0,5),
-      productName: stock.productName, sourceBatch: stock.batchNo, fbBatchNo: bbNo,
-      qty: brushMachine, voided:false
-    }];
   }
+  // 28/9: the processing log now records the WHOLE pass — input (split fresh/rework) and
+  // every output leg — and is written even when brush output is 0 (all rejected), so the
+  // loop maths never lose a pass.
+  state.brushProcessingLog = [...(state.brushProcessingLog||[]), {
+    id: Date.now()+Math.random(), date: today, time: new Date().toTimeString().slice(0,5),
+    productName: stock.productName, sourceBatch: stock.batchNo, fbBatchNo: (typeof bbNo!=='undefined'?bbNo:null),
+    qty: brushMachine, totalInput: total, freshInputPcs: freshPart, reworkInputPcs: reworkPart,
+    colorPcs: color, regmalPcs: regmal, kharabPcs: scrap, kharabToRework: true, keerePcs: wastageQty, voided:false
+  }];
 
   addLedgerEntry('finished', stock.productName, stock.batchNo, total, 'OUT', `Sent to Brush Dept for processing`, '');
 
   saveAll();
   state.brushSelectedStock = null;
-  if(msgEl){msgEl.textContent=`✅ Processed ${total} pcs! Brush machine: ${brushMachine}, Color: ${color}, Regmal: ${regmal}, Scrap: ${scrap}, Wastage: ${wastageQty}`;msgEl.className="msg ok";}
+  if(msgEl){msgEl.textContent=`✅ Processed ${total} pcs! Brush machine: ${brushMachine}, Kharab (to rework): ${scrap}, Keere Wala: ${wastageQty}`;msgEl.className="msg ok";}
   const stockNameForUndo = stock.productName, batchForUndo = stock.batchNo;
   setTimeout(()=>{
     re();
@@ -3330,25 +3342,52 @@ function recordBrushProcessing(){
   },100);
 }
 
+function downcycleFromRework(){
+  if(!requireLiveCloud('Downcycle')) return;
+  const rowId = document.getElementById('dcProduct')?.value;
+  const qty = Math.round(+document.getElementById('dcQty')?.value||0);
+  const row = (state.finishedInventory||[]).find(f=>String(f.id)===String(rowId) && f.batchNo==='REWORK');
+  if(!row){ alert('Select a REWORK basket.'); return; }
+  if(!(qty>0)){ alert('Enter pieces.'); return; }
+  if(qty>row.qty){ alert('Only '+row.qty+' pcs in the '+row.productName+' REWORK basket.'); return; }
+  if(!confirm('Downcycle '+qty+' pcs of '+row.productName+' from the REWORK basket into scrap material (for smaller products)? They leave the rework loop permanently.')) return;
+  const today = new Date().toISOString().slice(0,10);
+  state.finishedInventory = state.finishedInventory.map(f=>f.id===row.id?{...f, qty:f.qty-qty, reworkQty:Math.max(0,(f.reworkQty||0)-qty)}:f).filter(f=>f.qty>0 || f.id===row.id);
+  const scrapKey = `REWORK-BrushScrap-${row.productName}`;
+  const scrapSizeVal = row.size || 0;
+  const sIdx=(state.scrapInventory||[]).findIndex(s=>s.size===scrapSizeVal&&s.batch===scrapKey);
+  if(sIdx>=0){ state.scrapInventory[sIdx].quantity += qty; }
+  else{ state.scrapInventory=[...(state.scrapInventory||[]),{ size:scrapSizeVal, quantity:qty, batch:scrapKey, dateCreated:today }]; }
+  // The log row is what keeps the POOL closure identity balanced — poolDowncycled reads it.
+  state.brushScrapLog=[...(state.brushScrapLog||[]),{ date:today, productName:row.productName, batchNo:'REWORK', qty:qty, reason:'Downcycled from rework basket' }];
+  addLedgerEntry('scrap', `${row.productName} (Downcycled from rework)`, scrapKey, qty, 'IN', 'Pulled from REWORK basket for smaller products', String(scrapSizeVal));
+  addLedgerEntry('finished', row.productName, 'REWORK', qty, 'OUT', 'Downcycled to scrap material (left the rework loop)');
+  saveAll(); re();
+}
 function markReworkCompleted(id){
   if(!requireLiveCloud('Rework completion')) return;
   const rework = state.reworkStock||[];
   const item = rework.find(r=>r.id===id);
   if(!item) return;
   // Move back into finished wood stock — usable again for same size or smaller product
-  const idx=(state.finishedInventory||[]).findIndex(f=>f.productName===item.productName&&f.batchNo===item.batchNo);
-  if(idx>=0){ state.finishedInventory[idx].qty += item.qty; }
+  // 28/9 (Owner's tag rule): on the floor, returning rework loses its batch tag and gets a
+  // REWORK tag — the books now do EXACTLY the same. Pieces return to the per-product
+  // "REWORK" stock row; the original batch stays recorded on the rework item and in the
+  // ledger note as provenance, but the batch's own books closed the moment the pieces were
+  // sent to rework. Books never claim a precision the floor cannot count.
+  const idx=(state.finishedInventory||[]).findIndex(f=>f.productName===item.productName&&f.batchNo==='REWORK');
+  if(idx>=0){ state.finishedInventory[idx].qty += item.qty; state.finishedInventory[idx].reworkQty = (state.finishedInventory[idx].reworkQty||0) + item.qty; }
   else{
     state.finishedInventory=[...(state.finishedInventory||[]),{
       id:Date.now()+Math.random(), productName:item.productName, size:item.size,
-      batchNo:item.batchNo, qty:item.qty, dateAdded:new Date().toISOString().slice(0,10)
+      batchNo:'REWORK', qty:item.qty, reworkQty:item.qty, dateAdded:new Date().toISOString().slice(0,10)
     }];
   }
   state.reworkStock = rework.map(r=>r.id===id?{...r,status:'completed',completedDate:new Date().toISOString().slice(0,10)}:r);
   // Returning rework to stock is a real stock increase and must appear in the ledger — without
   // this the Dashboard shows pieces the Ledger has no record of (264 pcs drifted this way).
-  addLedgerEntry('finished', item.productName, item.batchNo, item.qty, 'IN',
-    `Rework completed (${item.category||'rework'}) — returned to Wood Finishing stock`);
+  addLedgerEntry('finished', item.productName, 'REWORK', item.qty, 'IN',
+    `Rework completed (${item.category||'rework'}, originally batch ${item.batchNo}) — returned to Wood Finishing REWORK stock`);
   saveAll();
   re();
 }
@@ -4816,10 +4855,22 @@ function _actApplyProduction(p,r){ const w=p.woodFinishing; w.runs++; _actAdd(w,
   _actProd(w.byProductSize, pszKey, 'planksUsed', r.planksUsed);
   _actProd(w.byProductSize, pszKey, 'goodPcs', r.piecesProduced);
   _actProd(w.byProductSize, pszKey, 'rejected', r.rejectedPieces); }
-function _actApplyBrushLog(p,r){ _actAdd(p.brushDept,'brushMachineOut',r.qty); _actProd(p.brushDept.byProduct,r.productName,'brushMachineOut',r.qty); }
-function _actApplyRework(p,r){ const f=r.category==='Color'?'colorRework':'regmalRework'; _actAdd(p.brushDept,f,r.qty); _actProd(p.brushDept.byProduct,r.productName,f,r.qty); }
+function _actApplyBrushLog(p,r){ _actAdd(p.brushDept,'brushMachineOut',r.qty); _actProd(p.brushDept.byProduct,r.productName,'brushMachineOut',r.qty);
+  // 28/9 loop accounting: handled = every pass incl. rework (workload); firstPassIn = fresh only (the denominator for true scrap/yield %)
+  if(r.totalInput!=null){
+    _actAdd(p.brushDept,'handledIncludingRework',r.totalInput); _actAdd(p.brushDept,'firstPassInput',r.freshInputPcs); _actAdd(p.brushDept,'reworkReprocessed',r.reworkInputPcs);
+    _actProd(p.brushDept.byProduct,r.productName,'handledIncludingRework',r.totalInput);
+    _actProd(p.brushDept.byProduct,r.productName,'firstPassInput',r.freshInputPcs);
+    _actProd(p.brushDept.byProduct,r.productName,'reworkReprocessed',r.reworkInputPcs);
+    _actProd(p.brushDept.byProduct,r.productName,'keerePcs',r.keerePcs);
+    _actProd(p.brushDept.byProduct,r.productName,'kharabPcs',r.kharabPcs);
+  } }
+function _actApplyRework(p,r){ const f=r.category==='Color'?'colorRework':(r.category==='Kharab'?'kharabToRework':'regmalRework'); _actAdd(p.brushDept,f,r.qty); _actProd(p.brushDept.byProduct,r.productName,f,r.qty); }
 function _actApplyReworkCompleted(p,r){ _actAdd(p.rework,'completedPcs',r.qty); _actAdd(p.rework.completedByCategory,r.category||'?',r.qty); }
-function _actApplyBrushScrap(p,r){ _actAdd(p.brushDept,'kharabMaalScrap',r.qty); _actProd(p.brushDept.byProduct,r.productName,'kharabMaalScrap',r.qty); }
+function _actApplyBrushScrap(p,r){
+  if(r.reason==='Kharab (to rework)') return; // counted via brushProcessingLog.kharabPcs — counting here too would double it
+  const f = r.reason==='Downcycled from rework basket' ? 'downcycledFromRework' : 'kharabMaalScrap';
+  _actAdd(p.brushDept,f,r.qty); _actProd(p.brushDept.byProduct,r.productName,f,r.qty); }
 function _actApplySocket(p,r){ const sd=p.socketDept; _actAdd(sd,'readyForSaleOut',r.qty); _actAdd(sd,'socketsUsed',r.socketQty); _actAdd(sd,'screwsUsed',r.screwQty); _actProd(sd.byProduct,r.productName,'readyForSaleOut',r.qty); }
 function _actApplyWastage(p,w){ const ws=p.wastage; ws.entries++; _actAdd(ws,'totalKg',w.wastageKg); const split=w.typeSplit||{}; ['Bhusa','Patti','Gitta'].forEach(t=>_actAdd(ws.byType,(typeof wasteTypeDisplay==='function'?wasteTypeDisplay(t):t),split[t])); _actAdd(ws.bySource,w.type||'Other',w.wastageKg);
   if(w.type==='BrushDeptWastage'){ _actAdd(p.brushDept,'keereWalaWastagePcs',w.rejectedPieces); _actAdd(p.brushDept,'keereWalaWastageKg',w.wastageKg); } }
@@ -4942,6 +4993,57 @@ function compileActivityData(){
   return {
     dates:{ shiftLabel: shift.label, previousShiftLabel: prevShift.label, calendarDateUTC: new Date().toISOString().slice(0,10),
       explanation:'BUSINESS DAY RULE (Owner-set): a business day runs 8:30 AM to 11:00 PM Karachi time (fixed UTC+5, no DST). The physical shift ends 8:30 PM but staff enter the day\'s data afterwards — every entry made after the shift, up to the next morning 8:30 AM, belongs to the SAME business day the work happened. dailyActivity/weeklyActivity/monthlyActivity are already bucketed by this rule, so a date key there means that business day (from its 8:30 AM), not the raw calendar date. For "today"/"so far today"/"current shift" questions, use currentShift below — it is already computed for exactly [8:30 AM through now]. Do NOT use dailyActivity for "today" — it is a UTC-calendar-date bucket and does not line up with the 8:30 AM shift boundary. For "yesterday" use previousShift (the full prior shift). For a specific named date/week/month ("28 August", "last week", "August"), use dailyActivity/weeklyActivity/monthlyActivity — a date missing there means nothing was recorded that day, say so plainly.' },
+    brushLoopByProductBatch: (function(){
+      // 28/9 two-level fate accounting (matches the floor's tag rule):
+      // LEVEL 1 — per product+batch (tag still on): freshIn == brushGood + keere + kharab
+      //   + sentToRework (color+regmal). sentToRework is that batch's TERMINAL fate; the
+      //   batch's books close there, exactly, at all times.
+      // LEVEL 2 — the REWORK pool (tag replaced): poolFreshIn (arrivals from real batches)
+      //   == poolGood + poolKeere + poolKharab + stillInPool. Re-rejects from rework runs
+      //   cycle inside the pool and cancel out.
+      const agg = {};
+      (state.brushProcessingLog||[]).forEach(r=>{
+        if(!r || r.voided || r.totalInput==null) return;
+        const k = (r.productName||'?')+' | '+(r.sourceBatch||'?');
+        const a = agg[k] = agg[k] || {freshIn:0, handledTotal:0, brushGood:0, colorOut:0, regmalOut:0, kharabOut:0, keereOut:0};
+        a.freshIn += (r.freshInputPcs||0); a.handledTotal += (r.totalInput||0);
+        a.brushGood += (r.qty||0); a.colorOut += (r.colorPcs||0); a.regmalOut += (r.regmalPcs||0);
+        if(r.kharabToRework){ a.kharabRW = (a.kharabRW||0) + (r.kharabPcs||0); } else { a.kharabTerm = (a.kharabTerm||0) + (r.kharabPcs||0); }
+        a.kharabOut += (r.kharabPcs||0); a.keereOut += (r.keerePcs||0);
+      });
+      Object.entries(agg).forEach(([k,a])=>{
+        if(k.endsWith('| REWORK')) return; // pool rows summarized below
+        // kharabRW (new era) is sent to rework; kharabTerm (old era) was downcycled to scrap
+        a.sentToRework = a.colorOut + a.regmalOut + (a.kharabRW||0);
+        a.closureDelta = a.freshIn - (a.brushGood + a.keereOut + (a.kharabTerm||0) + a.sentToRework);
+        a.firstPassGoodPct = a.freshIn>0 ? +((a.brushGood/a.freshIn)*100).toFixed(1) : null;
+      });
+      // REWORK pool summary per product
+      const pool = {};
+      (state.reworkStock||[]).forEach(x=>{
+        if(!x || x.status!=='completed') return;
+        const p = pool[x.productName] = pool[x.productName] || {poolFreshIn:0, poolHandled:0, poolGood:0, poolKeere:0, poolKharab:0, reRejected:0, stillInPool:0};
+        if(x.batchNo!=='REWORK') p.poolFreshIn += (x.qty||0); // first arrival into the pool
+      });
+      (state.brushProcessingLog||[]).forEach(r=>{
+        if(!r || r.voided || r.totalInput==null || r.sourceBatch!=='REWORK') return;
+        const p = pool[r.productName] = pool[r.productName] || {poolFreshIn:0, poolHandled:0, poolGood:0, poolKeere:0, poolKharab:0, reRejected:0, stillInPool:0};
+        p.poolHandled += (r.totalInput||0); p.poolGood += (r.qty||0);
+        p.poolKeere += (r.keerePcs||0);
+        if(r.kharabToRework){ p.reRejected += (r.kharabPcs||0); } else { p.poolKharab += (r.kharabPcs||0); }
+        p.reRejected += (r.colorPcs||0)+(r.regmalPcs||0);
+      });
+      Object.entries(pool).forEach(([prod,p])=>{
+        const pendingFirst = (state.reworkStock||[]).filter(x=>x && x.status==='pending' && x.productName===prod).reduce((s,x)=>s+(x.qty||0),0);
+        const poolRow = (state.finishedInventory||[]).filter(f=>f && f.productName===prod && f.batchNo==='REWORK').reduce((s,f)=>s+(f.qty||0),0);
+        p.stillInPool = poolRow;
+        p.awaitingReworkApproval = pendingFirst;
+        p.downcycledOut = (state.brushScrapLog||[]).filter(l=>l && l.batchNo==='REWORK' && l.productName===prod).reduce((s,l)=>s+(l.qty||0),0);
+        p.poolClosureDelta = p.poolFreshIn - (p.poolGood + p.poolKeere + p.poolKharab + p.downcycledOut + p.stillInPool);
+      });
+      return {perBatch: agg, reworkPool: pool};
+    })(),
+    brushLoopNote:'REWORK LOOP RULE (mirrors the floor\'s basket tags): Brush Dept has exactly TWO reject categories — KHARAB (rework-able; its internal color/regmal/other sorting is manual on the floor and deliberately untracked) and KEERE WALA (terminal wastage). A batch\'s pieces keep their batch identity through the FIRST brush pass only. Kharab (and legacy Color/Regmal) is that batch\'s TERMINAL fate \'sentToRework\'; once reworked they live in the per-product REWORK pool (batch tag removed, exactly as on the floor) and cycle until each piece ends as pool brush output, Kharab downcycle, or Keere wastage. Use brushLoopByProductBatch.perBatch for per-batch questions (freshIn denominator; closureDelta==0 means balanced) and .reworkPool for the pool (poolFreshIn denominator; internal re-rejects cancel; downcycledOut = pieces pulled from the REWORK basket as raw material for smaller products — a terminal pool fate). NEVER attribute a rework-pool outcome to a specific original batch — that precision does not exist physically and must not be claimed. WORKLOAD questions may use handledTotal/poolHandled (every pass counts).',
     brushScrapByBatch: (function(){
       // 28/9 (Owner: "brush scrap percentage per batch"): scrap items encode batch+kind+
       // product in their names (WB008-Rejected-Commando Broom). Aggregated per batch with
@@ -5083,13 +5185,15 @@ function buildDataCatalog(){
     sales:{fields:F({date:'sale date', entryDate:'immutable entry date', buyer:'', wasteType:'Bhusa/Patti/Gitta', kgSold:'KG', pricePerKg:'', totalAmount:'Rs', amountReceived:'Rs from buyer', ownerReceivedAmount:'Rs settled with Owner', slipSerialNo:'kanta slip serial', weighSlipDate:'printed slip date', gatePassNo:'', status:'applied/pending/rejected', voided:'true=cancelled'})},
     ledger:{fields:F({type:'plank etc', direction:'IN/OUT', size:'plank inches', batchNo:'', qty:'pcs', vendor:'', date:'', note:'', voidedByOwner:'IN cancelled', pricePerPiece:'Rs'})},
     production:{fields:F({date:'', time:'', batchNo:'', plankSize:'inches', woodPieceName:'product', planksUsed:'', piecesProduced:'GOOD pcs', rejectedPieces:'', voided:''})},
-    brushProcessingLog:{fields:F({date:'', batchNo:'', productName:'', inputPcs:'', outputPcs:'', kharabPcs:'to scrap', regmalPcs:'to rework', keereWalaKg:'to wastage', voided:''})},
+    brushProcessingLog:{fields:F({date:'', sourceBatch:'wood batch or REWORK', productName:'', totalInput:'', freshInputPcs:'first-pass', reworkInputPcs:'', qty:'brush machine GOOD output', kharabPcs:'rework-able reject (sub-sorted manually)', keerePcs:'terminal wastage pcs', colorPcs:'legacy', regmalPcs:'legacy', voided:''})},
     socketProcessingLog:{fields:F({date:'', batchNo:'', productName:'', inputPcs:'', outputPcs:'', voided:''})},
     wastage:{fields:F({date:'', type:'source dept', wastageKg:'', typeSplit:'per waste-type KG object', voided:''})},
     scrapInventory:{fields:F({name:'BATCH-KIND-PRODUCT e.g. WB008-Rejected-Commando Broom; KIND: BrushScrap|Rejected|Scrap', quantity:'pcs', size:'inches', dateAdded:''})},
     packingLog:{fields:F({date:'', productName:'', boxes:'', pcsPerBox:'', totalPcs:'', voided:''})},
     dispatches:{fields:F({date:'', challanNo:'', customer:'', items:'array', voided:''})},
     receiptVouchers:{fields:F({rvNo:'', date:'', by:'creator', total:'Rs', confirmedByOwner:'null=pending', voided:'', lines:'array of {saleDate,buyer,kg,rate,amount}'})},
+    reworkStock:{fields:F({category:'Kharab (or legacy Color/Regmal)', productName:'', batchNo:'origin wood batch (provenance)', qty:'pcs', status:'pending/completed', dateAdded:''})},
+    finishedInventory:{fields:F({productName:'', batchNo:'wood batch, or REWORK = the per-product rework basket', size:'inches', qty:'pcs awaiting Brush Dept', reworkQty:'portion that is rework-origin'})},
   };
   const out = {};
   Object.entries(cols).forEach(([k,v])=>{ out[k] = {records:(state[k]||[]).length, fields:v.fields}; });
@@ -9886,6 +9990,50 @@ function runSystemWatch(explainedBatches){
       histRatio[k].max = Math.max(histRatio[k].max, r);
       histRatio[k].count++;
     });
+    // 28/9 two-level loop-closure watchdog (floor-tag model): per-batch identity
+    // freshIn == good + keere + kharab + sentToRework, and pool identity
+    // poolFreshIn == poolGood + poolKeere + poolKharab + stillInPool. Drift beyond 2 pcs
+    // = pieces leaked or double-entered.
+    try{
+      const perB = {}, pool = {};
+      (state.brushProcessingLog||[]).forEach(r=>{
+        if(!r || r.voided || r.totalInput==null) return;
+        if(r.sourceBatch==='REWORK'){
+          const p = pool[r.productName] = pool[r.productName] || {good:0,keere:0,kharab:0};
+          p.good+=(r.qty||0); p.keere+=(r.keerePcs||0);
+          if(!r.kharabToRework) p.kharab+=(r.kharabPcs||0); // new-era pool kharab cycles back in — cancels
+          return;
+        }
+        const k = (r.productName||'?')+' | '+(r.sourceBatch||'?');
+        const a = perB[k] = perB[k] || {freshIn:0, good:0, keere:0, kharab:0, sent:0};
+        a.freshIn+=(r.freshInputPcs||0); a.good+=(r.qty||0); a.keere+=(r.keerePcs||0);
+        if(r.kharabToRework){ a.sent+=(r.kharabPcs||0); } else { a.kharab+=(r.kharabPcs||0); }
+        a.sent+=((r.colorPcs||0)+(r.regmalPcs||0));
+      });
+      Object.entries(perB).forEach(([k,a])=>{
+        const delta = a.freshIn - (a.good + a.keere + a.kharab + a.sent);
+        if(Math.abs(delta) > 2){
+          const [prod, batch] = k.split(' | ');
+          findings.push(addSystemFinding('loop-leak', 'brushloop|'+k,
+            `Brush books do not balance for ${prod} (batch ${batch}) — ${Math.abs(delta)} pcs ${delta>0?'unaccounted':'double-entered'}`,
+            `Fresh input ${a.freshIn} should equal brush output ${a.good} + Keere ${a.keere} + Kharab ${a.kharab} + sent to rework ${a.sent}. Differs by ${delta} — an entry is missing or duplicated.`,
+            'Brush Dept'));
+        }
+      });
+      Object.keys(pool).forEach(prod=>{
+        const poolFreshIn = (state.reworkStock||[]).filter(x=>x && x.status==='completed' && x.productName===prod && x.batchNo!=='REWORK').reduce((s,x)=>s+(x.qty||0),0);
+        const stillInPool = (state.finishedInventory||[]).filter(f=>f && f.productName===prod && f.batchNo==='REWORK').reduce((s,f)=>s+(f.qty||0),0);
+        const downcycled = (state.brushScrapLog||[]).filter(l=>l && l.batchNo==='REWORK' && l.productName===prod).reduce((s,l)=>s+(l.qty||0),0);
+        const p = pool[prod];
+        const delta = poolFreshIn - (p.good + p.keere + p.kharab + downcycled + stillInPool);
+        if(Math.abs(delta) > 2){
+          findings.push(addSystemFinding('loop-leak', 'brushloop|REWORKPOOL|'+prod,
+            `REWORK pool does not balance for ${prod} — ${Math.abs(delta)} pcs ${delta>0?'unaccounted':'double-entered'}`,
+            `Pieces that ever entered the ${prod} rework pool: ${poolFreshIn}. Should equal pool brush output ${p.good} + Keere ${p.keere} + Kharab ${p.kharab} + downcycled out ${downcycled} + still in the pool ${stillInPool}. Differs by ${delta}.`,
+            'Brush Dept'));
+        }
+      });
+    }catch(e){}
     (state.production||[]).filter(p=>freshWin(p) && !p.voided && (p.planksUsed||0)>=50).forEach(p=>{
       const h = histRatio[yieldKey(p)];
       if(!h || h.count<3) return;
