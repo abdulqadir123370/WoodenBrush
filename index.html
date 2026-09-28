@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1790420279286;
+const APP_BUILD = 1790588569591;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -4942,7 +4942,33 @@ function compileActivityData(){
   return {
     dates:{ shiftLabel: shift.label, previousShiftLabel: prevShift.label, calendarDateUTC: new Date().toISOString().slice(0,10),
       explanation:'BUSINESS DAY RULE (Owner-set): a business day runs 8:30 AM to 11:00 PM Karachi time (fixed UTC+5, no DST). The physical shift ends 8:30 PM but staff enter the day\'s data afterwards — every entry made after the shift, up to the next morning 8:30 AM, belongs to the SAME business day the work happened. dailyActivity/weeklyActivity/monthlyActivity are already bucketed by this rule, so a date key there means that business day (from its 8:30 AM), not the raw calendar date. For "today"/"so far today"/"current shift" questions, use currentShift below — it is already computed for exactly [8:30 AM through now]. Do NOT use dailyActivity for "today" — it is a UTC-calendar-date bucket and does not line up with the 8:30 AM shift boundary. For "yesterday" use previousShift (the full prior shift). For a specific named date/week/month ("28 August", "last week", "August"), use dailyActivity/weeklyActivity/monthlyActivity — a date missing there means nothing was recorded that day, say so plainly.' },
-    sourceOfTruth:'AUTHORITY RULE: for ANY question about a batch\'s planks — which sizes it has, how many were purchased/consumed/remain, when, from which vendor — use plankLedgerByBatch. It contains the actual receipts (the app\'s permanent ledger) per batch and size, and it OVERRIDES openBatches and every summary if they disagree; openBatches is only a pointer to where the next production run will draw from. Piece counts (good/rejected per product) come from the production activity data, not the plank ledger.',
+    brushScrapByBatch: (function(){
+      // 28/9 (Owner: "brush scrap percentage per batch"): scrap items encode batch+kind+
+      // product in their names (WB008-Rejected-Commando Broom). Aggregated per batch with
+      // the denominator that makes a percentage meaningful: total GOOD pieces that batch
+      // ever produced in wood finishing (what was sent onward to the brush department).
+      const agg = {};
+      (state.scrapInventory||[]).forEach(it=>{
+        const m = /^(WB\d+)-(BrushScrap|Rejected|Scrap)-(.+)$/.exec(String(it?.name||''));
+        if(!m) return;
+        const k = agg[m[1]] = agg[m[1]] || {brushScrapPcs:0, rejectedPcs:0, wfScrapPcs:0, goodPcsProducedAllTime:0};
+        if(m[2]==='BrushScrap') k.brushScrapPcs += (it.quantity||0);
+        else if(m[2]==='Rejected') k.rejectedPcs += (it.quantity||0);
+        else k.wfScrapPcs += (it.quantity||0);
+      });
+      (state.production||[]).forEach(p=>{
+        if(!p || p.voided || !p.batchNo) return;
+        if(!agg[p.batchNo]) return; // only batches that actually have scrap entries
+        agg[p.batchNo].goodPcsProducedAllTime += (p.piecesProduced||0);
+      });
+      Object.values(agg).forEach(k=>{
+        const denom = k.goodPcsProducedAllTime;
+        k.brushScrapPct = denom>0 ? +( (k.brushScrapPcs/denom)*100 ).toFixed(1) : null;
+        k.rejectedPct   = denom>0 ? +( (k.rejectedPcs/denom)*100 ).toFixed(1) : null;
+      });
+      return agg;
+    })(),
+    sourceOfTruth:'AUTHORITY RULE: for ANY question about a batch\'s planks — which sizes it has, how many were purchased/consumed/remain, when, from which vendor — use plankLedgerByBatch. It contains the actual receipts (the app\'s permanent ledger) per batch and size, and it OVERRIDES openBatches and every summary if they disagree; openBatches is only a pointer to where the next production run will draw from. Piece counts (good/rejected per product) come from the production activity data, not the plank ledger. BRUSH SCRAP RULE: \'brush scrap\' / \'scrap per batch\' / \'pieces coming back from brush department\' questions are answered ONLY from brushScrapByBatch (brushScrapPcs, rejectedPcs, and their percentages of the batch\'s all-time good pieces) — NEVER from costingPerBatch.yieldPercent, which is the WOOD-FINISHING plank-to-piece yield, a completely different thing.',
     departments:{ woodFinishing:'planks cut into brush bodies (production runs). WORDING RULE: the field \'produced\' means GOOD pieces only — rejected pieces are counted separately, never inside produced; when writing a summary say \'good pcs\' so nobody reads produced+rejected as double-counted. PLANK SIZES: every run records which plank size it consumed — per-batch size totals (planksUsed, goodPcs, rejected) are in woodFinishing.byBatchSize (key \'WB011 @ 12\" planks\') and per-product-per-size in woodFinishing.byProductSize (key \'Commando Broom @ 24\" planks\'); answer size questions — including size-wise REJECTION breakdowns — FROM THOSE, and in daily summaries list rejections size-wise when sizes differ, and if only one size appears there, say plainly that the records show only that size was entered — if the floor physically used another size too, it was not recorded and needs a person to correct.', brushDept:'brush machine output; also sends Color/Regmal to rework, Kharab Maal to scrap, Keere Wala to wastage', socketDept:'fits sockets + screws and moves stock to Ready for Sale (or Nil-BOM straight through)',
       notTracked:'There is NO CNC department in this system — if asked about CNC, say it is not tracked here.' },
     currentShift, previousShift,
@@ -5044,6 +5070,95 @@ function compileReportData(){
   return data;
 }
 
+// ==================== AI SELF-SERVE DATA ACCESS (28/9) ====================
+// Owner rule: the AI must navigate the data ITSELF instead of needing a hand-built digest
+// for every new question. Two-step: (1) the model sees a CATALOG of every collection and
+// replies with a JSON query plan; (2) the app executes it locally against the FULL records
+// (read-only, capped) and the answer is generated from actual rows. Any question about any
+// record ever entered is now reachable. If planning fails, the old single-call path runs —
+// never worse than before.
+function buildDataCatalog(){
+  const F = (o)=>o;
+  const cols = {
+    sales:{fields:F({date:'sale date', entryDate:'immutable entry date', buyer:'', wasteType:'Bhusa/Patti/Gitta', kgSold:'KG', pricePerKg:'', totalAmount:'Rs', amountReceived:'Rs from buyer', ownerReceivedAmount:'Rs settled with Owner', slipSerialNo:'kanta slip serial', weighSlipDate:'printed slip date', gatePassNo:'', status:'applied/pending/rejected', voided:'true=cancelled'})},
+    ledger:{fields:F({type:'plank etc', direction:'IN/OUT', size:'plank inches', batchNo:'', qty:'pcs', vendor:'', date:'', note:'', voidedByOwner:'IN cancelled', pricePerPiece:'Rs'})},
+    production:{fields:F({date:'', time:'', batchNo:'', plankSize:'inches', woodPieceName:'product', planksUsed:'', piecesProduced:'GOOD pcs', rejectedPieces:'', voided:''})},
+    brushProcessingLog:{fields:F({date:'', batchNo:'', productName:'', inputPcs:'', outputPcs:'', kharabPcs:'to scrap', regmalPcs:'to rework', keereWalaKg:'to wastage', voided:''})},
+    socketProcessingLog:{fields:F({date:'', batchNo:'', productName:'', inputPcs:'', outputPcs:'', voided:''})},
+    wastage:{fields:F({date:'', type:'source dept', wastageKg:'', typeSplit:'per waste-type KG object', voided:''})},
+    scrapInventory:{fields:F({name:'BATCH-KIND-PRODUCT e.g. WB008-Rejected-Commando Broom; KIND: BrushScrap|Rejected|Scrap', quantity:'pcs', size:'inches', dateAdded:''})},
+    packingLog:{fields:F({date:'', productName:'', boxes:'', pcsPerBox:'', totalPcs:'', voided:''})},
+    dispatches:{fields:F({date:'', challanNo:'', customer:'', items:'array', voided:''})},
+    receiptVouchers:{fields:F({rvNo:'', date:'', by:'creator', total:'Rs', confirmedByOwner:'null=pending', voided:'', lines:'array of {saleDate,buyer,kg,rate,amount}'})},
+  };
+  const out = {};
+  Object.entries(cols).forEach(([k,v])=>{ out[k] = {records:(state[k]||[]).length, fields:v.fields}; });
+  out.materialsBatches = {records:Object.values(state.materials||{}).reduce((a,m)=>a+(m.batches||[]).length,0), fields:F({_size:'plank inches (from parent)', batchNo:'', qty:'pcs in stock', pricePerPiece:'', vendor:'', dateAdded:''})};
+  return out;
+}
+function executeDataQueries(plan){
+  const MAXR = 200;
+  const results = {};
+  const rowsOf = (col)=>{
+    if(col==='materialsBatches'){ const r=[]; Object.entries(state.materials||{}).forEach(([sz,m])=>(m.batches||[]).forEach(b=>r.push({_size:sz, ...b}))); return r; }
+    return Array.isArray(state[col]) ? state[col] : [];
+  };
+  const test = (row,f)=>{
+    const v = row?.[f.field];
+    const t = f.value;
+    switch(f.op){
+      case 'eq': return String(v)===String(t);
+      case 'ne': return String(v)!==String(t);
+      case 'contains': return String(v??'').toLowerCase().includes(String(t).toLowerCase());
+      case 'gte': return (typeof v==='number'&&typeof t==='number') ? v>=t : String(v??'')>=String(t);
+      case 'lte': return (typeof v==='number'&&typeof t==='number') ? v<=t : String(v??'')<=String(t);
+      case 'truthy': return !!v;
+      case 'falsy': return !v;
+      default: return true;
+    }
+  };
+  (Array.isArray(plan?.queries)?plan.queries:[]).slice(0,6).forEach((q,qi)=>{
+    try{
+      let rows = rowsOf(String(q.collection||''));
+      (Array.isArray(q.filters)?q.filters:[]).slice(0,8).forEach(f=>{ rows = rows.filter(r=>test(r,f)); });
+      const key = (q.label||q.collection||('q'+qi))+'';
+      if(q.groupBy){
+        const g = {};
+        rows.forEach(r=>{
+          const k = String(r?.[q.groupBy] ?? '?');
+          g[k] = g[k] || {count:0};
+          g[k].count++;
+          (Array.isArray(q.sum)?q.sum:[]).slice(0,6).forEach(sf=>{ const v=r?.[sf]; if(typeof v==='number') g[k][sf]=(g[k][sf]||0)+v; });
+        });
+        results[key] = {groupedBy:q.groupBy, groups:g, matchedRows:rows.length};
+      } else {
+        const fields = Array.isArray(q.fields)&&q.fields.length ? q.fields.slice(0,12) : null;
+        results[key] = {matchedRows:rows.length, rows: rows.slice(-MAXR).map(r=>{
+          const o={}; (fields||Object.keys(r||{}).slice(0,12)).forEach(f=>{ let v=r?.[f]; if(typeof v==='string'&&v.length>80) v=v.slice(0,80); if(v!==undefined&&typeof v!=='object') o[f]=v; if(typeof v==='object'&&v!==null) o[f]=JSON.stringify(v).slice(0,120); }); return o; })};
+      }
+    }catch(e){ results['q'+qi+'_error']=String(e.message||e); }
+  });
+  return results;
+}
+async function aiPlanAndFetch(url, question, msgEl){
+  try{
+    const catalog = buildDataCatalog();
+    const plannerQ = 'DATA-FETCH PLANNING STEP (respond with JSON ONLY, no prose, no markdown fences): the user asked: "'+question+'". Below is a catalog of the factory database (collection -> record count + field meanings). Reply ONLY {"queries":[{"collection":"...","label":"short name","filters":[{"field":"...","op":"eq|ne|contains|gte|lte|truthy|falsy","value":...}],"groupBy":"field or omit","sum":["numeric fields when groupBy"],"fields":["projection when no groupBy"],"limit":100}]} — at most 4 queries, minimal data needed to answer precisely. If the summaries alone suffice, reply {"queries":[]}.';
+    const ctrl = new AbortController(); const kill=setTimeout(()=>ctrl.abort(), 45000);
+    const resp = await fetch(url, { method:'POST', signal:ctrl.signal,
+      headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+WEIGHT_SLIP_READER_SECRET },
+      body: JSON.stringify({ question: plannerQ, data: { catalog } }) });
+    clearTimeout(kill);
+    const res = await resp.json().catch(()=>null);
+    if(!resp.ok || !res || !res.success) return null;
+    const txt = String(res.report||'').replace(/```json|```/g,'').trim();
+    const js = txt.slice(txt.indexOf('{'), txt.lastIndexOf('}')+1);
+    const plan = JSON.parse(js);
+    if(!Array.isArray(plan.queries) || plan.queries.length===0) return null;
+    if(msgEl){ msgEl.textContent='🤖 Fetching '+plan.queries.length+' data slice(s) the AI asked for, then answering...'; }
+    return { plan, results: executeDataQueries(plan) };
+  }catch(e){ return null; }
+}
 async function runAiReport(presetQuestion){
   if(!isAdminOrOwner()){ alert('Admin/Owner only.'); return; }
   const qEl = document.getElementById('aiReportQuestion');
@@ -5059,6 +5174,13 @@ async function runAiReport(presetQuestion){
   if(out){out.style.display='none';}
   let data;
   try{ data = compileReportData();
+    // 28/9 self-serve fetch: the AI names the raw slices it needs; executed locally,
+    // attached as rows. Silent fallback to summaries-only on any failure.
+    const fetched = await aiPlanAndFetch(url, question, msg);
+    if(fetched){
+      data.selfFetchedData = fetched.results;
+      data.selfFetchNote = 'selfFetchedData contains RAW RECORDS you specifically requested in the planning step, executed against the full database — for the figures they cover, they are the most authoritative source in this payload; cite them.';
+    }
     // Size guard: the report service caps the dataset at 400k chars. Trim the raw-entry
     // detail first, then the per-day history, before ever failing the request.
     let len = JSON.stringify(data).length;
@@ -5212,6 +5334,11 @@ async function runAiChat(){
     '=== The follow-up to answer now ===\n'+q;
   let data;
   try{ data = compileReportData();
+    const fetchedC = await aiPlanAndFetch(url, q, msg);
+    if(fetchedC){
+      data.selfFetchedData = fetchedC.results;
+      data.selfFetchNote = 'selfFetchedData contains RAW RECORDS you specifically requested in the planning step, executed against the full database — for the figures they cover, they are the most authoritative source in this payload; cite them.';
+    }
     let len = JSON.stringify(data).length;
     if(len>320000 && data.activity){ data.activity.recentEntriesLast3Days = 'omitted (dataset too large)'; len = JSON.stringify(data).length; }
     if(len>380000 && data.activity){ const d=data.activity.dailyActivity||{}; data.activity.dailyActivity = Object.fromEntries(Object.entries(d).slice(0,14)); }
