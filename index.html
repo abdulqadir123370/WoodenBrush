@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1790680403912;
+const APP_BUILD = 1790681161791;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -5058,10 +5058,38 @@ function compileActivityData(){
         p.awaitingReworkApproval = pendingFirst;
         p.downcycledOut = (state.brushScrapLog||[]).filter(l=>l && l.batchNo==='REWORK' && l.productName===prod).reduce((s,l)=>s+(l.qty||0),0);
         p.poolClosureDelta = p.poolFreshIn - (p.poolGood + p.poolKeere + p.poolKharab + p.downcycledOut + p.stillInPool);
+        // 28/9 (Owner): fate RATES of decided pool pieces — the basis for per-batch estimates.
+        const decided = p.poolGood + p.poolKeere + p.poolKharab + p.downcycledOut;
+        p.decidedPcs = decided;
+        if(decided >= 30){ // below this the sample is too thin to estimate from
+          p.fateRates = { good:+(p.poolGood/decided).toFixed(3), keere:+(p.poolKeere/decided).toFixed(3), kharab:+(p.poolKharab/decided).toFixed(3), downcycled:+(p.downcycledOut/decided).toFixed(3) };
+        } else { p.fateRates = null; }
+      });
+      // 28/9 ESTIMATED FINAL FATES per batch: exact books + statistical allocation of the
+      // pieces this batch handed to the pool, using the pool's own measured fate rates.
+      // ALWAYS an estimate — labeled so, never mixed into the exact identities.
+      Object.entries(agg).forEach(([k,a])=>{
+        if(k.endsWith('| REWORK') || a.sentToRework==null) return;
+        const prod = k.split(' | ')[0];
+        const fr = pool[prod] && pool[prod].fateRates;
+        if(fr && a.sentToRework>0){
+          const s = a.sentToRework;
+          a.estimatedFinal = {
+            method:'exact first-pass books + sentToRework allocated by the '+prod+' rework pool\'s measured fate rates ('+(pool[prod].decidedPcs)+' decided pcs)',
+            estGoodPcs: Math.round(a.brushGood + s*fr.good),
+            estKeerePcs: Math.round(a.keereOut + s*fr.keere),
+            estKharabPcs: Math.round(a.kharabOut + s*fr.kharab),
+            estDowncycledPcs: Math.round(s*fr.downcycled),
+            estTotalWastePcs: Math.round(a.keereOut + s*fr.keere),
+            estTotalWastePctOfFresh: a.freshIn>0 ? +(((a.keereOut + s*fr.keere)/a.freshIn)*100).toFixed(1) : null
+          };
+        } else if(a.sentToRework>0){
+          a.estimatedFinal = { method:'not enough decided rework-pool history for '+prod+' yet (need 30+ decided pcs) — only exact first-pass figures available' };
+        }
       });
       return {perBatch: agg, reworkPool: pool};
     })(),
-    brushLoopNote:'REWORK LOOP RULE (mirrors the floor\'s basket tags): Brush Dept has FOUR reject categories — COLOR and REGMAL (rework-able, enter the rework loop), KHARAB MAAL (terminal for this product: becomes scrap material for smaller products), KEERE WALA (terminal wastage). A batch\'s pieces keep their batch identity through the FIRST brush pass only. Color/Regmal is that batch\'s TERMINAL fate \'sentToRework\'; once reworked they live in the per-product REWORK pool (batch tag removed, exactly as on the floor) and cycle until each piece ends as pool brush output, Kharab downcycle, or Keere wastage. Use brushLoopByProductBatch.perBatch for per-batch questions (freshIn denominator; closureDelta==0 means balanced) and .reworkPool for the pool (poolFreshIn denominator; internal re-rejects cancel; downcycledOut = pieces pulled from the REWORK basket as raw material for smaller products — a terminal pool fate). NEVER attribute a rework-pool outcome to a specific original batch — that precision does not exist physically and must not be claimed. WORKLOAD questions may use handledTotal/poolHandled (every pass counts).',
+    brushLoopNote:'REWORK LOOP RULE (mirrors the floor\'s basket tags): Brush Dept has FOUR reject categories — COLOR and REGMAL (rework-able, enter the rework loop), KHARAB MAAL (terminal for this product: becomes scrap material for smaller products), KEERE WALA (terminal wastage). A batch\'s pieces keep their batch identity through the FIRST brush pass only. Color/Regmal is that batch\'s TERMINAL fate \'sentToRework\'; once reworked they live in the per-product REWORK pool (batch tag removed, exactly as on the floor) and cycle until each piece ends as pool brush output, Kharab downcycle, or Keere wastage. Use brushLoopByProductBatch.perBatch for per-batch questions (freshIn denominator; closureDelta==0 means balanced) and .reworkPool for the pool (poolFreshIn denominator; internal re-rejects cancel; downcycledOut = pieces pulled from the REWORK basket as raw material for smaller products — a terminal pool fate). NEVER attribute a rework-pool outcome to a specific original batch as FACT — that precision does not exist physically. The ONLY sanctioned way to answer \'total/estimated batch waste including rework pieces\' is perBatch.estimatedFinal: exact first-pass books plus the batch\'s sentToRework allocated by the pool\'s measured fate rates. ALWAYS present those figures with the word \'estimated\' and name the method; exact figures and estimates must never be mixed without labels. WORKLOAD questions may use handledTotal/poolHandled (every pass counts).',
     brushScrapByBatch: (function(){
       // 28/9 (Owner: "brush scrap percentage per batch"): scrap items encode batch+kind+
       // product in their names (WB008-Rejected-Commando Broom). Aggregated per batch with
