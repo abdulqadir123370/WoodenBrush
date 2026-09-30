@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1790756236740;
+const APP_BUILD = 1790764148534;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -287,7 +287,8 @@ const SK = {
   dispatches:"wbt_dispatches",            // Permanent dispatch records (gate pass, customer, vehicle) — voidable, never deleted
   packingVariances:"wbt_packing_variances", // Physical-count differences found at packing — permanent, flagged to Admin/Owner
   receiptVouchers:"wbt_receipt_vouchers",   // Receipt Vouchers (RV series, 15/09): cash-handover-to-Owner records against sales — printable, append-only
-  rowTombstones:"wbt_row_tombstones"       // 30/9 (WB012 recurring-split): docIds of stock rows merged away by consolidation — once here, a row can NEVER come back (stale devices kept resurrecting merged-away rows, and re-merging a resurrected row double-counts its pcs)
+  rowTombstones:"wbt_row_tombstones",       // 30/9 (WB012 recurring-split): docIds of stock rows merged away by consolidation — once here, a row can NEVER come back (stale devices kept resurrecting merged-away rows, and re-merging a resurrected row double-counts its pcs)
+  reworkReclaimLog:"wbt_rework_reclaims"   // 30/9 (Safiullah/Owner): scrap lots moved BACK into a REWORK basket because they turned out re-brushable — the reverse of Downcycle. Arrival-side term of the pool closure identity.
 };
 
 const DEFAULT_USERS = [
@@ -1885,6 +1886,7 @@ let state = {
   woodPieces: ld(SK.woodPieces, DEFAULT_WOOD_PIECES),
   production: ld(SK.production, []),
   scrapInventory: ld(SK.scrapInventory, []),
+  reworkReclaimLog: ld(SK.reworkReclaimLog, []),
   wastage: ld(SK.wastage, []),
   openBatches: ld(SK.openBatches, {}),
   closedBatches: ld(SK.closedBatches, []),
@@ -1939,6 +1941,7 @@ let state = {
 function saveAll(){
   sv(SK.materials,state.materials); sv(SK.woodPieces,state.woodPieces);
   sv(SK.production,state.production); sv(SK.scrapInventory,state.scrapInventory);
+  sv(SK.reworkReclaimLog,state.reworkReclaimLog);
   sv(SK.wastage,state.wastage); sv(SK.openBatches,state.openBatches);
   sv(SK.closedBatches,state.closedBatches);
   sv(SK.ledger,state.ledger);
@@ -2349,15 +2352,31 @@ function renderProduction(){
       }
 
       if(validScraps.length>0){
-        html+=`<div style="font-size:11px;font-weight:700;color:#e67e22;margin-bottom:6px;margin-top:8px;text-transform:uppercase;">♻️ Scrap Batches</div>`;
+        html+=`<div style="font-size:11px;font-weight:700;color:#e67e22;margin-bottom:6px;margin-top:8px;text-transform:uppercase;">♻️ Scrap Batches</div>
+        <div style="font-size:10px;color:#888;margin-bottom:6px;">Tick lots that are re-brushable → they move to the REWORK basket. Untick = stays as cutting material. Tap the row itself to start production from it.</div>`;
+        // 30/9 (Owner): checkbox-select lots to move into the rework loop — replaces the
+        // one-tap migration card. Locked = feeding an open production batch (any size).
+        const openTags = new Set(Object.values(state.openBatches||{}).map(ob=>ob && ob.sourceBatchTag).filter(Boolean));
+        let scrapMoveable = 0;
         validScraps.forEach(b=>{
           const sel=state.prodSelectedBatch===b.batchNo;
           const isRejected = b.batchNo.includes('-Rejected-');
-          html+=`<button class="select-batch-btn scrap ${sel?'selected':''}" onclick="selectProdBatch('${b.batchNo}')">
-            <span>${b.batchNo} <span style="font-size:11px;color:#e67e22;">(${isRejected?'rejected ':''}${b.scrapSize}" ${isRejected?'stock':'scrap'})</span></span>
-            <span class="orange" style="font-weight:700;">${b.qty} pcs — ${b.dateAdded}</span>
-          </button>`;
+          const brushOrigin = /^(?:WB\d+|REWORK)-(?:BrushScrap|Rejected|Scrap)-(.+)$/.test(String(b.batchNo||''));
+          const locked = openTags.has(b.batchNo);
+          if(brushOrigin && !locked) scrapMoveable++;
+          html+=`<div style="display:flex;align-items:stretch;gap:6px;margin-bottom:6px;">
+            ${brushOrigin && !locked
+              ? `<label style="display:flex;align-items:center;padding:0 4px;cursor:pointer;"><input type="checkbox" class="scrapMoveChk" data-batch="${b.batchNo}" data-size="${b.scrapSize}" data-qty="${b.qty}" onchange="updateScrapMoveBtn()"></label>`
+              : `<span style="display:flex;align-items:center;padding:0 6px;font-size:12px;" title="${locked?'Feeding an open production batch — close it first':'Not a brush-origin lot'}">${locked?'🔒':''}</span>`}
+            <button class="select-batch-btn scrap ${sel?'selected':''}" style="flex:1;margin-bottom:0;" onclick="selectProdBatch('${b.batchNo}')">
+              <span>${b.batchNo} <span style="font-size:11px;color:#e67e22;">(${isRejected?'rejected ':''}${b.scrapSize}" ${isRejected?'stock':'scrap'})</span></span>
+              <span class="orange" style="font-weight:700;">${b.qty} pcs — ${b.dateAdded}</span>
+            </button>
+          </div>`;
         });
+        if(scrapMoveable>0){
+          html+=`<button class="btn" id="scrapMoveBtn" style="background:#a0722c;color:#fff;width:100%;margin-bottom:8px;" onclick="moveSelectedScrapToRework()" disabled>↩️ Move selected to Rework — nothing ticked yet</button>`;
+        }
       }
 
       html+=`<button class="btn btn-green btn-full" onclick="openBatch()" ${!state.prodSelectedBatch?'disabled':''}>
@@ -3449,6 +3468,94 @@ function downcycleFromRework(){
   addLedgerEntry('finished', row.productName, 'REWORK', qty, 'OUT', 'Downcycled to scrap material (left the rework loop)');
   saveAll(); re();
 }
+
+// 30/9 (Owner, after Safiullah's review): the REVERSE door. Downcycle was one-way, so a
+// scrap lot that turns out to be physically re-brushable had no recorded path back into the
+// loop — old-era BrushScrap lots (Kharab written straight to scrap before the 28-29/9
+// rebuild) especially. Reclaim moves a chosen quantity of a scrap lot into that product's
+// REWORK basket, with accounting that exactly mirrors Downcycle: scrap −, basket + (as
+// rework-origin), ledger OUT/IN pair, and a reclaim log row that the pool closure identity
+// counts on the ARRIVAL side — so the books balance whether the lot was old-era scrap or a
+// new-era downcycle being reversed. Deliberately selective (lot + quantity), never bulk:
+// most old scrap is genuinely cutting material and belongs where it is.
+// Core mover (no prompts, no save): scrap lot → REWORK basket, full mirrored accounting.
+// Returns a note string, or null if the tag is not brush-origin / lot is empty.
+function _reclaimLotCore(scrapSize, batchTag, qty){
+  const m = /^(?:WB\d+|REWORK)-(?:BrushScrap|Rejected|Scrap)-(.+)$/.exec(String(batchTag||''));
+  if(!m) return null;
+  const productName = m[1];
+  const rows = (state.scrapInventory||[]).filter(s=>s && s.batch===batchTag && s.size===scrapSize);
+  const have = rows.reduce((s,x)=>s+(x.quantity||0),0);
+  if(have<=0 || !(qty>0) || qty>have) return null;
+  const today = new Date().toISOString().slice(0,10);
+  let need = qty;
+  state.scrapInventory = (state.scrapInventory||[]).map(s=>{
+    if(need>0 && s && s.batch===batchTag && s.size===scrapSize){
+      const take = Math.min(need, s.quantity||0); need -= take;
+      return {...s, quantity:(s.quantity||0)-take};
+    }
+    return s;
+  }).filter(s=>s && s.quantity>0);
+  const bIdx = (state.finishedInventory||[]).findIndex(f=>f && f.productName===productName && f.batchNo==='REWORK');
+  if(bIdx>=0){
+    state.finishedInventory = state.finishedInventory.map((f,i)=>i===bIdx?{...f, qty:(f.qty||0)+qty, reworkQty:(f.reworkQty||0)+qty}:f);
+  } else {
+    state.finishedInventory = [...(state.finishedInventory||[]), { id:Date.now()+Math.random(), productName, size:scrapSize, batchNo:'REWORK', qty:qty, reworkQty:qty }];
+  }
+  state.reworkReclaimLog = [...(state.reworkReclaimLog||[]), { id:Date.now()+Math.random(), date:today, productName, qty, fromTag:batchTag, size:scrapSize }];
+  addLedgerEntry('scrap', `${productName} (Reclaimed to rework)`, batchTag, qty, 'OUT', 'Moved back into the REWORK basket — re-brushable', String(scrapSize));
+  addLedgerEntry('finished', productName, 'REWORK', qty, 'IN', `Reclaimed from scrap material (${batchTag}) — re-entered the rework loop`);
+  return `${productName}: ${qty} pcs from ${batchTag}`;
+}
+
+// Manual per-lot door (Inventory tab button): pick the lot and quantity yourself.
+function reclaimScrapToRework(scrapSize, batchTag){
+  if(!requireLiveCloud('Reclaim to rework')) return;
+  const m = /^(?:WB\d+|REWORK)-(?:BrushScrap|Rejected|Scrap)-(.+)$/.exec(String(batchTag||''));
+  if(!m){ alert('This scrap lot ('+batchTag+') is not brush-origin — cannot determine which product\'s rework basket it belongs to.'); return; }
+  const have = (state.scrapInventory||[]).filter(s=>s && s.batch===batchTag && s.size===scrapSize).reduce((s,x)=>s+(x.quantity||0),0);
+  if(have<=0){ alert('No pieces left in this scrap lot.'); return; }
+  const qty = Math.round(+prompt('Reclaim how many pcs of '+m[1]+' from '+batchTag+' back into the REWORK basket?\n(Available: '+have+' pcs)', have)||0);
+  if(!(qty>0)) return;
+  if(qty>have){ alert('Only '+have+' pcs in this scrap lot.'); return; }
+  if(!confirm('Move '+qty+' pcs of '+m[1]+' from scrap material back into the '+m[1]+' REWORK basket?\n\nThey re-enter the rework loop as re-brushable pieces and stop being available as cutting material for smaller products.')) return;
+  const note = _reclaimLotCore(scrapSize, batchTag, qty);
+  if(!note){ alert('Nothing moved — the lot may have just been consumed on another device.'); return; }
+  saveAll(); re();
+}
+
+// 30/9 (Owner, v2): checkbox-select in the Scrap Batches list — the floor ticks the lots
+// that are physically re-brushable and moves them into their REWORK baskets in one go.
+// Same _reclaimLotCore accounting per lot (ledger pair + reclaim record, pool identity
+// balanced). Lots feeding an OPEN production batch are rendered locked; REWORK-BrushScrap
+// (already-decided downcycles) and Rejected lots can be ticked too — ticking one is a
+// human decision, exactly what the reverse door is for.
+function updateScrapMoveBtn(){
+  const btn = document.getElementById('scrapMoveBtn');
+  if(!btn) return;
+  const boxes = Array.from(document.querySelectorAll('.scrapMoveChk')).filter(c=>c.checked);
+  const pcs = boxes.reduce((s,c)=>s+(+c.dataset.qty||0),0);
+  btn.disabled = boxes.length===0;
+  btn.textContent = boxes.length===0 ? '↩️ Move selected to Rework — nothing ticked yet'
+    : `↩️ Move ${boxes.length} lot${boxes.length>1?'s':''} (${pcs} pcs) to Rework`;
+}
+function moveSelectedScrapToRework(){
+  if(!requireLiveCloud('Move scrap to rework')) return;
+  const boxes = Array.from(document.querySelectorAll('.scrapMoveChk')).filter(c=>c.checked);
+  if(boxes.length===0) return;
+  const pcs = boxes.reduce((s,c)=>s+(+c.dataset.qty||0),0);
+  if(!confirm('Move '+boxes.length+' scrap lot'+(boxes.length>1?'s':'')+' ('+pcs+' pcs) into their REWORK baskets?\n\nThey re-enter the rework loop as re-brushable pieces. Every move is recorded.')) return;
+  const done=[], skipped=[];
+  boxes.forEach(c=>{
+    const tag=c.dataset.batch, size=+c.dataset.size;
+    const have=(state.scrapInventory||[]).filter(s=>s && s.batch===tag && s.size===size).reduce((t,x)=>t+(x.quantity||0),0);
+    const n = have>0 ? _reclaimLotCore(size, tag, have) : null;
+    if(n) done.push(n); else skipped.push(tag);
+  });
+  if(done.length===0){ alert('Nothing moved — the selected lots may have just been consumed on another device.'); return; }
+  saveAll(); re();
+  alert('Moved into REWORK baskets:\n\n'+done.join('\n')+(skipped.length?'\n\nSkipped (already consumed): '+skipped.join(', '):''));
+}
 function markReworkCompleted(id){
   if(!requireLiveCloud('Rework completion')) return;
   const rework = state.reworkStock||[];
@@ -3905,7 +4012,8 @@ function renderInventory(){
     const grouped={};
     sc.forEach(s=>{const k=`${s.size}-${s.batch}`;grouped[k]=grouped[k]?{...grouped[k],quantity:grouped[k].quantity+s.quantity}:{...s};});
     Object.values(grouped).forEach(s=>{
-      html+=`<div class="scrap-item"><div class="row"><span><b>${s.size}"</b> — ${s.batch}</span><span class="orange" style="font-weight:700;">${s.quantity} pcs</span></div><div style="font-size:11px;color:#888;margin-top:2px;">${s.dateCreated}</div></div>`;
+      const reclaimable = /^(?:WB\d+|REWORK)-(?:BrushScrap|Rejected|Scrap)-(.+)$/.test(String(s.batch||''));
+      html+=`<div class="scrap-item"><div class="row"><span><b>${s.size}"</b> — ${s.batch}</span><span class="orange" style="font-weight:700;">${s.quantity} pcs</span></div><div class="row" style="align-items:center;"><div style="font-size:11px;color:#888;margin-top:2px;">${s.dateCreated}</div>${reclaimable?`<button class="btn" style="font-size:10px;padding:4px 8px;background:#a0722c;color:#fff;" onclick="reclaimScrapToRework(${s.size},'${String(s.batch).replace(/'/g,"\\'")}')">↩️ Reclaim to Rework</button>`:''}</div></div>`;
     });
     html+=`<div style="font-size:11px;color:#aaa;margin-top:6px;">Total: ${sc.reduce((s,x)=>s+x.quantity,0)} pcs</div>`;
   } else {
@@ -5124,6 +5232,10 @@ function compileActivityData(){
         // 29/9: only Kharab enters the pool (Color/Regmal return to their own batch)
         if(x.batchNo!=='REWORK' && x.category==='Kharab' && x.fromRunId) p.poolFreshIn += (x.qty||0);
       });
+      (state.reworkReclaimLog||[]).forEach(l=>{
+        if(!l) return;
+        pool[l.productName] = pool[l.productName] || {poolFreshIn:0, poolHandled:0, poolGood:0, poolKeere:0, poolKharab:0, reRejected:0, stillInPool:0};
+      });
       (state.brushProcessingLog||[]).forEach(r=>{
         if(!r || r.voided || r.totalInput==null || r.sourceBatch!=='REWORK') return;
         const p = pool[r.productName] = pool[r.productName] || {poolFreshIn:0, poolHandled:0, poolGood:0, poolKeere:0, poolKharab:0, reRejected:0, stillInPool:0};
@@ -5139,7 +5251,10 @@ function compileActivityData(){
         p.stillInPool = poolRow + pendingPoolInternal;
         p.awaitingEntryToPool = (state.reworkStock||[]).filter(x=>x && x.status==='pending' && x.productName===prod && x.category==='Kharab' && x.batchNo!=='REWORK').reduce((s,x)=>s+(x.qty||0),0);
         p.downcycledOut = (state.brushScrapLog||[]).filter(l=>l && l.batchNo==='REWORK' && l.productName===prod).reduce((s,l)=>s+(l.qty||0),0);
-        p.poolClosureDelta = p.poolFreshIn - (p.poolGood + p.poolKeere + p.poolKharab + p.downcycledOut + p.stillInPool);
+        // 30/9: Reclaim (scrap → basket) is an ARRIVAL into the pool — counted beside
+        // poolFreshIn so the identity holds for old-era lots and reversed downcycles alike.
+        p.reclaimedIn = (state.reworkReclaimLog||[]).filter(l=>l && l.productName===prod).reduce((s,l)=>s+(l.qty||0),0);
+        p.poolClosureDelta = (p.poolFreshIn + p.reclaimedIn) - (p.poolGood + p.poolKeere + p.poolKharab + p.downcycledOut + p.stillInPool);
         // 28/9 (Owner): fate RATES of decided pool pieces — the basis for per-batch estimates.
         const decided = p.poolGood + p.poolKeere + p.poolKharab + p.downcycledOut;
         p.decidedPcs = decided;
@@ -5173,7 +5288,7 @@ function compileActivityData(){
       });
       return {perBatch: agg, reworkPool: pool};
     })(),
-    brushLoopNote:'REWORK LOOP RULE (FINAL, 29/9 — mirrors the floor\'s basket tags): FOUR reject categories. COLOR and REGMAL KEEP their batch tag end-to-end: rework returns them to their OWN batch, they re-brush under the same number, and their outcomes are EXACT inside that batch\'s books (colorRegmalInLoop = exact WIP still cycling). ONLY KHARAB loses its tag: it is the batch\'s terminal fate \'sentToRework\' and enters the per-product REWORK pool; pool outcomes are per-product only and estimates for a batch\'s kharab use the pool\'s fate rates, always labeled estimated. KEERE WALA is the only terminal wastage. Smaller-product scrap material is created ONLY by the Downcycle action on the REWORK basket. once reworked they live in the per-product REWORK pool (batch tag removed, exactly as on the floor) and cycle until each piece ends as pool brush output, Kharab downcycle, or Keere wastage. Use brushLoopByProductBatch.perBatch for per-batch questions (freshIn denominator; closureDelta==0 means balanced) and .reworkPool for the pool (poolFreshIn denominator; internal re-rejects cancel; downcycledOut = pieces pulled from the REWORK basket as raw material for smaller products — a terminal pool fate). NEVER attribute a rework-pool outcome to a specific original batch as FACT — that precision does not exist physically. The ONLY sanctioned way to answer \'total/estimated batch waste including rework pieces\' is perBatch.estimatedFinal: exact first-pass books plus the batch\'s sentToRework allocated by the pool\'s measured fate rates. ALWAYS present those figures with the word \'estimated\' and name the method; exact figures and estimates must never be mixed without labels. WORKLOAD questions may use handledTotal/poolHandled (every pass counts).',
+    brushLoopNote:'REWORK LOOP RULE (FINAL, 29/9 — mirrors the floor\'s basket tags): FOUR reject categories. COLOR and REGMAL KEEP their batch tag end-to-end: rework returns them to their OWN batch, they re-brush under the same number, and their outcomes are EXACT inside that batch\'s books (colorRegmalInLoop = exact WIP still cycling). ONLY KHARAB loses its tag: it is the batch\'s terminal fate \'sentToRework\' and enters the per-product REWORK pool; pool outcomes are per-product only and estimates for a batch\'s kharab use the pool\'s fate rates, always labeled estimated. KEERE WALA is the only terminal wastage. Smaller-product scrap material is created ONLY by the Downcycle action on the REWORK basket. once reworked they live in the per-product REWORK pool (batch tag removed, exactly as on the floor) and cycle until each piece ends as pool brush output, Kharab downcycle, or Keere wastage. Use brushLoopByProductBatch.perBatch for per-batch questions (freshIn denominator; closureDelta==0 means balanced) and .reworkPool for the pool (poolFreshIn denominator; internal re-rejects cancel; downcycledOut = pieces pulled from the REWORK basket as raw material for smaller products — a terminal pool fate). NEVER attribute a rework-pool outcome to a specific original batch as FACT — that precision does not exist physically. The ONLY sanctioned way to answer \'total/estimated batch waste including rework pieces\' is perBatch.estimatedFinal: exact first-pass books plus the batch\'s sentToRework allocated by the pool\'s measured fate rates. ALWAYS present those figures with the word \'estimated\' and name the method; exact figures and estimates must never be mixed without labels. WORKLOAD questions may use handledTotal/poolHandled (every pass counts). reclaimedIn = scrap material moved BACK into the pool via the Reclaim action (reverse of Downcycle; arrival-side term of the pool identity) — typically old-era BrushScrap lots found to be physically re-brushable.',
     brushScrapByBatch: (function(){
       // 28/9 (Owner: "brush scrap percentage per batch"): scrap items encode batch+kind+
       // product in their names (WB008-Rejected-Commando Broom). Aggregated per batch with
@@ -10183,12 +10298,13 @@ function runSystemWatch(explainedBatches){
         const stillInPool = (state.finishedInventory||[]).filter(f=>f && f.productName===prod && f.batchNo==='REWORK').reduce((s,f)=>s+(f.qty||0),0)
           + (state.reworkStock||[]).filter(x=>x && x.status==='pending' && x.productName===prod && x.batchNo==='REWORK').reduce((s,x)=>s+(x.qty||0),0);
         const downcycled = (state.brushScrapLog||[]).filter(l=>l && l.batchNo==='REWORK' && l.productName===prod).reduce((s,l)=>s+(l.qty||0),0);
+        const reclaimed = (state.reworkReclaimLog||[]).filter(l=>l && l.productName===prod).reduce((s,l)=>s+(l.qty||0),0);
         const p = pool[prod];
-        const delta = poolFreshIn - (p.good + p.keere + p.kharab + downcycled + stillInPool);
+        const delta = (poolFreshIn + reclaimed) - (p.good + p.keere + p.kharab + downcycled + stillInPool);
         if(Math.abs(delta) > 2){
           findings.push(addSystemFinding('loop-leak', 'brushloop|REWORKPOOL|'+prod,
             `REWORK pool does not balance for ${prod} — ${Math.abs(delta)} pcs ${delta>0?'unaccounted':'double-entered'}`,
-            `Pieces that ever entered the ${prod} rework pool: ${poolFreshIn}. Should equal pool brush output ${p.good} + Keere ${p.keere} + Kharab ${p.kharab} + downcycled out ${downcycled} + still in the pool ${stillInPool}. Differs by ${delta}.`,
+            `Pieces that ever entered the ${prod} rework pool: ${poolFreshIn} from brushing + ${reclaimed} reclaimed from scrap. Should equal pool brush output ${p.good} + Keere ${p.keere} + Kharab ${p.kharab} + downcycled out ${downcycled} + still in the pool ${stillInPool}. Differs by ${delta}.`,
             'Brush Dept'));
         }
       });
