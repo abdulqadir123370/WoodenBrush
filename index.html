@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1790764148534;
+const APP_BUILD = 1790765886769;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -2388,6 +2388,9 @@ function renderProduction(){
     html+=`<div id="prodMsg"></div></div>`;
   } else {
     const runs=openBatch.runs||[];
+    // 30/9: while a batch is open, the batch selector (Inventory + Scrap Batches) hides by
+    // design — which read as "all the brush scrap pieces are gone." Say so instead.
+    html+=`<div style="font-size:10px;color:#888;margin-bottom:6px;">ℹ️ Batch list (incl. ♻️ Scrap Batches) is hidden while a batch is open for this size — nothing is gone. Close this batch to see it again; scrap lots are always on the Inventory tab.</div>`;
     const totalPlanks=runs.filter(r=>!r.voided).reduce((s,r)=>s+r.planksUsed,0);
     const totalPieces=runs.filter(r=>!r.voided).reduce((s,r)=>s+r.piecesProduced,0);
     const effSize=openBatch.isScrap?(openBatch.scrapSize||parseInt(size)):parseInt(size);
@@ -3130,6 +3133,18 @@ function renderBrushDept(){
     <div style="font-size:11px;color:#888;">Select finished wood stock to process on the brush machine.</div>
   </div>`;
 
+  // 30/9 (Owner): the REWORK baskets had no home of their own — a reclaimed lot landed as
+  // one row at the BOTTOM of the long stock picker and "didn't appear anywhere." Dedicated
+  // overview card, always at the top, one line per product basket.
+  const baskets = finished.filter(f=>f && f.batchNo==='REWORK' && f.qty>0);
+  if(baskets.length>0){
+    html += `<div class="card" style="border:2px solid #a0722c;background:#faf6f0;">
+      <div class="label" style="color:#a0722c;">🧺 REWORK Baskets (${baskets.reduce((s,f)=>s+f.qty,0)} pcs total)</div>
+      <div style="font-size:11px;color:#888;margin-bottom:6px;">Per-product pool of re-brushable pieces (Kharab + reclaimed scrap). Select a basket in the stock list below to re-brush it; ⤵️ Downcycle lives on the Wood Finishing tab.</div>
+      ${baskets.map(f=>`<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;"><span>🧺 ${f.productName} (${f.size}")</span><span style="color:#a0722c;font-weight:700;">${f.qty} pcs</span></div>`).join('')}
+    </div>`;
+  }
+
   // Available finished wood stock to select from
   html += `<div class="card">
     <div class="label">📦 Finished Wood Stock (from Wood Finishing)</div>`;
@@ -3138,9 +3153,10 @@ function renderBrushDept(){
   } else {
     finished.forEach(f=>{
       const sel = selectedId===f.id;
-      html += `<button class="select-batch-btn ${sel?'selected':''}" onclick="selectBrushStock(${JSON.stringify(f.id)})">
-        <span>${f.productName} (${f.size}") — ${f.batchNo}</span>
-        <span class="green" style="font-weight:700;">${f.qty} pcs</span>
+      const isBasket = f.batchNo==='REWORK';
+      html += `<button class="select-batch-btn ${sel?'selected':''}" style="${isBasket?'background:#faf6f0;border-color:#a0722c;':''}" onclick="selectBrushStock(${JSON.stringify(f.id)})">
+        <span>${isBasket?'🧺 ':''}${f.productName} (${f.size}") — ${isBasket?'REWORK basket':f.batchNo}</span>
+        <span class="${isBasket?'':'green'}" style="font-weight:700;${isBasket?'color:#a0722c;':''}">${f.qty} pcs</span>
       </button>`;
     });
   }
