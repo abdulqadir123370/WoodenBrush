@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1790745286871;
+const APP_BUILD = 1790747859797;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -10322,6 +10322,21 @@ function mergeDuplicateFinishedRows(){
     state.finishedInventory = state.finishedInventory.filter(f=>!rows.slice(1).some(d=>d.id===f.id));
     notes.push(`${keep.productName} (${keep.batchNo}): ${rows.length} split stock rows merged into one (${keep.qty} pcs total) — sync race between devices had divided the same batch's stock`);
   });
+  // 30/9 (same class as WB012, preventive): readyForSale is built with the same
+  // findIndex-or-push pattern, so the same two-device race can split one product+FB batch
+  // into two rows — and every sales/dispatch lookup uses .find(), which only ever sees the
+  // FIRST row, silently hiding the rest of the stock. Same pure consolidation: same
+  // productName+batchNo is one stock by definition; totals unchanged.
+  const rfsGroups = {};
+  (state.readyForSale||[]).forEach(r=>{ if(!r) return; const k=r.productName+'||'+r.batchNo; (rfsGroups[k]=rfsGroups[k]||[]).push(r); });
+  Object.values(rfsGroups).forEach(rows=>{
+    if(rows.length<2) return;
+    rows.sort((a,b)=>String(a.id).localeCompare(String(b.id)));
+    const keep = rows[0];
+    for(let i=1;i<rows.length;i++){ keep.qty += (rows[i].qty||0); }
+    state.readyForSale = state.readyForSale.filter(r=>!rows.slice(1).some(d=>d.id===r.id));
+    notes.push(`${keep.productName} (${keep.batchNo}) Ready-for-Sale: ${rows.length} split stock rows merged into one (${keep.qty} pcs total) — sync race between devices had divided the same batch's stock`);
+  });
   return notes;
 }
 function runAutoFixCycle(){
@@ -12867,6 +12882,18 @@ document.getElementById('appleTouchIcon').setAttribute('href', manifest.icons[0]
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').catch(()=>{});
 }
+
+// 30/9: tiny permanent build stamp. A forwarded screenshot of any screen must
+// self-identify which build produced it — a stale-build error screenshot with no
+// build number cost a full debugging round (WB012 "Only 341 pcs" report that
+// turned out to predate the fix). Non-interactive, below banners/walls.
+(function(){
+  const bs = document.createElement('div');
+  bs.id = 'buildStamp';
+  bs.textContent = 'build ' + APP_BUILD;
+  bs.style.cssText = 'position:fixed;bottom:2px;left:5px;font-size:9px;color:#b5a99a;z-index:996;pointer-events:none;font-family:monospace;letter-spacing:.3px;';
+  document.body.appendChild(bs);
+})();
 
 // Show install prompt
 let deferredPrompt;
