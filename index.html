@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1790687997776;
+const APP_BUILD = 1790745286871;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -3236,6 +3236,17 @@ function recordBrushProcessing(){
   const brushMachine = Math.max(0, total-color-regmal-scrap-wastageQty);
 
   if(!total||total<=0){ if(msgEl){msgEl.textContent="⚠️ Enter quantity to process";msgEl.className="msg err";} return; }
+  // 30/9 (WB012 incident, Safiullah): a sync race between two devices can SPLIT one
+  // product+batch into two stock rows — the header sums the group (2610) while this check
+  // read one row (341) and refused a valid entry. Consolidate the group into the selected
+  // row first; availability and consumption then see the true total. Nothing is created
+  // or lost — rows of the same product+batch are one stock by definition.
+  const dupRows = (state.finishedInventory||[]).filter(f=>f && f.id!==stock.id && f.productName===stock.productName && f.batchNo===stock.batchNo);
+  if(dupRows.length>0){
+    dupRows.forEach(d=>{ stock.qty += (d.qty||0); stock.reworkQty = (stock.reworkQty||0) + (d.reworkQty||0); });
+    state.finishedInventory = (state.finishedInventory||[]).filter(f=>!dupRows.some(d=>d.id===f.id))
+      .map(f=>f.id===stock.id?{...f, qty:stock.qty, reworkQty:(stock.reworkQty||0)}:f);
+  }
   if(total>stock.qty){ if(msgEl){msgEl.textContent=`⚠️ Only ${stock.qty} pcs available`;msgEl.className="msg err";} return; }
   if(color+regmal+scrap+wastageQty>total){ if(msgEl){msgEl.textContent="⚠️ Category totals exceed quantity being processed";msgEl.className="msg err";} return; }
   if(wastageQty>0 && !wastageKg){ if(msgEl){msgEl.textContent="⚠️ Enter weight (KG) for Keere Wala wastage";msgEl.className="msg err";} return; }
@@ -3387,12 +3398,16 @@ function markReworkCompleted(id){
   // loses its tag and joins the per-product REWORK basket (item.batchNo==='REWORK' items
   // are pool-internal re-rejects and return to the REWORK row too).
   const targetBatch = (item.category==='Kharab' || item.batchNo==='REWORK') ? 'REWORK' : item.batchNo;
+  // 30/9 ERA FIX: legacy items (created before loop accounting; no fromRunId) return as
+  // FRESH stock — no reworkQty — so their next brush pass counts in freshIn and the era
+  // boundary stays clean. Split-era items keep the rework marker as before.
+  const isSplitEra = !!item.fromRunId || item.batchNo==='REWORK';
   const idx=(state.finishedInventory||[]).findIndex(f=>f.productName===item.productName&&f.batchNo===targetBatch);
-  if(idx>=0){ state.finishedInventory[idx].qty += item.qty; state.finishedInventory[idx].reworkQty = (state.finishedInventory[idx].reworkQty||0) + item.qty; }
+  if(idx>=0){ state.finishedInventory[idx].qty += item.qty; if(isSplitEra) state.finishedInventory[idx].reworkQty = (state.finishedInventory[idx].reworkQty||0) + item.qty; }
   else{
     state.finishedInventory=[...(state.finishedInventory||[]),{
       id:Date.now()+Math.random(), productName:item.productName, size:item.size,
-      batchNo:targetBatch, qty:item.qty, reworkQty:item.qty, dateAdded:new Date().toISOString().slice(0,10)
+      batchNo:targetBatch, qty:item.qty, reworkQty:(isSplitEra?item.qty:0), dateAdded:new Date().toISOString().slice(0,10)
     }];
   }
   state.reworkStock = rework.map(r=>r.id===id?{...r,status:'completed',completedDate:new Date().toISOString().slice(0,10)}:r);
@@ -5032,7 +5047,9 @@ function compileActivityData(){
         // Only Kharab leaves the batch (to the REWORK pool). kharabTerm = legacy scrap era.
         const [prod, batch] = k.split(' | ');
         a.sentToRework = (a.kharabRW||0); // kharab only — the piece-flow that leaves this batch
-        a.colorRegmalInLoop = (state.reworkStock||[]).filter(x=>x && x.status==='pending' && x.productName===prod && x.batchNo===batch && x.category!=='Kharab').reduce((s,x)=>s+(x.qty||0),0)
+        // 30/9 ERA FIX (watch caught it): only split-era items (fromRunId present) belong in
+        // this identity — legacy pending rework predates freshIn and must not count as a fate.
+        a.colorRegmalInLoop = (state.reworkStock||[]).filter(x=>x && x.status==='pending' && x.fromRunId && x.productName===prod && x.batchNo===batch && x.category!=='Kharab').reduce((s,x)=>s+(x.qty||0),0)
           + (state.finishedInventory||[]).filter(f=>f && f.productName===prod && f.batchNo===batch).reduce((s,f)=>s+(f.reworkQty||0),0);
         a.closureDelta = a.freshIn - (a.brushGood + a.keereOut + (a.kharabTerm||0) + a.sentToRework + a.colorRegmalInLoop);
         a.goodPctOfFresh = a.freshIn>0 ? +((a.brushGood/a.freshIn)*100).toFixed(1) : null;
@@ -5043,7 +5060,7 @@ function compileActivityData(){
         if(!x || x.status!=='completed') return;
         const p = pool[x.productName] = pool[x.productName] || {poolFreshIn:0, poolHandled:0, poolGood:0, poolKeere:0, poolKharab:0, reRejected:0, stillInPool:0};
         // 29/9: only Kharab enters the pool (Color/Regmal return to their own batch)
-        if(x.batchNo!=='REWORK' && x.category==='Kharab') p.poolFreshIn += (x.qty||0);
+        if(x.batchNo!=='REWORK' && x.category==='Kharab' && x.fromRunId) p.poolFreshIn += (x.qty||0);
       });
       (state.brushProcessingLog||[]).forEach(r=>{
         if(!r || r.voided || r.totalInput==null || r.sourceBatch!=='REWORK') return;
@@ -10089,7 +10106,7 @@ function runSystemWatch(explainedBatches){
       });
       Object.entries(perB).forEach(([k,a])=>{
         const [prod, batch] = k.split(' | ');
-        const crInLoop = (state.reworkStock||[]).filter(x=>x && x.status==='pending' && x.productName===prod && x.batchNo===batch && x.category!=='Kharab').reduce((s,x)=>s+(x.qty||0),0)
+        const crInLoop = (state.reworkStock||[]).filter(x=>x && x.status==='pending' && x.fromRunId && x.productName===prod && x.batchNo===batch && x.category!=='Kharab').reduce((s,x)=>s+(x.qty||0),0)
           + (state.finishedInventory||[]).filter(f=>f && f.productName===prod && f.batchNo===batch).reduce((s,f)=>s+(f.reworkQty||0),0);
         const delta = a.freshIn - (a.good + a.keere + a.kharab + a.sent + crInLoop);
         if(Math.abs(delta) > 2){
@@ -10100,7 +10117,7 @@ function runSystemWatch(explainedBatches){
         }
       });
       Object.keys(pool).forEach(prod=>{
-        const poolFreshIn = (state.reworkStock||[]).filter(x=>x && x.status==='completed' && x.productName===prod && x.batchNo!=='REWORK' && x.category==='Kharab').reduce((s,x)=>s+(x.qty||0),0);
+        const poolFreshIn = (state.reworkStock||[]).filter(x=>x && x.status==='completed' && x.productName===prod && x.batchNo!=='REWORK' && x.category==='Kharab' && x.fromRunId).reduce((s,x)=>s+(x.qty||0),0);
         const stillInPool = (state.finishedInventory||[]).filter(f=>f && f.productName===prod && f.batchNo==='REWORK').reduce((s,f)=>s+(f.qty||0),0)
           + (state.reworkStock||[]).filter(x=>x && x.status==='pending' && x.productName===prod && x.batchNo==='REWORK').reduce((s,x)=>s+(x.qty||0),0);
         const downcycled = (state.brushScrapLog||[]).filter(l=>l && l.batchNo==='REWORK' && l.productName===prod).reduce((s,l)=>s+(l.qty||0),0);
@@ -10288,6 +10305,25 @@ function resolveAmbiguousBatchName(batchNo, stray, target){
   renderAutoFixResults();
 }
 
+function mergeDuplicateFinishedRows(){
+  // 30/9 (WB012): heal sync-race split rows — same productName+batchNo must be ONE stock
+  // row. Sums qty and reworkQty into the oldest row; removes the rest. Pure consolidation:
+  // totals unchanged, so ledgers, identities and snapshots all stay consistent.
+  const groups = {};
+  (state.finishedInventory||[]).forEach(f=>{ if(!f) return; const k=f.productName+'||'+f.batchNo; (groups[k]=groups[k]||[]).push(f); });
+  const notes = [];
+  Object.values(groups).forEach(rows=>{
+    if(rows.length<2) return;
+    rows.sort((a,b)=>String(a.id).localeCompare(String(b.id)));
+    const keep = rows[0];
+    let addQ=0, addR=0;
+    for(let i=1;i<rows.length;i++){ addQ += (rows[i].qty||0); addR += (rows[i].reworkQty||0); }
+    keep.qty += addQ; keep.reworkQty = (keep.reworkQty||0) + addR;
+    state.finishedInventory = state.finishedInventory.filter(f=>!rows.slice(1).some(d=>d.id===f.id));
+    notes.push(`${keep.productName} (${keep.batchNo}): ${rows.length} split stock rows merged into one (${keep.qty} pcs total) — sync race between devices had divided the same batch's stock`);
+  });
+  return notes;
+}
 function runAutoFixCycle(){
   if(window._zombieBuild) return; // 14/09: stale builds must not compute or "fix" anything
 
@@ -10318,6 +10354,8 @@ function runAutoFixCycle(){
     state.woodPieces = (state.woodPieces||[]).filter(w=>w.name!==r.name);
     applied.push(`Catalog cleanup: "${r.name}" was proven to be a rename remnant of "${r.target}" (never once produced under that name, and sitting as a wrong label on batch${r.batches.length>1?'es':''} ${r.batches.join(', ')}) — records corrected and the stale catalog entry removed`);
   });
+
+  mergeDuplicateFinishedRows().forEach(n=>applied.push('Stock row consolidation: '+n));
 
   const namePlan = planBatchNameFixes();
   const structural = collectStructuralFixes();
