@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1790753021813;
+const APP_BUILD = 1790756236740;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -2271,12 +2271,22 @@ function renderProduction(){
       <div class="label" style="color:#3498db;">🎨 Rework Pending (Color / Regmal / Kharab)</div>
       <div style="font-size:11px;color:#888;margin-bottom:8px;">Fix and Mark Done. Color/Regmal return to their OWN batch (tag stays); Kharab goes to the REWORK basket (tag replaced). Smaller-product material comes only via the Downcycle button.</div>`;
     rework.forEach(r=>{
-      reworkHtml += `<div style="display:flex;justify-content:space-between;align-items:center;background:#e8f4fd;border-radius:6px;padding:8px 10px;margin-bottom:6px;">
+      // 30/9 (Safiullah, WB012): all four categories showed one identical "Mark Done", so the
+      // floor read Kharab's as "fixed → back to 11-inch brushing" and feared pieces destined
+      // for 9"/5" downcycling would be forced through as 11". Routing was always different per
+      // category — now each card and button SAYS its destination, and Kharab's names the
+      // Downcycle path explicitly.
+      const isKharab = r.category==='Kharab';
+      const destNote = isKharab
+        ? `➜ goes to the <b>REWORK basket</b> — from there: re-brush as ${r.size}\" <b>or</b> ⤵️ Downcycle into smaller-product material (9\"/5\")`
+        : `➜ returns to <b>Batch ${r.batchNo}</b> stock for re-brushing (tag stays)`;
+      reworkHtml += `<div style="display:flex;justify-content:space-between;align-items:center;background:${isKharab?'#f5ede3':'#e8f4fd'};border-radius:6px;padding:8px 10px;margin-bottom:6px;gap:8px;">
         <div>
           <div style="font-size:12px;font-weight:700;">${r.productName} (${r.size}")</div>
           <div style="font-size:10px;color:#888;">${r.category} · Batch ${r.batchNo} · ${r.qty} pcs · since ${r.dateAdded}</div>
+          <div style="font-size:10px;color:${isKharab?'#a0722c':'#2980b9'};margin-top:2px;">${destNote}</div>
         </div>
-        <button class="btn btn-blue" style="font-size:11px;padding:6px 10px;" onclick="markReworkCompleted(${JSON.stringify(r.id)})">✅ Mark Done</button>
+        <button class="btn btn-blue" style="font-size:11px;padding:6px 10px;white-space:nowrap;${isKharab?'background:#a0722c;':''}" onclick="markReworkCompleted(${JSON.stringify(r.id)})">${isKharab?'📦 To Rework Basket':'✅ Mark Done'}</button>
       </div>`;
     });
     reworkHtml += `</div>`;
