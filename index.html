@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1790765886769;
+const APP_BUILD = 1790766391115;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -2301,6 +2301,11 @@ function renderProduction(){
   // keeping the pool books exactly balanced.
   const reworkRows = (state.finishedInventory||[]).filter(f=>f && f.batchNo==='REWORK' && f.qty>0);
   if(reworkRows.length>0){
+    reworkHtml += `<div class="card" style="border:2px solid #a0722c;background:#faf6f0;">
+      <div class="label" style="color:#a0722c;">🧺 REWORK Baskets (${reworkRows.reduce((s,f)=>s+f.qty,0)} pcs total)</div>
+      <div style="font-size:11px;color:#888;margin-bottom:6px;">Per-product pool of re-brushable pieces (Kharab marked done + reclaimed scrap). To re-brush: select the 🧺 basket in Brush Dept's stock list. To cut into smaller products: ⤵️ Downcycle below.</div>
+      ${reworkRows.map(f=>`<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;"><span>🧺 ${f.productName} (${f.size}")</span><span style="color:#a0722c;font-weight:700;">${f.qty} pcs</span></div>`).join('')}
+    </div>`;
     reworkHtml += `<div class="card" style="border:2px solid #7a5230;">
       <div class="label" style="color:#7a5230;">⤵️ Downcycle from REWORK Basket</div>
       <div style="font-size:11px;color:#888;margin-bottom:8px;">Pieces taken out of the REWORK basket to be cut into smaller products. They leave the rework loop and appear as scrap material in the batch selector below.</div>
@@ -3132,18 +3137,6 @@ function renderBrushDept(){
     <div class="label">🪥 Brush Department — Drill &amp; Tuft</div>
     <div style="font-size:11px;color:#888;">Select finished wood stock to process on the brush machine.</div>
   </div>`;
-
-  // 30/9 (Owner): the REWORK baskets had no home of their own — a reclaimed lot landed as
-  // one row at the BOTTOM of the long stock picker and "didn't appear anywhere." Dedicated
-  // overview card, always at the top, one line per product basket.
-  const baskets = finished.filter(f=>f && f.batchNo==='REWORK' && f.qty>0);
-  if(baskets.length>0){
-    html += `<div class="card" style="border:2px solid #a0722c;background:#faf6f0;">
-      <div class="label" style="color:#a0722c;">🧺 REWORK Baskets (${baskets.reduce((s,f)=>s+f.qty,0)} pcs total)</div>
-      <div style="font-size:11px;color:#888;margin-bottom:6px;">Per-product pool of re-brushable pieces (Kharab + reclaimed scrap). Select a basket in the stock list below to re-brush it; ⤵️ Downcycle lives on the Wood Finishing tab.</div>
-      ${baskets.map(f=>`<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;"><span>🧺 ${f.productName} (${f.size}")</span><span style="color:#a0722c;font-weight:700;">${f.qty} pcs</span></div>`).join('')}
-    </div>`;
-  }
 
   // Available finished wood stock to select from
   html += `<div class="card">
