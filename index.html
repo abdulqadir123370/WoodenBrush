@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1790747859797;
+const APP_BUILD = 1790749434402;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -286,7 +286,8 @@ const SK = {
   packingLog:"wbt_packing_log",           // Append-only log of every packing run
   dispatches:"wbt_dispatches",            // Permanent dispatch records (gate pass, customer, vehicle) — voidable, never deleted
   packingVariances:"wbt_packing_variances", // Physical-count differences found at packing — permanent, flagged to Admin/Owner
-  receiptVouchers:"wbt_receipt_vouchers"   // Receipt Vouchers (RV series, 15/09): cash-handover-to-Owner records against sales — printable, append-only
+  receiptVouchers:"wbt_receipt_vouchers",   // Receipt Vouchers (RV series, 15/09): cash-handover-to-Owner records against sales — printable, append-only
+  rowTombstones:"wbt_row_tombstones"       // 30/9 (WB012 recurring-split): docIds of stock rows merged away by consolidation — once here, a row can NEVER come back (stale devices kept resurrecting merged-away rows, and re-merging a resurrected row double-counts its pcs)
 };
 
 const DEFAULT_USERS = [
@@ -345,7 +346,28 @@ const FIREBASE_CONFIG = {
 const LEGACY_COLLECTION = 'brushTrackerData'; // old whole-list format, migrated from on first run
 const META_COLLECTION = 'wbt_meta';
 // Collections stored as key→object maps rather than arrays:
-const MAP_COLLECTIONS = { materials:1, openBatches:1, batchGenealogy:1 };
+const MAP_COLLECTIONS = { materials:1, openBatches:1, batchGenealogy:1, rowTombstones:1 };
+
+// 30/9 (WB012 recurring-split): which array collections tombstones protect. A duplicate row
+// merged away by consolidation gets its docId buried here; the graveyard syncs like any map
+// collection, every device drops buried rows from incoming snapshots (and keeps re-deleting
+// them from the server), and recordsOf never pushes one. A stale device resurrecting a
+// merged-away row was the recurrence engine — and each resurrection, re-merged by a naive
+// sum, would double-count that row's pieces. Fresh race-splits still merge once, correctly:
+// new rows always carry new ids.
+const TOMBSTONED_COLLECTIONS = { finishedInventory:1, readyForSale:1 };
+function buryRow(rec){
+  const k = recKey(rec);
+  if(k===null) return;
+  state.rowTombstones = state.rowTombstones || {};
+  state.rowTombstones[String(k)] = { ts: Date.now() };
+  const ids = Object.keys(state.rowTombstones);
+  if(ids.length > 800){ // bounded graveyard: oldest fall out once resurrection is long impossible
+    ids.sort((a,b)=>((state.rowTombstones[a].ts||0)-(state.rowTombstones[b].ts||0)))
+       .slice(0, ids.length-800).forEach(id=>{ delete state.rowTombstones[id]; });
+  }
+}
+function isBuried(docId){ return !!((state.rowTombstones||{})[String(docId)]); }
 
 // ==================== APP CHECK (anti-abuse shield) ====================
 // When configured, Firebase only accepts database requests coming from THIS app running on
@@ -470,6 +492,7 @@ function recordsOf(stateKey){
     const noOrd = stateKey==='systemFindings' || stateKey==='dataSnapshots'; // both prepend-newest; _ord stamping made every insert rewrite the whole collection (~84 snapshot docs every 2h = the ~620 writes/day on the usage graph)
     (val||[]).forEach((r,i)=>{
       const k = recKey(r);
+      if(k!==null && TOMBSTONED_COLLECTIONS[stateKey] && isBuried(k)) return; // buried rows never sync out
       if(k!==null){ if(noOrd){ if(r._ord!==undefined) delete r._ord; } else { r._ord = i; } out[k]=r; }
     });
   }
@@ -1192,6 +1215,12 @@ function attachFirestoreListeners(onAllFirstSnapshots){
           }
           // Server HAS users → server wins unconditionally; discard any locally-seeded defaults.
         }
+        if(TOMBSTONED_COLLECTIONS[stateKey]){
+          // 30/9: buried rows are dead whoever sends them. Drop from state (recs) but keep
+          // the shadow entry — shadow-has-it / state-doesn't is exactly the diff signature
+          // that makes doFirestoreSync emit the server delete on the next pass.
+          Object.keys(recs).forEach(docId=>{ if(isBuried(docId)){ delete recs[docId]; } });
+        }
         if(MAP_COLLECTIONS[stateKey]){
           state[stateKey] = recs;
         } else {
@@ -1863,6 +1892,7 @@ let state = {
   sales: ld(SK.sales, []),
   users: ld(SK.users, DEFAULT_USERS),
   finishedInventory: ld(SK.finishedInventory, []),
+  rowTombstones: ld(SK.rowTombstones, {}),
   reworkStock: ld(SK.reworkStock, []),
   finishedBrushes: ld(SK.finishedBrushes, []),
   brushScrapLog: ld(SK.brushScrapLog, []),
@@ -1932,6 +1962,7 @@ function saveAll(){
   sv(SK.brushProcessingLog,state.brushProcessingLog);
   sv(SK.dataSnapshots,state.dataSnapshots);
   sv(SK.systemFindings,state.systemFindings);
+  sv(SK.rowTombstones,state.rowTombstones);
   sv(SK.socketProcessingLog,state.socketProcessingLog);
   sv(SK.colors,state.colors); sv(SK.boxTypes,state.boxTypes);
   sv(SK.packedBoxes,state.packedBoxes); sv(SK.packingLog,state.packingLog);
@@ -3243,7 +3274,7 @@ function recordBrushProcessing(){
   // or lost — rows of the same product+batch are one stock by definition.
   const dupRows = (state.finishedInventory||[]).filter(f=>f && f.id!==stock.id && f.productName===stock.productName && f.batchNo===stock.batchNo);
   if(dupRows.length>0){
-    dupRows.forEach(d=>{ stock.qty += (d.qty||0); stock.reworkQty = (stock.reworkQty||0) + (d.reworkQty||0); });
+    dupRows.forEach(d=>{ stock.qty += (d.qty||0); stock.reworkQty = (stock.reworkQty||0) + (d.reworkQty||0); buryRow(d); });
     state.finishedInventory = (state.finishedInventory||[]).filter(f=>!dupRows.some(d=>d.id===f.id))
       .map(f=>f.id===stock.id?{...f, qty:stock.qty, reworkQty:(stock.reworkQty||0)}:f);
   }
@@ -10262,7 +10293,15 @@ function renderFindingsInboxHTML(){
     html += `<div style="background:#fdecea;border:1px solid #e74c3c;border-radius:8px;padding:10px;margin-bottom:8px;">
       <div style="font-size:12px;font-weight:700;color:#c0392b;">${f.title}</div>
       <div style="font-size:11px;color:#555;margin:4px 0;">${f.detail}</div>
-      <div style="font-size:10px;color:#888;">First seen: ${new Date(f.ts).toLocaleString()}${f.timesSeen>1?` · still present after ${f.timesSeen} checks`:''}</div>
+      <div style="font-size:10px;color:#888;">First seen: ${new Date(f.ts).toLocaleString()}${f.timesSeen>1?` · detected ${f.timesSeen} times`:''}</div>
+      ${(()=>{ const ls=f.lastSeen||f.ts; const ageMin=Math.round((Date.now()-ls)/60000);
+        // 30/9: live-vs-stale must be visible on the card itself. A WB012 split finding from
+        // 29/9 stayed bright red long after Auto-Fix had merged the rows — indistinguishable
+        // from a live alarm, and it cost a debugging round. Checks run 2-hourly (plus every
+        // app load), so >3h without re-detection means the condition has stopped appearing.
+        return (Date.now()-ls) > 3*60*60*1000
+          ? `<div style="font-size:10px;color:#27ae60;font-weight:700;margin-top:2px;">⏳ NOT re-detected in the last ${ageMin>=120?Math.round(ageMin/60)+' hours':ageMin+' min'} (last: ${new Date(ls).toLocaleString()}) — the condition has stopped appearing in checks. Likely already fixed; verify and Mark handled.</div>`
+          : `<div style="font-size:10px;color:#c0392b;font-weight:700;margin-top:2px;">🔴 STILL LIVE — last detected ${ageMin<=2?'just now':ageMin+' min ago'} (${new Date(ls).toLocaleString()}).</div>`; })()}
       <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;">
         <button class="btn" style="background:#2980b9;color:#fff;font-size:11px;padding:4px 10px;" onclick="jumpToFindingTab('${f.tab}')">↗ Open ${tabDisplayLabel(f.tab)}</button>
         ${f.uiProofUrl?`<a class="btn" style="background:#c0392b;color:#fff;font-size:11px;padding:4px 10px;text-decoration:none;" target="_blank" rel="noopener" ${String(f.uiProofUrl).startsWith('data:')?`download="finding-screen-${String(f.id).replace(/[^0-9]/g,'')}.jpg"`:''} href="${f.uiProofUrl}">📸 Screen image (live UI)</a>`:''}
@@ -10319,6 +10358,7 @@ function mergeDuplicateFinishedRows(){
     let addQ=0, addR=0;
     for(let i=1;i<rows.length;i++){ addQ += (rows[i].qty||0); addR += (rows[i].reworkQty||0); }
     keep.qty += addQ; keep.reworkQty = (keep.reworkQty||0) + addR;
+    rows.slice(1).forEach(buryRow); // 30/9: merged-away rows can never resurrect
     state.finishedInventory = state.finishedInventory.filter(f=>!rows.slice(1).some(d=>d.id===f.id));
     notes.push(`${keep.productName} (${keep.batchNo}): ${rows.length} split stock rows merged into one (${keep.qty} pcs total) — sync race between devices had divided the same batch's stock`);
   });
@@ -10334,6 +10374,7 @@ function mergeDuplicateFinishedRows(){
     rows.sort((a,b)=>String(a.id).localeCompare(String(b.id)));
     const keep = rows[0];
     for(let i=1;i<rows.length;i++){ keep.qty += (rows[i].qty||0); }
+    rows.slice(1).forEach(buryRow); // 30/9: merged-away rows can never resurrect
     state.readyForSale = state.readyForSale.filter(r=>!rows.slice(1).some(d=>d.id===r.id));
     notes.push(`${keep.productName} (${keep.batchNo}) Ready-for-Sale: ${rows.length} split stock rows merged into one (${keep.qty} pcs total) — sync race between devices had divided the same batch's stock`);
   });
