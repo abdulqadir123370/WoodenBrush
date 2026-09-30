@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1790749434402;
+const APP_BUILD = 1790753021813;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -3287,6 +3287,15 @@ function recordBrushProcessing(){
 
   const today = new Date().toISOString().slice(0,10);
   const preSnapshot = takeSnapshot(['finishedInventory','reworkStock','brushScrapLog','wastage','finishedBrushes','scrapInventory','ledger','brushProcessingLog']);
+  const brushRunId = Date.now()+Math.random(); // one id links the log row and everything this run creates
+  // 30/9 THE WB012 "Only 341 pcs available" ROOT CAUSE: this declaration used to sit BELOW
+  // the Color/Regmal blocks that reference it (fromRunId) — a const in its temporal dead
+  // zone THROWS on access, so every entry with Color>0 or Regmal>0 crashed mid-submit:
+  // stock already deducted (2610→341), nothing else written, no save, no re-render. The
+  // button looked dead; the retry then honestly reported "Only 341 pcs available"
+  // (2610−2269). Entries with both at 0 never touched the dead zone — which is why only
+  // this shape of entry failed, on every device, on every build since the 28-29/9 rebuild.
+  try{ // any future throw below must never strand a half-applied entry again — see catch.
 
   // Deduct processed quantity from finished wood stock
   // 09/09/2026 (WB002 Jumbo incident): an emptied row is now kept at qty 0 instead of being
@@ -3301,7 +3310,10 @@ function recordBrushProcessing(){
   // fresh-in = brush good + keere + kharab + rework-in-loop, exactly, forever.
   const reworkPart = Math.min(total, stock.reworkQty||0);
   const freshPart = total - reworkPart;
-  state.finishedInventory = finished.map(f=>f.id===stock.id?{...f,qty:f.qty-total, reworkQty:Math.max(0,(f.reworkQty||0)-reworkPart)}:f).filter(f=>f.qty>0 || f.id===stock.id);
+  // 30/9: map over the CURRENT array, not the `finished` reference captured before the
+  // duplicate-row merge above — that stale reference still contained the merged-away row,
+  // so a split-row submit re-introduced the duplicate at the very moment it consumed stock.
+  state.finishedInventory = (state.finishedInventory||[]).map(f=>f.id===stock.id?{...f,qty:f.qty-total, reworkQty:Math.max(0,(f.reworkQty||0)-reworkPart)}:f).filter(f=>f.qty>0 || f.id===stock.id);
 
   // Color / Regmal → rework stock (pending)
   if(color>0){
@@ -3317,7 +3329,6 @@ function recordBrushProcessing(){
     }];
   }
 
-  const brushRunId = Date.now()+Math.random(); // one id links the log row and everything this run creates
   // 29/9 FINAL ROUTING (Owner, confirmed by WB004 test): FOUR categories at entry, and
   // Kharab joins the REWORK cycle like Color/Regmal (pending → Mark Done → REWORK basket
   // → re-brush). Scrap material for smaller products now comes ONLY through the explicit
@@ -3376,6 +3387,16 @@ function recordBrushProcessing(){
   }];
 
   addLedgerEntry('finished', stock.productName, stock.batchNo, total, 'OUT', `Sent to Brush Dept for processing`, '');
+  }catch(err){
+    // ROLLBACK: restore every collection this entry touches to its pre-entry photo, exactly
+    // as Undo does. Memory holds no half-applied entry, nothing was saved, and the person
+    // gets an honest failure instead of a dead button + a wrong availability number.
+    Object.entries(preSnapshot).forEach(([k,v])=>{ state[k]=v; });
+    console.error('Brush entry failed mid-write — rolled back cleanly:', err);
+    if(msgEl){msgEl.textContent='⚠️ Entry failed and was fully rolled back — nothing was recorded. Try again; if it repeats, send the owner this: '+String(err).slice(0,120);msgEl.className='msg err';}
+    if(typeof re==='function') re();
+    return;
+  }
 
   saveAll();
   state.brushSelectedStock = null;
