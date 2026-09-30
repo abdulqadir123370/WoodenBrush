@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1790767226347;
+const APP_BUILD = 1790768308821;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -2272,7 +2272,7 @@ function renderProduction(){
   if(rework.length>0){
     reworkHtml = `<div class="card" style="border:2px solid #3498db;">
       <div class="label" style="color:#3498db;">🎨 Rework Pending (Color / Regmal / Kharab)</div>
-      <div style="font-size:11px;color:#888;margin-bottom:8px;">Fix and Mark Done. Color/Regmal return to their OWN batch (tag stays); Kharab goes to the REWORK basket (tag replaced). Smaller-product material comes only via the Downcycle button.</div>`;
+      <div style="font-size:11px;color:#888;margin-bottom:8px;">Fix and Mark Done. Color/Regmal return to their OWN batch (tag stays); Kharab goes to the REWORK basket (tag replaced), then to Wood Finishing as raw material for re-treatment.</div>`;
     rework.forEach(r=>{
       // 30/9 (Safiullah, WB012): all four categories showed one identical "Mark Done", so the
       // floor read Kharab's as "fixed → back to 11-inch brushing" and feared pieces destined
@@ -2281,7 +2281,7 @@ function renderProduction(){
       // Downcycle path explicitly.
       const isKharab = r.category==='Kharab';
       const destNote = isKharab
-        ? `➜ goes to the <b>REWORK basket</b> — from there: re-brush as ${r.size}\" <b>or</b> ⤵️ Downcycle into smaller-product material (9\"/5\")`
+        ? `➜ goes to the <b>REWORK basket</b> — from there it is sent to Wood Finishing as raw material and re-treated in a production run (same size again, or a smaller product)`
         : `➜ returns to <b>Batch ${r.batchNo}</b> stock for re-brushing (tag stays)`;
       reworkHtml += `<div style="display:flex;justify-content:space-between;align-items:center;background:${isKharab?'#f5ede3':'#e8f4fd'};border-radius:6px;padding:8px 10px;margin-bottom:6px;gap:8px;">
         <div>
@@ -2303,23 +2303,14 @@ function renderProduction(){
   if(reworkRows.length>0){
     reworkHtml += `<div class="card" style="border:2px solid #a0722c;background:#faf6f0;">
       <div class="label" style="color:#a0722c;">🧺 REWORK Baskets (${reworkRows.reduce((s,f)=>s+f.qty,0)} pcs total)</div>
-      <div style="font-size:11px;color:#888;margin-bottom:6px;">Pieces here (Kharab marked done + reclaimed scrap) must be RE-TREATED in Wood Finishing before brushing. Press 🪵 when a quantity is re-treated — only re-treated pieces appear in Brush Dept's stock list. ⤵️ Downcycle below sends untreated pieces off as cutting material.</div>
-      ${reworkRows.map(f=>{
-        const treated=(f.treatedQty||0), waiting=Math.max(0,(f.qty||0)-treated);
-        return `<div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;padding:4px 0;gap:8px;">
-          <span>🧺 ${f.productName} (${f.size}")</span>
-          <span style="white-space:nowrap;">${waiting>0?`<span style="color:#c0392b;font-weight:700;">${waiting} to treat</span>`:''}${waiting>0&&treated>0?' · ':''}${treated>0?`<span style="color:#27ae60;font-weight:700;">${treated} ready</span>`:''}
-          ${waiting>0?`<button class="btn" style="font-size:10px;padding:3px 8px;margin-left:6px;background:#a0722c;color:#fff;" onclick="retreatReworkBasket(${JSON.stringify(f.id)})">🪵 Re-treated</button>`:''}</span>
-        </div>`;
-      }).join('')}
-    </div>`;
-    reworkHtml += `<div class="card" style="border:2px solid #7a5230;">
-      <div class="label" style="color:#7a5230;">⤵️ Downcycle from REWORK Basket</div>
-      <div style="font-size:11px;color:#888;margin-bottom:8px;">Pieces taken out of the REWORK basket to be cut into smaller products. They leave the rework loop and appear as scrap material in the batch selector below.</div>
-      <select id="dcProduct" style="margin-bottom:6px;">${reworkRows.map(f=>`<option value="${f.id}">${f.productName} (${f.size}") — ${f.qty} pcs in basket</option>`).join('')}</select>
-      <div style="display:flex;gap:8px;">
-        <input type="number" id="dcQty" min="1" placeholder="pcs" style="flex:1;margin-bottom:0;"/>
-        <button class="btn" style="background:#7a5230;color:#fff;" onclick="downcycleFromRework()">⤵️ Downcycle</button>
+      <div style="font-size:11px;color:#888;margin-bottom:8px;">Kharab marked done + reclaimed scrap. Send them to Wood Finishing below — they become raw material in the batch selector (REWORK-BrushScrap), and WF re-treats them in a normal production run (same size again, or a smaller product). The run's output flows to Brush Dept like any batch.</div>
+      ${reworkRows.map(f=>`<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;"><span>🧺 ${f.productName} (${f.size}")</span><span style="color:#a0722c;font-weight:700;">${f.qty} pcs</span></div>`).join('')}
+      <div style="border-top:1px solid #e8dcc8;margin-top:6px;padding-top:8px;">
+        <select id="dcProduct" style="margin-bottom:6px;">${reworkRows.map(f=>`<option value="${f.id}">${f.productName} (${f.size}") — ${f.qty} pcs in basket</option>`).join('')}</select>
+        <div style="display:flex;gap:8px;">
+          <input type="number" id="dcQty" min="1" placeholder="pcs" style="flex:1;margin-bottom:0;"/>
+          <button class="btn" style="background:#a0722c;color:#fff;" onclick="downcycleFromRework()">🪵 Send to Wood Finishing</button>
+        </div>
       </div>
     </div>`;
   }
@@ -2776,8 +2767,11 @@ function recordProduction(){
   const effSize=openBatch.isScrap?(openBatch.scrapSize||parseInt(size)):parseInt(size);
   const sourceTag = openBatch.sourceBatchTag||openBatch.batchNo;
   const isRejectedStock = sourceTag&&(sourceTag.includes('-Rejected-')||sourceTag.includes('-BrushScrap-'));
-  if(isRejectedStock ? (pieceSize>=effSize) : (pieceSize>effSize)){
-    showProdMsg(isRejectedStock ? "⚠️ Piece must be strictly smaller than rejected stock size!" : "⚠️ Piece too large for this batch!",false);
+  // 30/9 (Owner): -BrushScrap- material (old lots AND rework-basket sends) may be re-made
+  // at the SAME size — that IS re-treatment. Only -Rejected- stock stays strictly-smaller.
+  const strictlySmaller = sourceTag && sourceTag.includes('-Rejected-');
+  if(strictlySmaller ? (pieceSize>=effSize) : (pieceSize>effSize)){
+    showProdMsg(strictlySmaller ? "⚠️ Piece must be strictly smaller than rejected stock size!" : "⚠️ Piece too large for this batch!",false);
     return;
   }
   const wp=(state.woodPieces||[]).find(w=>w.id===wpId);
@@ -3152,15 +3146,13 @@ function renderBrushDept(){
     html += `<div style="font-size:12px;color:#aaa;">No finished stock available yet. Complete a Wood Finishing production run first.</div>`;
   } else {
     finished.forEach(f=>{
+      // 30/9 FINAL: REWORK baskets are never brushable stock — their pieces re-enter via a
+      // Wood Finishing re-treatment batch (send them from the Wood Finishing tab).
+      if(f.batchNo==='REWORK') return;
       const sel = selectedId===f.id;
-      const isBasket = f.batchNo==='REWORK';
-      // 30/9: only RE-TREATED basket pieces are brushable — untreated ones live on the
-      // Wood Finishing tab until 🪵 Re-treated is pressed there.
-      const effQty = isBasket ? (f.treatedQty||0) : f.qty;
-      if(isBasket && effQty<=0) return;
-      html += `<button class="select-batch-btn ${sel?'selected':''}" style="${isBasket?'background:#faf6f0;border-color:#a0722c;':''}" onclick="selectBrushStock(${JSON.stringify(f.id)})">
-        <span>${isBasket?'🧺 ':''}${f.productName} (${f.size}") — ${isBasket?'REWORK basket (re-treated)':f.batchNo}</span>
-        <span class="${isBasket?'':'green'}" style="font-weight:700;${isBasket?'color:#a0722c;':''}">${effQty} pcs</span>
+      html += `<button class="select-batch-btn ${sel?'selected':''}" onclick="selectBrushStock(${JSON.stringify(f.id)})">
+        <span>${f.productName} (${f.size}") — ${f.batchNo}</span>
+        <span class="green" style="font-weight:700;">${f.qty} pcs</span>
       </button>`;
     });
   }
@@ -3168,10 +3160,10 @@ function renderBrushDept(){
 
   if(selected){
     html += `<div class="card" style="border:2px solid #d4b896;">
-      <div class="label">⚙️ Process: ${selected.productName} (${selected.batchNo==='REWORK'?'REWORK basket':selected.batchNo})</div>
-      <div style="font-size:11px;color:#888;margin-bottom:8px;">Available: ${selected.batchNo==='REWORK'?(selected.treatedQty||0)+' re-treated':selected.qty} pcs</div>
+      <div class="label">⚙️ Process: ${selected.productName} (${selected.batchNo})</div>
+      <div style="font-size:11px;color:#888;margin-bottom:8px;">Available: ${selected.qty} pcs</div>
       <div class="label">Quantity to Process</div>
-      <input type="number" id="brushProcessQty" min="1" max="${selected.batchNo==='REWORK'?(selected.treatedQty||0):selected.qty}" placeholder="e.g. 100" oninput="calcBrushSplit()" style="margin-bottom:12px;"/>
+      <input type="number" id="brushProcessQty" min="1" max="${selected.qty}" placeholder="e.g. 100" oninput="calcBrushSplit()" style="margin-bottom:12px;"/>
 
       <div id="brushSplitSection" class="hidden">
         <div style="border-top:2px dashed #d4b896;padding-top:10px;margin-bottom:10px;">
@@ -3327,9 +3319,10 @@ function recordBrushProcessing(){
     state.finishedInventory = (state.finishedInventory||[]).filter(f=>!dupRows.some(d=>d.id===f.id))
       .map(f=>f.id===stock.id?{...f, qty:stock.qty, reworkQty:(stock.reworkQty||0), treatedQty:(stock.treatedQty||0)}:f);
   }
-  // 30/9: a basket only offers its RE-TREATED portion to the brush machine.
-  const brushAvail = stock.batchNo==='REWORK' ? (stock.treatedQty||0) : stock.qty;
-  if(total>brushAvail){ if(msgEl){msgEl.textContent = stock.batchNo==='REWORK' ? `⚠️ Only ${brushAvail} pcs re-treated & ready — the rest await Wood Finishing re-treatment` : `⚠️ Only ${brushAvail} pcs available`;msgEl.className="msg err";} return; }
+  // 30/9 FINAL: basket pieces are never brushed directly — they re-enter through a Wood
+  // Finishing re-treatment batch. Guard kept in case of a stale-render selection.
+  if(stock.batchNo==='REWORK'){ if(msgEl){msgEl.textContent="🧺 Basket pieces go to Wood Finishing first — send them from the Wood Finishing tab (🪵), re-treat them in a production run, then brush the new batch";msgEl.className="msg err";} return; }
+  if(total>stock.qty){ if(msgEl){msgEl.textContent=`⚠️ Only ${stock.qty} pcs available`;msgEl.className="msg err";} return; }
   if(color+regmal+scrap+wastageQty>total){ if(msgEl){msgEl.textContent="⚠️ Category totals exceed quantity being processed";msgEl.className="msg err";} return; }
   if(wastageQty>0 && !wastageKg){ if(msgEl){msgEl.textContent="⚠️ Enter weight (KG) for Keere Wala wastage";msgEl.className="msg err";} return; }
 
@@ -3468,19 +3461,6 @@ function recordBrushProcessing(){
   },100);
 }
 
-function retreatReworkBasket(rowId){
-  if(!requireLiveCloud('Rework re-treatment')) return;
-  const row = (state.finishedInventory||[]).find(f=>String(f.id)===String(rowId) && f.batchNo==='REWORK');
-  if(!row){ alert('Basket not found.'); return; }
-  const waiting = Math.max(0,(row.qty||0)-(row.treatedQty||0));
-  if(waiting<=0){ alert('Nothing awaiting treatment in this basket.'); return; }
-  const n = Math.round(+prompt('How many pcs of '+row.productName+' are re-treated and ready for the brush machine?\n(Awaiting treatment: '+waiting+' pcs)', waiting)||0);
-  if(!(n>0)) return;
-  if(n>waiting){ alert('Only '+waiting+' pcs are awaiting treatment.'); return; }
-  state.finishedInventory = state.finishedInventory.map(f=>f.id===row.id?{...f, treatedQty:(f.treatedQty||0)+n}:f);
-  saveAll(); re();
-}
-
 function downcycleFromRework(){
   if(!requireLiveCloud('Downcycle')) return;
   const rowId = document.getElementById('dcProduct')?.value;
@@ -3489,7 +3469,7 @@ function downcycleFromRework(){
   if(!row){ alert('Select a REWORK basket.'); return; }
   if(!(qty>0)){ alert('Enter pieces.'); return; }
   if(qty>row.qty){ alert('Only '+row.qty+' pcs in the '+row.productName+' REWORK basket.'); return; }
-  if(!confirm('Downcycle '+qty+' pcs of '+row.productName+' from the REWORK basket into scrap material (for smaller products)? They leave the rework loop permanently.')) return;
+  if(!confirm('Send '+qty+' pcs of '+row.productName+' from the REWORK basket to Wood Finishing as raw material?\n\nThey leave the rework loop and appear as REWORK-BrushScrap in the batch selector — open a production batch from it to re-treat them (same size or smaller).')) return;
   const today = new Date().toISOString().slice(0,10);
   state.finishedInventory = state.finishedInventory.map(f=>{
     if(f.id!==row.id) return f;
@@ -5294,8 +5274,6 @@ function compileActivityData(){
         // 30/9: Reclaim (scrap → basket) is an ARRIVAL into the pool — counted beside
         // poolFreshIn so the identity holds for old-era lots and reversed downcycles alike.
         p.reclaimedIn = (state.reworkReclaimLog||[]).filter(l=>l && l.productName===prod).reduce((s,l)=>s+(l.qty||0),0);
-        p.awaitingTreatment = (state.finishedInventory||[]).filter(f=>f && f.productName===prod && f.batchNo==='REWORK').reduce((s,f)=>s+Math.max(0,(f.qty||0)-(f.treatedQty||0)),0);
-        p.readyForBrush = (state.finishedInventory||[]).filter(f=>f && f.productName===prod && f.batchNo==='REWORK').reduce((s,f)=>s+(f.treatedQty||0),0);
         p.poolClosureDelta = (p.poolFreshIn + p.reclaimedIn) - (p.poolGood + p.poolKeere + p.poolKharab + p.downcycledOut + p.stillInPool);
         // 28/9 (Owner): fate RATES of decided pool pieces — the basis for per-batch estimates.
         const decided = p.poolGood + p.poolKeere + p.poolKharab + p.downcycledOut;
