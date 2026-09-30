@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1790768308821;
+const APP_BUILD = 1790770177852;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -2272,7 +2272,7 @@ function renderProduction(){
   if(rework.length>0){
     reworkHtml = `<div class="card" style="border:2px solid #3498db;">
       <div class="label" style="color:#3498db;">🎨 Rework Pending (Color / Regmal / Kharab)</div>
-      <div style="font-size:11px;color:#888;margin-bottom:8px;">Fix and Mark Done. Color/Regmal return to their OWN batch (tag stays); Kharab goes to the REWORK basket (tag replaced), then to Wood Finishing as raw material for re-treatment.</div>`;
+      <div style="font-size:11px;color:#888;margin-bottom:8px;">Fix and Mark Done. Color/Regmal return to their OWN batch (tag stays); Kharab goes straight to Wood Finishing as rework material (REWORK-BrushScrap) for re-treatment.</div>`;
     rework.forEach(r=>{
       // 30/9 (Safiullah, WB012): all four categories showed one identical "Mark Done", so the
       // floor read Kharab's as "fixed → back to 11-inch brushing" and feared pieces destined
@@ -2281,7 +2281,7 @@ function renderProduction(){
       // Downcycle path explicitly.
       const isKharab = r.category==='Kharab';
       const destNote = isKharab
-        ? `➜ goes to the <b>REWORK basket</b> — from there it is sent to Wood Finishing as raw material and re-treated in a production run (same size again, or a smaller product)`
+        ? `➜ goes straight to <b>Wood Finishing</b> as rework material (REWORK-BrushScrap) — re-treated in a production run, same size again or a smaller product`
         : `➜ returns to <b>Batch ${r.batchNo}</b> stock for re-brushing (tag stays)`;
       reworkHtml += `<div style="display:flex;justify-content:space-between;align-items:center;background:${isKharab?'#f5ede3':'#e8f4fd'};border-radius:6px;padding:8px 10px;margin-bottom:6px;gap:8px;">
         <div>
@@ -2299,21 +2299,7 @@ function renderProduction(){
   // re-brushing them. That movement must be recorded, or the pool watchdog rightly screams.
   // This button moves pieces REWORK basket -> scrap inventory (selectable in production),
   // keeping the pool books exactly balanced.
-  const reworkRows = (state.finishedInventory||[]).filter(f=>f && f.batchNo==='REWORK' && f.qty>0);
-  if(reworkRows.length>0){
-    reworkHtml += `<div class="card" style="border:2px solid #a0722c;background:#faf6f0;">
-      <div class="label" style="color:#a0722c;">🧺 REWORK Baskets (${reworkRows.reduce((s,f)=>s+f.qty,0)} pcs total)</div>
-      <div style="font-size:11px;color:#888;margin-bottom:8px;">Kharab marked done + reclaimed scrap. Send them to Wood Finishing below — they become raw material in the batch selector (REWORK-BrushScrap), and WF re-treats them in a normal production run (same size again, or a smaller product). The run's output flows to Brush Dept like any batch.</div>
-      ${reworkRows.map(f=>`<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;"><span>🧺 ${f.productName} (${f.size}")</span><span style="color:#a0722c;font-weight:700;">${f.qty} pcs</span></div>`).join('')}
-      <div style="border-top:1px solid #e8dcc8;margin-top:6px;padding-top:8px;">
-        <select id="dcProduct" style="margin-bottom:6px;">${reworkRows.map(f=>`<option value="${f.id}">${f.productName} (${f.size}") — ${f.qty} pcs in basket</option>`).join('')}</select>
-        <div style="display:flex;gap:8px;">
-          <input type="number" id="dcQty" min="1" placeholder="pcs" style="flex:1;margin-bottom:0;"/>
-          <button class="btn" style="background:#a0722c;color:#fff;" onclick="downcycleFromRework()">🪵 Send to Wood Finishing</button>
-        </div>
-      </div>
-    </div>`;
-  }
+
 
   // scrap batches
   const scrapBySize={};
@@ -2356,7 +2342,7 @@ function renderProduction(){
 
       if(validScraps.length>0){
         html+=`<div style="font-size:11px;font-weight:700;color:#e67e22;margin-bottom:6px;margin-top:8px;text-transform:uppercase;">♻️ Scrap Batches</div>
-        <div style="font-size:10px;color:#888;margin-bottom:6px;">Tick lots that are re-brushable → they move to the REWORK basket. Untick = stays as cutting material. Tap the row itself to start production from it.</div>`;
+        <div style="font-size:10px;color:#888;margin-bottom:6px;">Tick lots that are re-brushable → they merge into the REWORK-BrushScrap rework material for that product. Untick = stays as-is. Tap the row itself to start production from it.</div>`;
         // 30/9 (Owner): checkbox-select lots to move into the rework loop — replaces the
         // one-tap migration card. Locked = feeding an open production batch (any size).
         const openTags = new Set(Object.values(state.openBatches||{}).map(ob=>ob && ob.sourceBatchTag).filter(Boolean));
@@ -3461,32 +3447,33 @@ function recordBrushProcessing(){
   },100);
 }
 
-function downcycleFromRework(){
-  if(!requireLiveCloud('Downcycle')) return;
-  const rowId = document.getElementById('dcProduct')?.value;
-  const qty = Math.round(+document.getElementById('dcQty')?.value||0);
-  const row = (state.finishedInventory||[]).find(f=>String(f.id)===String(rowId) && f.batchNo==='REWORK');
-  if(!row){ alert('Select a REWORK basket.'); return; }
-  if(!(qty>0)){ alert('Enter pieces.'); return; }
-  if(qty>row.qty){ alert('Only '+row.qty+' pcs in the '+row.productName+' REWORK basket.'); return; }
-  if(!confirm('Send '+qty+' pcs of '+row.productName+' from the REWORK basket to Wood Finishing as raw material?\n\nThey leave the rework loop and appear as REWORK-BrushScrap in the batch selector — open a production batch from it to re-treat them (same size or smaller).')) return;
+// 30/9 FINAL: standing invariant — NO REWORK basket rows may exist. Any that appear
+// (the pre-drain 164 pcs, or a stale device pushing an old-era basket row) are drained
+// into REWORK-BrushScrap material with downcycle-equivalent accounting: brushScrapLog
+// REWORK row (pool exit) + ledger pair, row buried so it can never resurrect. Pool
+// identity stays exact: stillInPool -> 0, downcycledOut absorbs it.
+function drainReworkBaskets(){
+  const rows = (state.finishedInventory||[]).filter(f=>f && f.batchNo==='REWORK');
+  if(rows.length===0) return [];
   const today = new Date().toISOString().slice(0,10);
-  state.finishedInventory = state.finishedInventory.map(f=>{
-    if(f.id!==row.id) return f;
-    const untreated = Math.max(0,(f.qty||0)-(f.treatedQty||0));
-    const fromTreated = Math.max(0, qty-untreated); // untreated leave first
-    return {...f, qty:f.qty-qty, reworkQty:Math.max(0,(f.reworkQty||0)-qty), treatedQty:Math.max(0,(f.treatedQty||0)-fromTreated)};
-  }).filter(f=>f.qty>0 || f.id===row.id);
-  const scrapKey = `REWORK-BrushScrap-${row.productName}`;
-  const scrapSizeVal = row.size || 0;
-  const sIdx=(state.scrapInventory||[]).findIndex(s=>s.size===scrapSizeVal&&s.batch===scrapKey);
-  if(sIdx>=0){ state.scrapInventory[sIdx].quantity += qty; }
-  else{ state.scrapInventory=[...(state.scrapInventory||[]),{ size:scrapSizeVal, quantity:qty, batch:scrapKey, dateCreated:today }]; }
-  // The log row is what keeps the POOL closure identity balanced — poolDowncycled reads it.
-  state.brushScrapLog=[...(state.brushScrapLog||[]),{ date:today, productName:row.productName, batchNo:'REWORK', qty:qty, reason:'Downcycled from rework basket' }];
-  addLedgerEntry('scrap', `${row.productName} (Downcycled from rework)`, scrapKey, qty, 'IN', 'Pulled from REWORK basket for smaller products', String(scrapSizeVal));
-  addLedgerEntry('finished', row.productName, 'REWORK', qty, 'OUT', 'Downcycled to scrap material (left the rework loop)');
-  saveAll(); re();
+  const notes=[];
+  rows.forEach(row=>{
+    const qty=(row.qty||0);
+    if(qty>0){
+      const scrapKey = `REWORK-BrushScrap-${row.productName}`;
+      const sz = row.size||0;
+      const sIdx=(state.scrapInventory||[]).findIndex(s=>s.size===sz&&s.batch===scrapKey);
+      if(sIdx>=0){ state.scrapInventory[sIdx].quantity += qty; }
+      else{ state.scrapInventory=[...(state.scrapInventory||[]),{ size:sz, quantity:qty, batch:scrapKey, dateCreated:today }]; }
+      state.brushScrapLog=[...(state.brushScrapLog||[]),{ date:today, productName:row.productName, batchNo:'REWORK', qty:qty, reason:'Basket drained to rework material (baskets retired)' }];
+      addLedgerEntry('scrap', `${row.productName} (Rework material)`, scrapKey, qty, 'IN', 'REWORK basket retired — pieces moved to Wood Finishing material', String(sz));
+      addLedgerEntry('finished', row.productName, 'REWORK', qty, 'OUT', 'REWORK basket retired — moved to rework material');
+      notes.push(`${row.productName}: ${qty} pcs moved from the retired REWORK basket to ${scrapKey}`);
+    }
+    buryRow(row);
+  });
+  state.finishedInventory = (state.finishedInventory||[]).filter(f=>!(f && f.batchNo==='REWORK'));
+  return notes;
 }
 
 // 30/9 (Owner, after Safiullah's review): the REVERSE door. Downcycle was one-way, so a
@@ -3516,15 +3503,15 @@ function _reclaimLotCore(scrapSize, batchTag, qty){
     }
     return s;
   }).filter(s=>s && s.quantity>0);
-  const bIdx = (state.finishedInventory||[]).findIndex(f=>f && f.productName===productName && f.batchNo==='REWORK');
-  if(bIdx>=0){
-    state.finishedInventory = state.finishedInventory.map((f,i)=>i===bIdx?{...f, qty:(f.qty||0)+qty, reworkQty:(f.reworkQty||0)+qty}:f);
-  } else {
-    state.finishedInventory = [...(state.finishedInventory||[]), { id:Date.now()+Math.random(), productName, size:scrapSize, batchNo:'REWORK', qty:qty, reworkQty:qty }];
-  }
-  state.reworkReclaimLog = [...(state.reworkReclaimLog||[]), { id:Date.now()+Math.random(), date:today, productName, qty, fromTag:batchTag, size:scrapSize }];
-  addLedgerEntry('scrap', `${productName} (Reclaimed to rework)`, batchTag, qty, 'OUT', 'Moved back into the REWORK basket — re-brushable', String(scrapSize));
-  addLedgerEntry('finished', productName, 'REWORK', qty, 'IN', `Reclaimed from scrap material (${batchTag}) — re-entered the rework loop`);
+  // 30/9 FINAL: no basket — the lot re-tags directly into the per-product rework material.
+  // Pure material move (scrap → scrap): ledger OUT/IN pair, no pool terms touched.
+  const targetKey = `REWORK-BrushScrap-${productName}`;
+  if(batchTag===targetKey) return null; // already the rework pool
+  const tIdx=(state.scrapInventory||[]).findIndex(s=>s.size===scrapSize&&s.batch===targetKey);
+  if(tIdx>=0){ state.scrapInventory[tIdx].quantity += qty; }
+  else{ state.scrapInventory=[...(state.scrapInventory||[]),{ size:scrapSize, quantity:qty, batch:targetKey, dateCreated:today }]; }
+  addLedgerEntry('scrap', `${productName} (to rework material)`, batchTag, qty, 'OUT', `Re-tagged into ${targetKey} — re-treatable at same size or smaller`, String(scrapSize));
+  addLedgerEntry('scrap', `${productName} (Rework material)`, targetKey, qty, 'IN', `From ${batchTag}`, String(scrapSize));
   return `${productName}: ${qty} pcs from ${batchTag}`;
 }
 
@@ -3538,7 +3525,7 @@ function reclaimScrapToRework(scrapSize, batchTag){
   const qty = Math.round(+prompt('Reclaim how many pcs of '+m[1]+' from '+batchTag+' back into the REWORK basket?\n(Available: '+have+' pcs)', have)||0);
   if(!(qty>0)) return;
   if(qty>have){ alert('Only '+have+' pcs in this scrap lot.'); return; }
-  if(!confirm('Move '+qty+' pcs of '+m[1]+' from scrap material back into the '+m[1]+' REWORK basket?\n\nThey re-enter the rework loop as re-brushable pieces and stop being available as cutting material for smaller products.')) return;
+  if(!confirm('Merge '+qty+' pcs of '+m[1]+' into the '+m[1]+' REWORK-BrushScrap rework material?\n\nThey become re-treatable in Wood Finishing at the same size or smaller.')) return;
   const note = _reclaimLotCore(scrapSize, batchTag, qty);
   if(!note){ alert('Nothing moved — the lot may have just been consumed on another device.'); return; }
   saveAll(); re();
@@ -3564,7 +3551,7 @@ function moveSelectedScrapToRework(){
   const boxes = Array.from(document.querySelectorAll('.scrapMoveChk')).filter(c=>c.checked);
   if(boxes.length===0) return;
   const pcs = boxes.reduce((s,c)=>s+(+c.dataset.qty||0),0);
-  if(!confirm('Move '+boxes.length+' scrap lot'+(boxes.length>1?'s':'')+' ('+pcs+' pcs) into their REWORK baskets?\n\nThey re-enter the rework loop as re-brushable pieces. Every move is recorded.')) return;
+  if(!confirm('Merge '+boxes.length+' scrap lot'+(boxes.length>1?'s':'')+' ('+pcs+' pcs) into their products\' REWORK-BrushScrap rework material?\n\nThey become re-treatable in Wood Finishing (same size or smaller). Every move is recorded in the ledger.')) return;
   const done=[], skipped=[];
   boxes.forEach(c=>{
     const tag=c.dataset.batch, size=+c.dataset.size;
@@ -3574,7 +3561,7 @@ function moveSelectedScrapToRework(){
   });
   if(done.length===0){ alert('Nothing moved — the selected lots may have just been consumed on another device.'); return; }
   saveAll(); re();
-  alert('Moved into REWORK baskets:\n\n'+done.join('\n')+(skipped.length?'\n\nSkipped (already consumed): '+skipped.join(', '):''));
+  alert('Merged into rework material:\n\n'+done.join('\n')+(skipped.length?'\n\nSkipped (already consumed or already rework material): '+skipped.join(', '):''));
 }
 function markReworkCompleted(id){
   if(!requireLiveCloud('Rework completion')) return;
@@ -3586,26 +3573,36 @@ function markReworkCompleted(id){
   // return to their ORIGINAL batch row and re-brush under the same number. ONLY Kharab
   // loses its tag and joins the per-product REWORK basket (item.batchNo==='REWORK' items
   // are pool-internal re-rejects and return to the REWORK row too).
-  const targetBatch = (item.category==='Kharab' || item.batchNo==='REWORK') ? 'REWORK' : item.batchNo;
-  // 30/9 ERA FIX: legacy items (created before loop accounting; no fromRunId) return as
-  // FRESH stock — no reworkQty — so their next brush pass counts in freshIn and the era
-  // boundary stays clean. Split-era items keep the rework marker as before.
-  const isSplitEra = !!item.fromRunId || item.batchNo==='REWORK';
-  const idx=(state.finishedInventory||[]).findIndex(f=>f.productName===item.productName&&f.batchNo===targetBatch);
-  if(idx>=0){ state.finishedInventory[idx].qty += item.qty; if(isSplitEra) state.finishedInventory[idx].reworkQty = (state.finishedInventory[idx].reworkQty||0) + item.qty; }
-  else{
-    state.finishedInventory=[...(state.finishedInventory||[]),{
-      id:Date.now()+Math.random(), productName:item.productName, size:item.size,
-      batchNo:targetBatch, qty:item.qty, reworkQty:(isSplitEra?item.qty:0), dateAdded:new Date().toISOString().slice(0,10)
-    }];
+  const isKharabPath = (item.category==='Kharab' || item.batchNo==='REWORK');
+  const today9 = new Date().toISOString().slice(0,10);
+  if(isKharabPath){
+    // 30/9 FINAL (Owner): NO basket stage. Kharab goes DIRECTLY to Wood Finishing as raw
+    // material (REWORK-BrushScrap-<product>) — selectable in the batch selector, re-treated
+    // in a normal production run at the same size or smaller. Pool identity: this item's
+    // qty counts as poolFreshIn (completed Kharab) AND as downcycledOut (the brushScrapLog
+    // REWORK row below), so arrivals equal exits and stillInPool stays 0 — exact.
+    const scrapKey = `REWORK-BrushScrap-${item.productName}`;
+    const sIdx=(state.scrapInventory||[]).findIndex(s=>s.size===(item.size||0)&&s.batch===scrapKey);
+    if(sIdx>=0){ state.scrapInventory[sIdx].quantity += item.qty; }
+    else{ state.scrapInventory=[...(state.scrapInventory||[]),{ size:(item.size||0), quantity:item.qty, batch:scrapKey, dateCreated:today9 }]; }
+    state.brushScrapLog=[...(state.brushScrapLog||[]),{ date:today9, productName:item.productName, batchNo:'REWORK', qty:item.qty, reason:'Kharab to rework material (direct)' }];
+    addLedgerEntry('scrap', `${item.productName} (Rework material)`, scrapKey, item.qty, 'IN',
+      `Kharab rework done (originally batch ${item.batchNo}) — straight to Wood Finishing material for re-treatment`, String(item.size||0));
+  } else {
+    // Color/Regmal: unchanged — return to their OWN batch (tag stays), exact books.
+    const isSplitEra = !!item.fromRunId;
+    const idx=(state.finishedInventory||[]).findIndex(f=>f.productName===item.productName&&f.batchNo===item.batchNo);
+    if(idx>=0){ state.finishedInventory[idx].qty += item.qty; if(isSplitEra) state.finishedInventory[idx].reworkQty = (state.finishedInventory[idx].reworkQty||0) + item.qty; }
+    else{
+      state.finishedInventory=[...(state.finishedInventory||[]),{
+        id:Date.now()+Math.random(), productName:item.productName, size:item.size,
+        batchNo:item.batchNo, qty:item.qty, reworkQty:(isSplitEra?item.qty:0), dateAdded:today9
+      }];
+    }
+    addLedgerEntry('finished', item.productName, item.batchNo, item.qty, 'IN',
+      `Rework completed (${item.category}) — returned to own batch ${item.batchNo} stock`);
   }
-  state.reworkStock = rework.map(r=>r.id===id?{...r,status:'completed',completedDate:new Date().toISOString().slice(0,10)}:r);
-  // Returning rework to stock is a real stock increase and must appear in the ledger — without
-  // this the Dashboard shows pieces the Ledger has no record of (264 pcs drifted this way).
-  addLedgerEntry('finished', item.productName, ((item.category==='Kharab'||item.batchNo==='REWORK')?'REWORK':item.batchNo), item.qty, 'IN',
-    (item.category==='Kharab'||item.batchNo==='REWORK')
-      ? `Rework completed (${item.category||'rework'}, originally batch ${item.batchNo}) — returned to REWORK basket`
-      : `Rework completed (${item.category}) — returned to own batch ${item.batchNo} stock`);
+  state.reworkStock = rework.map(r=>r.id===id?{...r,status:'completed',completedDate:today9}:r);
   saveAll();
   re();
 }
@@ -4033,7 +4030,7 @@ function renderInventory(){
     sc.forEach(s=>{const k=`${s.size}-${s.batch}`;grouped[k]=grouped[k]?{...grouped[k],quantity:grouped[k].quantity+s.quantity}:{...s};});
     Object.values(grouped).forEach(s=>{
       const reclaimable = /^(?:WB\d+|REWORK)-(?:BrushScrap|Rejected|Scrap)-(.+)$/.test(String(s.batch||''));
-      html+=`<div class="scrap-item"><div class="row"><span><b>${s.size}"</b> — ${s.batch}</span><span class="orange" style="font-weight:700;">${s.quantity} pcs</span></div><div class="row" style="align-items:center;"><div style="font-size:11px;color:#888;margin-top:2px;">${s.dateCreated}</div>${reclaimable?`<button class="btn" style="font-size:10px;padding:4px 8px;background:#a0722c;color:#fff;" onclick="reclaimScrapToRework(${s.size},'${String(s.batch).replace(/'/g,"\\'")}')">↩️ Reclaim to Rework</button>`:''}</div></div>`;
+      html+=`<div class="scrap-item"><div class="row"><span><b>${s.size}"</b> — ${s.batch}</span><span class="orange" style="font-weight:700;">${s.quantity} pcs</span></div><div class="row" style="align-items:center;"><div style="font-size:11px;color:#888;margin-top:2px;">${s.dateCreated}</div>${reclaimable?`<button class="btn" style="font-size:10px;padding:4px 8px;background:#a0722c;color:#fff;" onclick="reclaimScrapToRework(${s.size},'${String(s.batch).replace(/'/g,"\\'")}')">↩️ To Rework Material</button>`:''}</div></div>`;
     });
     html+=`<div style="font-size:11px;color:#aaa;margin-top:6px;">Total: ${sc.reduce((s,x)=>s+x.quantity,0)} pcs</div>`;
   } else {
@@ -5308,7 +5305,7 @@ function compileActivityData(){
       });
       return {perBatch: agg, reworkPool: pool};
     })(),
-    brushLoopNote:'REWORK LOOP RULE (FINAL, 29/9 — mirrors the floor\'s basket tags): FOUR reject categories. COLOR and REGMAL KEEP their batch tag end-to-end: rework returns them to their OWN batch, they re-brush under the same number, and their outcomes are EXACT inside that batch\'s books (colorRegmalInLoop = exact WIP still cycling). ONLY KHARAB loses its tag: it is the batch\'s terminal fate \'sentToRework\' and enters the per-product REWORK pool; pool outcomes are per-product only and estimates for a batch\'s kharab use the pool\'s fate rates, always labeled estimated. KEERE WALA is the only terminal wastage. Smaller-product scrap material is created ONLY by the Downcycle action on the REWORK basket. once reworked they live in the per-product REWORK pool (batch tag removed, exactly as on the floor) and cycle until each piece ends as pool brush output, Kharab downcycle, or Keere wastage. Use brushLoopByProductBatch.perBatch for per-batch questions (freshIn denominator; closureDelta==0 means balanced) and .reworkPool for the pool (poolFreshIn denominator; internal re-rejects cancel; downcycledOut = pieces pulled from the REWORK basket as raw material for smaller products — a terminal pool fate). NEVER attribute a rework-pool outcome to a specific original batch as FACT — that precision does not exist physically. The ONLY sanctioned way to answer \'total/estimated batch waste including rework pieces\' is perBatch.estimatedFinal: exact first-pass books plus the batch\'s sentToRework allocated by the pool\'s measured fate rates. ALWAYS present those figures with the word \'estimated\' and name the method; exact figures and estimates must never be mixed without labels. WORKLOAD questions may use handledTotal/poolHandled (every pass counts). reclaimedIn = scrap material moved BACK into the pool via the Reclaim action (reverse of Downcycle; arrival-side term of the pool identity) — typically old-era BrushScrap lots found to be physically re-brushable.',
+    brushLoopNote:'REWORK LOOP RULE (FINAL, 29/9 — mirrors the floor\'s basket tags): FOUR reject categories. COLOR and REGMAL KEEP their batch tag end-to-end: rework returns them to their OWN batch, they re-brush under the same number, and their outcomes are EXACT inside that batch\'s books (colorRegmalInLoop = exact WIP still cycling). ONLY KHARAB loses its tag: it is the batch\'s terminal fate \'sentToRework\' and enters the per-product REWORK pool; pool outcomes are per-product only and estimates for a batch\'s kharab use the pool\'s fate rates, always labeled estimated. KEERE WALA is the only terminal wastage. Since 30/9 there is NO basket stage: completed Kharab goes DIRECTLY to REWORK-BrushScrap-<product> material (counted as poolFreshIn AND downcycledOut in the same step, so stillInPool is always 0), and Wood Finishing re-treats that material in normal production runs at the same size or smaller. once reworked they live in the per-product REWORK pool (batch tag removed, exactly as on the floor) and cycle until each piece ends as pool brush output, Kharab downcycle, or Keere wastage. Use brushLoopByProductBatch.perBatch for per-batch questions (freshIn denominator; closureDelta==0 means balanced) and .reworkPool for the pool (poolFreshIn denominator; internal re-rejects cancel; downcycledOut = pieces pulled from the REWORK basket as raw material for smaller products — a terminal pool fate). NEVER attribute a rework-pool outcome to a specific original batch as FACT — that precision does not exist physically. The ONLY sanctioned way to answer \'total/estimated batch waste including rework pieces\' is perBatch.estimatedFinal: exact first-pass books plus the batch\'s sentToRework allocated by the pool\'s measured fate rates. ALWAYS present those figures with the word \'estimated\' and name the method; exact figures and estimates must never be mixed without labels. WORKLOAD questions may use handledTotal/poolHandled (every pass counts). reclaimedIn = scrap material moved BACK into the pool via the Reclaim action (reverse of Downcycle; arrival-side term of the pool identity) — typically old-era BrushScrap lots found to be physically re-brushable.',
     brushScrapByBatch: (function(){
       // 28/9 (Owner: "brush scrap percentage per batch"): scrap items encode batch+kind+
       // product in their names (WB008-Rejected-Commando Broom). Aggregated per batch with
@@ -10579,6 +10576,7 @@ function runAutoFixCycle(){
   });
 
   mergeDuplicateFinishedRows().forEach(n=>applied.push('Stock row consolidation: '+n));
+  drainReworkBaskets().forEach(n=>applied.push('Basket retirement: '+n));
 
   const namePlan = planBatchNameFixes();
   const structural = collectStructuralFixes();
