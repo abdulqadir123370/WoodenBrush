@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1790770579210;
+const APP_BUILD = 1791023780766;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -2135,6 +2135,7 @@ function renderDashboard(){
   let html=renderRecentAdjustmentsCardHTML();
   html+=renderAdj9CardHTML(); // ADJ-9 one-time correction card (Owner only, auto-hides once applied)
   html+=renderAdj10CardHTML(); // ADJ-10/11 WB007 phantom backfill (Owner only, one tap, auto-hides once applied)
+  html+=renderRatePendingCardHTML(); // 03/10: negotiated wastage rates — Admin/Owner pricing queue (auto-hides when empty)
   html+=renderAiReportCardHTML(); // Admin + Owner (moved here from Admin tab 01/09/2026)
 
   // Voided & flagged entries — always visible to Admin/Owner here, regardless of which
@@ -2289,7 +2290,7 @@ function renderProduction(){
           <div style="font-size:10px;color:#888;">${r.category} · Batch ${r.batchNo} · ${r.qty} pcs · since ${r.dateAdded}</div>
           <div style="font-size:10px;color:${isKharab?'#a0722c':'#2980b9'};margin-top:2px;">${destNote}</div>
         </div>
-        <button class="btn btn-blue" style="font-size:11px;padding:6px 10px;white-space:nowrap;${isKharab?'background:#a0722c;':''}" onclick="markReworkCompleted(${JSON.stringify(r.id)})">${isKharab?'📦 To Rework Basket':'✅ Mark Done'}</button>
+        <button class="btn btn-blue" style="font-size:11px;padding:6px 10px;white-space:nowrap;${isKharab?'background:#a0722c;':''}" onclick="markReworkCompleted(${JSON.stringify(r.id)})">${isKharab?'🪵 To Rework Material':'✅ Mark Done'}</button>
       </div>`;
     });
     reworkHtml += `</div>`;
@@ -5015,7 +5016,7 @@ function rejectPendingSale(id){
 // collusion-breaker — a buyer who paid for 995 KG but whose statement shows 35 KG sees an
 // absurdly cheap bill; buyers correct records that undercharge them.
 function copyBuyerStatement(buyerName){
-  const rows = (state.sales||[]).filter(x=>x && !x.voided && x.buyer===buyerName && x.status!=='pending' && x.status!=='rejected')
+  const rows = (state.sales||[]).filter(x=>x && !x.voided && x.buyer===buyerName && x.status!=='pending' && x.status!=='rejected' && !x.ratePending)
     .sort((a,b)=>(a.datetime||'').localeCompare(b.datetime||''));
   if(rows.length===0){ alert('No applied sales recorded for '+buyerName+'.'); return; }
   let total=0;
@@ -5451,7 +5452,7 @@ function compileReportData(){
 function buildDataCatalog(){
   const F = (o)=>o;
   const cols = {
-    sales:{fields:F({date:'sale date', entryDate:'immutable entry date', buyer:'', wasteType:'Bhusa/Patti/Gitta', kgSold:'KG', pricePerKg:'', totalAmount:'Rs', amountReceived:'Rs from buyer', ownerReceivedAmount:'Rs settled with Owner', slipSerialNo:'kanta slip serial', weighSlipDate:'printed slip date', gatePassNo:'', status:'applied/pending/rejected', voided:'true=cancelled'})},
+    sales:{fields:F({date:'sale date', entryDate:'immutable entry date', buyer:'', wasteType:'Bhusa/Patti/Gitta', kgSold:'KG', pricePerKg:'', totalAmount:'Rs', amountReceived:'Rs from buyer', ownerReceivedAmount:'Rs settled with Owner', ratePending:'true = dispatched with challan, negotiated rate not yet entered by Admin (amounts are 0 until priced)', slipSerialNo:'kanta slip serial', weighSlipDate:'printed slip date', gatePassNo:'', status:'applied/pending/rejected', voided:'true=cancelled'})},
     ledger:{fields:F({type:'plank etc', direction:'IN/OUT', size:'plank inches', batchNo:'', qty:'pcs', vendor:'', date:'', note:'', voidedByOwner:'IN cancelled', pricePerPiece:'Rs'})},
     production:{fields:F({date:'', time:'', batchNo:'', plankSize:'inches', woodPieceName:'product', planksUsed:'', piecesProduced:'GOOD pcs', rejectedPieces:'', voided:''})},
     brushProcessingLog:{fields:F({date:'', sourceBatch:'wood batch or REWORK', productName:'', totalInput:'', freshInputPcs:'first-pass', reworkInputPcs:'', qty:'brush machine GOOD output', kharabPcs:'to rework when kharabToRework:true (current rule); legacy entries without the flag went to scrap', keerePcs:'terminal wastage pcs', colorPcs:'legacy', regmalPcs:'legacy', voided:''})},
@@ -6079,7 +6080,7 @@ function renderSales(){
           <div style="font-size:10px;color:${isVoidedSale?'#e74c3c':payColor};font-weight:700;">${isVoidedSale?'🚫 VOIDED':`${payIcon} ${s.payment}`}</div>
         </div>
       </div>
-        <div style="font-size:11px;color:#888;${isVoidedSale?'text-decoration:line-through;':''}">${s.kgSold} KG @ Rs.${s.pricePerKg}/KG${s.weighSlipDate?` · slip dated ${s.weighSlipDate}`:''}${s.slipSerialNo?` · slip #${s.slipSerialNo}`:''}${s.slipCNo?` · C-No ${s.slipCNo}`:''}</div>
+        <div style="font-size:11px;color:#888;${isVoidedSale?'text-decoration:line-through;':''}">${s.kgSold} KG @ ${s.ratePending?'<span style="color:#8a6d1a;font-weight:700;">⏳ RATE PENDING</span>':`Rs.${s.pricePerKg}/KG`}${s.weighSlipDate?` · slip dated ${s.weighSlipDate}`:''}${s.slipSerialNo?` · slip #${s.slipSerialNo}`:''}${s.slipCNo?` · C-No ${s.slipCNo}`:''}</div>
         ${s.entryDate && s.entryDate!==s.date?`<div style="font-size:10px;color:#b07d2b;">✍️ entered ${s.entryDate}${s.entryTime?' '+s.entryTime:''} (back-dated sale)</div>`:''}
         ${s.gatePassNo && !isVoidedSale?`<div style="font-size:12px;font-weight:700;color:#8e44ad;margin-top:2px;">🎫 Gate Pass: ${s.gatePassNo}</div>`:''}
         ${s.status==='pending' && !isVoidedSale && s.slipReenteredFromVoided?(()=>{ const rv=s.slipReenteredFromVoided;
@@ -6387,6 +6388,44 @@ function renderWastageReconCardHTML(){
   </div>`;
 }
 
+// 03/10: the Admin/Owner pricing queue — every dispatched-but-unpriced wastage sale,
+// priced here with the negotiated rate. Pricing stamps who/when, computes the total and
+// applies the paid-in-full rule; the card hides itself when nothing is pending.
+function renderRatePendingCardHTML(){
+  if(!isAdminOrOwner()) return '';
+  const rows = (state.sales||[]).filter(s=>s && !s.voided && s.ratePending);
+  if(rows.length===0) return '';
+  let html = `<div class="card" style="border:2px solid #e0b84c;background:#fffdf5;">
+    <div class="label" style="color:#8a6d1a;">⏳ WASTAGE RATES PENDING (${rows.length})</div>
+    <div style="font-size:11px;color:#888;margin-bottom:8px;">These dispatches left with a challan but no rate. Enter the rate negotiated with each buyer — the total and payment apply the moment you save. Unpriced sales carry Rs.0 everywhere until then.</div>`;
+  rows.forEach(s=>{
+    html += `<div style="border-top:1px solid #eee;padding:8px 0;">
+      <div style="font-size:12px;font-weight:700;">${s.date} — ${s.buyer||'—'} · ${wasteTypeDisplay(s.wasteType)} · ${s.kgSold} KG${s.slipSerialNo?` · slip #${s.slipSerialNo}`:''}${s.gatePassNo?` · ${s.gatePassNo}`:''}</div>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:6px;">
+        <input type="number" id="rp_${s.id}" step="0.5" min="0.5" placeholder="Rs./KG" style="flex:1;margin-bottom:0;"/>
+        <button class="btn" style="background:#8a6d1a;color:#fff;white-space:nowrap;" onclick="applyPendingRate(${JSON.stringify(s.id)})">💰 Price it</button>
+      </div>
+    </div>`;
+  });
+  html += `</div>`;
+  return html;
+}
+function applyPendingRate(saleId){
+  if(!requireLiveCloud('Wastage rate entry')) return;
+  if(!isAdminOrOwner()){ alert('Admin/Owner only.'); return; }
+  const s = (state.sales||[]).find(x=>x && x.id===saleId && x.ratePending && !x.voided);
+  if(!s){ alert('Sale not found or already priced.'); return; }
+  const rate = +document.getElementById('rp_'+saleId)?.value || 0;
+  if(!(rate>0)){ alert('Enter the negotiated rate (Rs./KG).'); return; }
+  const total = s.kgSold * rate;
+  if(!confirm('Price this sale?\n\n'+s.buyer+' — '+s.kgSold+' KG '+wasteTypeDisplay(s.wasteType)+' @ Rs.'+rate+'/KG = Rs.'+total.toFixed(0)+'\n\nPayment is recorded as collected in full (no credit sales).')) return;
+  state.sales = state.sales.map(x=>x.id===saleId?{...x,
+    pricePerKg:rate, totalAmount:total, amountReceived:total, payment:'Paid',
+    ratePending:false, ratePricedBy:(currentUser?.name||'Admin'), ratePricedAt:new Date().toISOString()
+  }:x);
+  saveAll(); re();
+}
+
 function openSaleModal(){
   const stock = getWasteTypeStock();
   state.saleModal = {stock, slipFile:null, slipUrl:null, slipReadKg:null, slipDate:null, slipSerialNo:null, slipCNo:null, slipUploadPromise:null, slipUploadFailed:false, readStatus:'none', manualOverrideUsed:false};
@@ -6413,12 +6452,14 @@ function openSaleModal(){
       <div style="font-size:11px;color:#a0522d;margin-bottom:6px;">⚠️ This slip couldn't be confidently read. As ${isAdmin?'Admin/Owner':'a regular user'}, ${isAdmin?'you may enter the weight manually — this gets recorded as an admin override, permanently, on this sale.':'you cannot enter this manually. Please retake a clearer photo, or ask an Admin/Owner to complete this sale.'}</div>
       ${isAdmin?`<button type="button" class="btn" style="background:#e67e22;font-size:12px;" onclick="enableManualKgOverride()">🔓 Enter KG manually (Admin override)</button>`:''}
     </div>
-    <div class="label">Price per KG (Rs.) <span style="color:#888;font-weight:400;text-transform:none;">— fixed, set by Admin in Wastage tab</span></div>
-    <input type="number" id="salePrice" readonly style="background:#f0f0f0;color:#555;" placeholder="No price set for this type"/>
-    <div id="salePriceNote" style="font-size:11px;margin:2px 0 8px;"></div>
+    ${isAdmin?`<div class="label">Price per KG (Rs.) <span style="color:#888;font-weight:400;text-transform:none;">— negotiated with this buyer</span></div>
+    <input type="number" id="salePrice" step="0.5" min="0.5" placeholder="Rate agreed with buyer"/>
+    <div id="salePriceNote" style="font-size:11px;margin:2px 0 8px;"></div>`
+    :`<div style="background:#fff8e1;border:1px solid #e0b84c;border-radius:8px;padding:10px;margin:6px 0 10px;font-size:11px;color:#8a6d1a;"><b>⏳ Rate entered by Admin.</b> Wastage rates are negotiated per buyer — this challan records type, buyer and slip weight only. The sale saves as RATE PENDING and appears on the Admin dashboard for pricing; it carries no amount until then.</div>`}
     <div class="label">Sale Date</div>
     <input type="date" id="saleDate" value="${new Date().toISOString().slice(0,10)}" max="${new Date().toISOString().slice(0,10)}" title="Date of sale — can be back-dated (never future). Date of ENTRY is stamped automatically and cannot be changed."/>
-    <div style="background:#e8f5e9;border-radius:6px;padding:8px;font-size:11px;color:#27ae60;font-weight:700;">✅ Payment collected in full at time of sale</div>`;
+    ${isAdmin?`<div style="background:#e8f5e9;border-radius:6px;padding:8px;font-size:11px;color:#27ae60;font-weight:700;">✅ Payment collected in full at time of sale</div>`
+    :`<div style="background:#f0f0f0;border-radius:6px;padding:8px;font-size:11px;color:#666;">Quantity challan only — rate and payment are recorded when Admin prices this sale.</div>`}`;
   document.getElementById('saleModal').classList.remove('hidden');
   updateSaleTypeAvailable();
 }
@@ -6641,14 +6682,14 @@ function updateSaleTypeAvailable(){
   if(note) note.textContent = `Available to sell: ${stock.available[type].toFixed(1)} KG`;
   const kgInput = document.getElementById('saleKg');
   if(kgInput) kgInput.max = stock.available[type];
-  // Fixed price display — read-only, sourced from the Admin-set catalog, never editable here.
+  // 03/10: rates are negotiated per buyer. For Admin/Owner the catalog price only PREFILLS
+  // as a suggestion (editable); staff have no price field at all (rate entered by Admin later).
   const priceInput = document.getElementById('salePrice');
   const priceNote = document.getElementById('salePriceNote');
   const fixedPrice = getWastagePrice(type);
-  if(priceInput) priceInput.value = fixedPrice!=null ? fixedPrice : '';
+  if(priceInput && !priceInput.value) priceInput.value = fixedPrice!=null ? fixedPrice : '';
   if(priceNote){
-    if(fixedPrice!=null){ priceNote.innerHTML = `<span style="color:#27ae60;">Rs.${fixedPrice} / KG (fixed)</span>`; }
-    else { priceNote.innerHTML = `<span style="color:#e74c3c;font-weight:700;">⚠️ No price set for ${type} — an Admin/Owner must set it in the Wastage tab before this sale can be recorded.</span>`; }
+    priceNote.innerHTML = fixedPrice!=null ? `<span style="color:#888;">Last standing rate: Rs.${fixedPrice}/KG — change it to today's negotiated rate.</span>` : `<span style="color:#888;">No standing rate on record — enter the negotiated rate.</span>`;
   }
 }
 
@@ -6664,9 +6705,10 @@ async function confirmSale(){
   const wasteType=document.getElementById('saleWasteType')?.value;
   const buyer=document.getElementById('saleBuyer')?.value?.trim();
   const kg=+document.getElementById('saleKg')?.value;
-  // Price is NEVER read from the form — the field is display-only. The fixed Admin-set
-  // catalog price is the single source, so nothing typed or injected can alter it.
-  const price = getWastagePrice(document.getElementById('saleWasteType')?.value);
+  // 03/10: Admin/Owner type the negotiated per-buyer rate; staff sales carry NO rate
+  // (null) and save as ratePending for the Admin dashboard card to price.
+  const _canPrice = isAdminOrOwner();
+  const price = _canPrice ? (+document.getElementById('salePrice')?.value || 0) : null;
   // 21/9 (Owner rule, mirrors purchase back-dating): DATE OF SALE is editable by every
   // role, past-only. DATE OF ENTRY is stamped by the system and can never be changed —
   // any gap between the two is permanently visible.
@@ -6688,7 +6730,7 @@ async function confirmSale(){
   }
   if(!kg||kg<=0){err.textContent="⚠️ Enter KG to sell";err.classList.remove('hidden');return;}
   if(kg>available+0.001){err.textContent=`⚠️ Max available for ${wasteType} is ${available.toFixed(1)} KG`;err.classList.remove('hidden');return;}
-  if(!price||price<=0){err.textContent=`⚠️ No fixed price set for ${wasteType} — an Admin/Owner must set it in the Wastage tab first.`;err.classList.remove('hidden');return;}
+  if(_canPrice && (!price||price<=0)){err.textContent=`⚠️ Enter the rate negotiated with ${buyer||'the buyer'} (Rs./KG).`;err.classList.remove('hidden');return;}
   if(!date){err.textContent="⚠️ Enter sale date";err.classList.remove('hidden');return;}
 
   // Every slip photo must genuinely be saved — wait properly for the upload rather than
@@ -6711,7 +6753,7 @@ async function confirmSale(){
     return;
   }
 
-  const totalAmount=kg*price;
+  const totalAmount = _canPrice ? kg*price : 0;
   const preSnapshot = takeSnapshot(['sales']);
 
   // ---- DUPLICATE SLIP HARD-BLOCK (fraud control, Owner request 13/8; refined 17/9) ----
@@ -6798,9 +6840,11 @@ async function confirmSale(){
   // Every wastage sale is paid in full at the time of recording — no credit sales.
   state.sales=[...(state.sales||[]),{
     id:Date.now()+Math.random(), wasteType,
-    buyer, kgSold:kg, pricePerKg:price, totalAmount,
+    buyer, kgSold:kg, pricePerKg:(_canPrice?price:null), totalAmount,
     amountReceived:totalAmount, pendingAmount:0,
-    payment:'Paid', date, time: new Date().toTimeString().slice(0,5), datetime:new Date().toISOString(),
+    ratePending: !_canPrice, // 03/10: dispatched, awaiting Admin's negotiated rate
+    ratePricedBy: _canPrice ? (currentUser?.name||'Admin') : null, ratePricedAt: _canPrice ? new Date().toISOString() : null,
+    payment: _canPrice ? 'Paid' : 'Rate pending', date, time: new Date().toTimeString().slice(0,5), datetime:new Date().toISOString(),
     entryDate: _todayStr, entryTime: new Date().toTimeString().slice(0,5), // immutable — stamped by the system, no UI can change it
     voided:false,
     status: needsApproval ? 'pending' : 'applied',
@@ -6825,7 +6869,7 @@ async function confirmSale(){
       snapshot: preSnapshot,
       subtitle: buyer + ' — ' + wasteType,
       field1Label: 'KG Sold', field1Value: kg, field1Editable: true,
-      field2Label: 'Total Amount (Rs.)', field2Value: totalAmount, field2Editable: false,
+      field2Label: _canPrice ? 'Total Amount (Rs.)' : 'Rate', field2Value: _canPrice ? totalAmount : 'PENDING — Admin prices it from the dashboard', field2Editable: false,
       onUndo: function(){
         alert('↩️ Sale undone. Please open Sell Wastage again to re-enter.');
       }
@@ -10095,6 +10139,14 @@ function shadowLedgerEntryKey(e){
       if(/^WB/.test(e.batchNo)) return 'wood|'+e.batchNo+'|'+mat;
       if(/^BB/.test(e.batchNo)) return 'brush|'+e.batchNo+'|'+mat;
       if(/^FB/.test(e.batchNo)) return 'rfs|'+e.batchNo+'|'+mat;
+      // 02/10 (first re-treatment run, Gittuk 324 from the rework pool): production batches
+      // born from REWORK-BrushScrap material carry that tag as their batch number, and this
+      // map didn't know the family — the output's real 'finished' receipt was dropped,
+      // deriving 0 against a correctly stored 324 (a shadow false alarm; the books were
+      // exact). Snapshots key every finishedInventory row as wood|batchNo|product, so the
+      // replay must too. Plain 'REWORK' (the retired basket, no hyphen) stays excluded:
+      // its early entries predate ledger discipline and would only resurrect known noise.
+      if(/^REWORK-/.test(e.batchNo)) return 'wood|'+e.batchNo+'|'+mat;
       return null;
     }
     default: return null;
@@ -10364,6 +10416,19 @@ function runSystemWatch(explainedBatches){
   // exactly what caused the 04/09 false-findings incident.
   if(deviceSettled){ state.dataSnapshots = [curr, ...snapshots].slice(0, 84); }
   else { console.warn('System Watch: snapshot NOT stored — device not settled/verified yet'+(typeof listenersFresh!=='undefined'&&!listenersFresh?' (one or more stock listeners stale >30min — old numbers must not become the baseline)':'')); }
+  // 03/10: unpriced material that left the gate is exactly the leak the watch exists for —
+  // a ratePending sale older than 24h files a finding until Admin prices it or Owner voids it.
+  (state.sales||[]).forEach(s=>{
+    if(!s || s.voided || !s.ratePending) return;
+    const ageH = (Date.now() - (Date.parse(s.datetime||s.date)||Date.now())) / 36e5;
+    if(ageH > 24){
+      findings.push(addSystemFinding('rate-pending-overdue', 'rate|'+s.id,
+        `Wastage dispatch unpriced for ${Math.floor(ageH)} hours — ${s.buyer||'?'}, ${s.kgSold} KG ${wasteTypeDisplay(s.wasteType)} (${s.date})`,
+        `This sale left the gate${s.gatePassNo?` on ${s.gatePassNo}`:''} with a challan but no rate, and nobody has priced it in over a day. Until Admin enters the negotiated rate on the dashboard card, it carries Rs.0 in every total — unpriced dispatched material is a revenue leak. Price it, or if the dispatch itself is wrong, the Owner voids it.`,
+        'Dashboard'));
+    }
+  });
+
   // ============ RECEIPT SHADOW (migration S2, added 20/8) ============
   // The future stock system in rehearsal: derive every stock figure from the last snapshot
   // (opening balance) + ledger receipts since, and compare against the app's actual stored
