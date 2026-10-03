@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1791023780766;
+const APP_BUILD = 1791025114314;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -5313,6 +5313,22 @@ function compileActivityData(){
       });
       return {perBatch: agg, reworkPool: pool};
     })(),
+    pendingReworkSummary: (function(){
+      // 03/10: precomputed totals of PENDING rework on the floor, by category and by
+      // product+category, so counts like 'how many Color pcs need processing' are
+      // verifiable dataset figures instead of AI-side sums the verifier must reject.
+      const pend = (state.reworkStock||[]).filter(r=>r && r.status==='pending');
+      const out = { totalPcs:0, lotCount:pend.length, byCategory:{}, byProductCategory:{}, oldestDate:null };
+      pend.forEach(r=>{
+        out.totalPcs += (r.qty||0);
+        out.byCategory[r.category] = (out.byCategory[r.category]||0) + (r.qty||0);
+        const k = r.productName+' | '+r.category;
+        out.byProductCategory[k] = (out.byProductCategory[k]||0) + (r.qty||0);
+        if(r.dateAdded && (!out.oldestDate || r.dateAdded < out.oldestDate)) out.oldestDate = r.dateAdded;
+      });
+      return out;
+    })(),
+    pendingReworkNote:'pendingReworkSummary = pieces sitting UNPROCESSED in the pending rework list (status pending), the floor backlog awaiting Mark Done. byCategory keys are Color/Regmal/Kharab. These are NOT in any stock row yet: Color/Regmal will return to their own batch on completion, Kharab will go to REWORK-BrushScrap material. For \'how many <category> pcs need processing on the floor\' answer from byCategory (or byProductCategory for one product) — these are exact dataset figures.',
     brushLoopNote:'REWORK LOOP RULE (FINAL, 29/9 — mirrors the floor\'s basket tags): FOUR reject categories. COLOR and REGMAL KEEP their batch tag end-to-end: rework returns them to their OWN batch, they re-brush under the same number, and their outcomes are EXACT inside that batch\'s books (colorRegmalInLoop = exact WIP still cycling). ONLY KHARAB loses its tag: it is the batch\'s terminal fate \'sentToRework\' and enters the per-product REWORK pool; pool outcomes are per-product only and estimates for a batch\'s kharab use the pool\'s fate rates, always labeled estimated. KEERE WALA is the only terminal wastage. Since 30/9 there is NO basket stage: completed Kharab goes DIRECTLY to REWORK-BrushScrap-<product> material (counted as poolFreshIn AND downcycledOut in the same step, so stillInPool is always 0), and Wood Finishing re-treats that material in normal production runs at the same size or smaller. once reworked they live in the per-product REWORK pool (batch tag removed, exactly as on the floor) and cycle until each piece ends as pool brush output, Kharab downcycle, or Keere wastage. Use brushLoopByProductBatch.perBatch for per-batch questions (freshIn denominator; closureDelta==0 means balanced) and .reworkPool for the pool (poolFreshIn denominator; internal re-rejects cancel; downcycledOut = pieces pulled from the REWORK basket as raw material for smaller products — a terminal pool fate). NEVER attribute a rework-pool outcome to a specific original batch as FACT — that precision does not exist physically. The ONLY sanctioned way to answer \'total/estimated batch waste including rework pieces\' is perBatch.estimatedFinal: exact first-pass books plus the batch\'s sentToRework allocated by the pool\'s measured fate rates. ALWAYS present those figures with the word \'estimated\' and name the method; exact figures and estimates must never be mixed without labels. WORKLOAD questions may use handledTotal/poolHandled (every pass counts). reclaimedIn = scrap material moved BACK into the pool via the Reclaim action (reverse of Downcycle; arrival-side term of the pool identity) — typically old-era BrushScrap lots found to be physically re-brushable.',
     brushScrapByBatch: (function(){
       // 28/9 (Owner: "brush scrap percentage per batch"): scrap items encode batch+kind+
