@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1791025114314;
+const APP_BUILD = 1791634671419;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -2039,19 +2039,28 @@ function isAdminOrOwner(){
 // Only Admin/Owner may enter a date other than today on data-entry forms. Everyone else's
 // date pickers render disabled (locked to today), AND — since UI can be bypassed — the value
 // is force-clamped to today again at read time before anything is saved.
+function yesterdayStr(){ const d=new Date(); d.setDate(d.getDate()-1); return d.toISOString().slice(0,10); }
 function dateLockAttrs(){
-  // Staff dates stay locked to today (anti-backdating rule); Admin/Owner can back-date.
-  // Future dates are refused for everyone via max (and clamped again on save).
+  // 10/10 Owner rule (supersedes staff locked-to-today): staff may pick TODAY or
+  // YESTERDAY — one day back, never more. Admin/Owner can back-date further. Future
+  // refused for everyone via max (and clamped again at read time; UI can be bypassed).
   const maxAttr = 'max="'+new Date().toISOString().slice(0,10)+'"';
-  return isAdminOrOwner() ? maxAttr : maxAttr+' disabled title="Locked to today — only Admin/Owner can back-date"';
+  return isAdminOrOwner() ? maxAttr : maxAttr+' min="'+yesterdayStr()+'" title="Aaj ya kal ka kaam — one day back maximum"';
 }
 function resolveEntryDate(raw){
-  // Staff: always today. Admin/Owner: any PAST date allowed; future clamped to today for
-  // everyone (12/09 Owner rule — an entry can't happen on a day that hasn't happened).
+  // Staff: today or yesterday only — anything else clamps to today. Admin/Owner: any
+  // PAST date; future clamped to today for everyone (an entry can't happen on a day
+  // that hasn't happened).
   const today = new Date().toISOString().slice(0,10);
-  if(!isAdminOrOwner()) return today;
   if(!raw || !/^\d{4}-\d{2}-\d{2}$/.test(raw)) return today;
-  return raw > today ? today : raw;
+  if(raw > today) return today;
+  if(isAdminOrOwner()) return raw;
+  return raw >= yesterdayStr() ? raw : today;
+}
+// Stamp fields for a record whose chosen work-day is before today: lateness stays visible.
+function latenessStamp(workDate){
+  const today = new Date().toISOString().slice(0,10);
+  return workDate < today ? { lateEntry:true, recordedAt:new Date().toISOString() } : {};
 }
 
 function getDeptPerm(dept){
@@ -2772,6 +2781,7 @@ function recordProduction(){
   if(!wp) return;
   // Back-date lock: non-Admin/Owner always records today, whatever the (disabled) input holds.
   const entryDate = resolveEntryDate(prodDate?.value) || new Date().toISOString().slice(0,10);
+  const _late = latenessStamp(entryDate); // 10/10: one-day window — late runs carry the stamp
 
   // ==================== PHASE 1: CHECK EVERYTHING — NO STATE MUTATION YET ====================
   // Previously, input stock was deducted immediately, before the quality-control fields below
@@ -2927,7 +2937,7 @@ function recordProduction(){
 
   const run={
     id: runId,
-    date:entryDate,
+    date:entryDate, ..._late,
     time:new Date().toTimeString().slice(0,5),
     woodPieceName:wp.name, planksUsed,
     theoreticalPieces:pieces, piecesProduced:actualPieces,
@@ -3157,6 +3167,8 @@ function renderBrushDept(){
       <div class="label">⚙️ Process: ${selected.productName} (${selected.batchNo})</div>
       <div style="font-size:11px;color:#888;margin-bottom:8px;">Available: ${selected.qty} pcs</div>
       <div class="label">Quantity to Process</div>
+      <div class="label">Work day <span style="color:#888;font-weight:400;text-transform:none;">— aaj ya kal ka kaam (max 1 day back)</span></div>
+      <input type="date" id="brushDate" value="${new Date().toISOString().slice(0,10)}" ${dateLockAttrs()} style="margin-bottom:10px;"/>
       <input type="number" id="brushProcessQty" min="1" max="${selected.qty}" placeholder="e.g. 100" oninput="calcBrushSplit()" style="margin-bottom:12px;"/>
 
       <div id="brushSplitSection" class="hidden">
@@ -3323,7 +3335,8 @@ function recordBrushProcessing(){
   // Keere Wala is almost always Gitta — no need to ask for a split, record it directly.
   const wasteTypeSplit = wastageQty>0 && wastageKg>0 ? {Bhusa:0, Patti:0, Gitta:wastageKg} : null;
 
-  const today = new Date().toISOString().slice(0,10);
+  const today = resolveEntryDate(document.getElementById('brushDate')?.value); // 10/10: work-day, one day back max
+  const _late = latenessStamp(today);
   const preSnapshot = takeSnapshot(['finishedInventory','reworkStock','brushScrapLog','wastage','finishedBrushes','scrapInventory','ledger','brushProcessingLog']);
   const brushRunId = Date.now()+Math.random(); // one id links the log row and everything this run creates
   // 30/9 THE WB012 "Only 341 pcs available" ROOT CAUSE: this declaration used to sit BELOW
@@ -3421,7 +3434,7 @@ function recordBrushProcessing(){
     id: brushRunId, date: today, time: new Date().toTimeString().slice(0,5),
     productName: stock.productName, sourceBatch: stock.batchNo, fbBatchNo: (typeof bbNo!=='undefined'?bbNo:null),
     qty: brushMachine, totalInput: total, freshInputPcs: freshPart, reworkInputPcs: reworkPart,
-    colorPcs: color, regmalPcs: regmal, kharabPcs: scrap, kharabToRework: true, keerePcs: wastageQty, voided:false
+    colorPcs: color, regmalPcs: regmal, kharabPcs: scrap, kharabToRework: true, keerePcs: wastageQty, voided:false, ..._late
   }];
 
   addLedgerEntry('finished', stock.productName, stock.batchNo, total, 'OUT', `Sent to Brush Dept for processing`, '');
@@ -3678,6 +3691,8 @@ function renderSocketDept(){
         <b>BOM:</b> 1× ${socketType} + ${screwsPerPiece} screws per piece
       </div>
       <div class="label">Quantity to Process</div>
+      <div class="label">Work day <span style="color:#888;font-weight:400;text-transform:none;">— aaj ya kal (max 1 day back)</span></div>
+      <input type="date" id="socketWorkDate" value="${new Date().toISOString().slice(0,10)}" ${dateLockAttrs()} style="margin-bottom:8px;"/>
       <input type="number" id="socketProcessQty" min="1" max="${selected.qty}" placeholder="e.g. 100" value="${state.socketProcessQty||''}" oninput="state.socketProcessQty=this.value;calcSocketNeed(${JSON.stringify(socketType)},${screwsPerPiece})" style="margin-bottom:8px;"/>
       <div id="socketNeedPreview" style="font-size:12px;color:#3498db;font-weight:700;margin-bottom:10px;"></div>
 
@@ -3892,7 +3907,8 @@ function recordSocketProcessing(){
   if(!socketBatch || socketBatch.qty<socketsNeeded){ if(msgEl){msgEl.textContent=`⚠️ Socket batch ${socketBatchNo} doesn't have enough stock (has ${socketBatch?.qty||0}, need ${socketsNeeded})`;msgEl.className="msg err";} return; }
   if(!screwBatch || screwBatch.qty<screwsNeeded){ if(msgEl){msgEl.textContent=`⚠️ Screw batch ${screwBatchNo} doesn't have enough stock (has ${screwBatch?.qty||0}, need ${screwsNeeded})`;msgEl.className="msg err";} return; }
 
-  const today = new Date().toISOString().slice(0,10);
+  const today = resolveEntryDate(document.getElementById('socketWorkDate')?.value); // 10/10: work-day, one day back max
+  const _late = latenessStamp(today);
   const preSnapshot = takeSnapshot(['finishedBrushes','socketInventory','screwInventory','readyForSale','ledger','socketProcessingLog','batchGenealogy']);
 
   // Deduct finished brushes stock
@@ -3941,7 +3957,7 @@ function recordSocketProcessing(){
   addLedgerEntry('screw', 'Screws', screwBatchNo, screwsNeeded, 'OUT', `Used on ${stock.productName} — Batch ${stock.batchNo}`, '');
 
   state.socketProcessingLog = [...(state.socketProcessingLog||[]), {
-    id: Date.now()+Math.random(), date: today, time: new Date().toTimeString().slice(0,5),
+    id: Date.now()+Math.random(), date: today, ..._late, time: new Date().toTimeString().slice(0,5),
     productName: stock.productName, fbBatchNo: stock.batchNo, outputBatchNo: fbNo, qty,
     socketType, socketBatchNo, socketQty: socketsNeeded,
     screwBatchNo, screwQty: screwsNeeded, voided:false
@@ -9208,6 +9224,8 @@ function submitPacking(){
     _recordPackingVariance(v.batchNo, prod, v.systemQty, v.physicalQty, by, 'pack run');
   });
   const pkNo=getNextBatchNo('PK');
+  const _wd = resolveEntryDate(document.getElementById('packWorkDate')?.value); // 10/10: one-day window
+  const _late = latenessStamp(_wd);
   const now=new Date();
   draws.forEach(d=>{
     const row=(state.readyForSale||[]).find(r=>r.batchNo===d.batchNo && r.productName===prod);
@@ -9217,7 +9235,7 @@ function submitPacking(){
   const srcTxt=draws.map(d=>d.take+' from '+d.batchNo).join(', ');
   const rec={ productName:prod, boxTypeName:bt.name, assortment:bt.assortment||null, pcsPerBox:bt.pcsPerBox, boxes, split:null,
     sourceDraws:draws.map(d=>({batchNo:d.batchNo,qty:d.take,ranOut:!!d.ranOut})), sourceFbBatch:draws.map(d=>d.batchNo).join('+'),
-    date:now.toISOString().slice(0,10), time:now.toTimeString().slice(0,5), by };
+    date:_wd, time:now.toTimeString().slice(0,5), by, ..._late };
   state.packedBoxes=[...(state.packedBoxes||[]),{ id:Date.now()+Math.random(), batchNo:pkNo, ...rec }];
   state.packingLog=[...(state.packingLog||[]),{ id:Date.now()+Math.random(), packBatchNo:pkNo, totalPcs:total, ...rec }];
   addLedgerEntry('packed', prod, pkNo, total, 'IN', boxes+' boxes × '+bt.pcsPerBox+' pcs'+(bt.assortment?' ('+bt.assortment+')':'')+' — '+srcTxt);
@@ -9541,6 +9559,8 @@ function renderPacking(){
     +'<div id="packRowsHolder"></div>'
     +'</div>'
     +'<div id="packPreview" style="font-size:12px;margin:10px 0;"></div>'
+    +'<div class="label">Work day <span style="color:#888;font-weight:400;text-transform:none;">— aaj ya kal (max 1 day back)</span></div>'
+    +'<input type="date" id="packWorkDate" value="'+new Date().toISOString().slice(0,10)+'" '+dateLockAttrs()+' style="margin-bottom:8px;"/>'
     +'<button class="btn btn-full" style="background:#27ae60;color:#fff;" onclick="submitPacking()">📦 Pack</button></div>';
 
     html+='<div class="card"><div class="label">✅ Ready for Sale — by batch</div>'
