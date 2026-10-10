@@ -258,7 +258,7 @@ body.offline-lock .tab-btn{opacity:1;pointer-events:auto;}
 <script>
 // Bumped automatically on every delivery — the auto-updater compares this against the copy
 // currently on GitHub Pages and swaps itself out when a newer one exists.
-const APP_BUILD = 1791634671419;
+const APP_BUILD = 1791637827776;
 
 const SK = {
   materials:"wbt_materials", woodPieces:"wbt_wood_pieces",
@@ -2365,7 +2365,7 @@ function renderProduction(){
           const sel=state.prodSelectedBatch===b.batchNo;
           const isRejected = b.batchNo.includes('-Rejected-');
           const isReworkPool = String(b.batchNo).startsWith('REWORK-BrushScrap-');
-          const brushOrigin = /^(?:WB\d+|REWORK)-(?:BrushScrap|Rejected|Scrap)-(.+)$/.test(String(b.batchNo||''));
+          const brushOrigin = /^(?:WB\d+|REWORK)-(?:BrushScrap|Scrap)-(.+)$/.test(String(b.batchNo||'')) && !isRejected; // 10/10: -Rejected- excluded — pool allows same-size, rejected stock is strictly-smaller-only
           const locked = openTags.has(b.batchNo);
           if(brushOrigin && !locked && !isReworkPool) scrapMoveable++;
           html+=`<div style="display:flex;align-items:stretch;gap:6px;margin-bottom:6px;">
@@ -2373,7 +2373,7 @@ function renderProduction(){
               ? `<span style="display:flex;align-items:center;padding:0 6px;font-size:12px;" title="This IS the rework pool">🧺</span>`
               : brushOrigin && !locked
               ? `<label style="display:flex;align-items:center;padding:0 4px;cursor:pointer;"><input type="checkbox" class="scrapMoveChk" data-batch="${b.batchNo}" data-size="${b.scrapSize}" data-qty="${b.qty}" onchange="updateScrapMoveBtn()"></label>`
-              : `<span style="display:flex;align-items:center;padding:0 6px;font-size:12px;" title="${locked?'Feeding an open production batch — close it first':'Not a brush-origin lot'}">${locked?'🔒':''}</span>`}
+              : `<span style="display:flex;align-items:center;padding:0 6px;font-size:12px;" title="${locked?'Feeding an open production batch — close it first':isRejected?'Rejected bench stock — never pools; run it directly (strictly smaller sizes only)':'Not a brush-origin lot'}">${locked?'🔒':''}</span>`}
             <button class="select-batch-btn scrap ${sel?'selected':''}" style="flex:1;margin-bottom:0;${isReworkPool?'background:#faf6f0;border-color:#a0722c;':''}" onclick="selectProdBatch('${b.batchNo}')">
               <span>${isReworkPool?'<b style="color:#a0722c;">REWORK POOL</b> — ':''}${b.batchNo} <span style="font-size:11px;color:#e67e22;">(${isRejected?'rejected ':''}${b.scrapSize}" ${isRejected?'stock':'scrap'})</span></span>
               <span class="${isReworkPool?'':'orange'}" style="font-weight:700;${isReworkPool?'color:#a0722c;':''}">${b.qty} pcs — ${b.dateAdded}</span>
@@ -3561,7 +3561,7 @@ function reclaimScrapToRework(scrapSize, batchTag){
 function updateScrapMoveBtn(){
   const btn = document.getElementById('scrapMoveBtn');
   if(!btn) return;
-  const boxes = Array.from(document.querySelectorAll('.scrapMoveChk')).filter(c=>c.checked);
+  const boxes = Array.from(document.querySelectorAll('.scrapMoveChk')).filter(c=>c.checked && !String(c.dataset.batch||'').includes('-Rejected-'));
   const pcs = boxes.reduce((s,c)=>s+(+c.dataset.qty||0),0);
   btn.disabled = boxes.length===0;
   btn.textContent = boxes.length===0 ? '↩️ Move selected to Rework — nothing ticked yet'
@@ -3569,7 +3569,7 @@ function updateScrapMoveBtn(){
 }
 function moveSelectedScrapToRework(){
   if(!requireLiveCloud('Move scrap to rework')) return;
-  const boxes = Array.from(document.querySelectorAll('.scrapMoveChk')).filter(c=>c.checked);
+  const boxes = Array.from(document.querySelectorAll('.scrapMoveChk')).filter(c=>c.checked && !String(c.dataset.batch||'').includes('-Rejected-'));
   if(boxes.length===0) return;
   const pcs = boxes.reduce((s,c)=>s+(+c.dataset.qty||0),0);
   if(!confirm('Merge '+boxes.length+' scrap lot'+(boxes.length>1?'s':'')+' ('+pcs+' pcs) into their products\' REWORK-BrushScrap rework material?\n\nThey become re-treatable in Wood Finishing (same size or smaller). Every move is recorded in the ledger.')) return;
@@ -10129,11 +10129,28 @@ async function attachUIScreenshot(finding, retryDelayMs){
   if(typeof renderAutoFixResults==='function') renderAutoFixResults();
 }
 
+// Kinds whose checks RE-TEST the condition every cycle: silence = resolved.
+const RECHECK_KINDS = { 'shadow-mismatch':1, 'loop-leak':1, 'rate-pending-overdue':1 };
+function sweepStaleFindings(){
+  const cutoff = Date.now() - 72*60*60*1000;
+  let n = 0;
+  (state.systemFindings||[]).forEach(f=>{
+    if(f && f.status==='open' && RECHECK_KINDS[f.kind] && (f.lastSeen||f.ts) < cutoff){
+      f.status = 'auto-archived';
+      f.autoArchivedAt = Date.now();
+      n++;
+    }
+  });
+  return n;
+}
 function addSystemFinding(kind, refKey, title, detail, tab){
   // Dedupe: an OPEN finding about the same thing is updated in place, not duplicated —
   // otherwise a persisting problem would flood the inbox every 2 hours.
-  const dupe = (state.systemFindings||[]).find(f=>f.status==='open' && f.kind===kind && f.refKey===refKey);
-  if(dupe){ dupe.lastSeen = Date.now(); dupe.timesSeen = (dupe.timesSeen||1)+1; return dupe; }
+  const dupe = (state.systemFindings||[]).find(f=>(f.status==='open'||f.status==='auto-archived') && f.kind===kind && f.refKey===refKey);
+  if(dupe){
+    if(dupe.status==='auto-archived'){ dupe.status='open'; delete dupe.autoArchivedAt; } // condition returned — back to the live inbox with its history
+    dupe.lastSeen = Date.now(); dupe.timesSeen = (dupe.timesSeen||1)+1; return dupe;
+  }
   const finding = {
     id: Date.now() + Math.random(),
     ts: Date.now(), lastSeen: Date.now(), timesSeen: 1,
@@ -10548,8 +10565,9 @@ function resolveBadBaselineCluster(){
 function renderFindingsInboxHTML(){
   const byNewest = [...(state.systemFindings||[])].sort((a,b)=>(b.ts||0)-(a.ts||0));
   const open = byNewest.filter(f=>f.status==='open');
-  const resolved = byNewest.filter(f=>f.status!=='open').slice(0,5);
-  if(open.length===0 && resolved.length===0){
+  const archived = byNewest.filter(f=>f.status==='auto-archived').slice(0,20);
+  const resolved = byNewest.filter(f=>f.status!=='open' && f.status!=='auto-archived').slice(0,5);
+  if(open.length===0 && archived.length===0 && resolved.length===0){
     return `<div style="font-size:12px;color:#888;">No findings — the watch has nothing waiting for you.</div>`;
   }
   let html = '';
@@ -10582,6 +10600,17 @@ function renderFindingsInboxHTML(){
       </div>
     </div>`;
   });
+  if(archived.length){
+    // 10/10: re-checking kinds silent 72h+ shelve themselves — recorded, reopen on return,
+    // but no longer demanding a press. One-shot kinds (unexplained-change etc.) never land here.
+    html += `<details style="margin-top:8px;"><summary style="font-size:11px;color:#7f8c8d;font-weight:700;cursor:pointer;">🗂 Cleared on their own (${archived.length}) — condition stopped appearing for 72h+, no action needed</summary>
+      ${archived.map(f=>`<div style="background:#f4f6f6;border:1px solid #d5dbdb;border-radius:8px;padding:8px;margin-top:6px;">
+        <div style="font-size:11px;font-weight:700;color:#7f8c8d;">${f.title}</div>
+        <div style="font-size:10px;color:#95a5a6;">First seen ${new Date(f.ts).toLocaleString()} · last ${new Date(f.lastSeen||f.ts).toLocaleString()} · self-cleared ${new Date(f.autoArchivedAt||f.lastSeen||f.ts).toLocaleString()} — reopens by itself if the condition returns</div>
+        <button class="btn" style="background:#bdc3c7;color:#2c3e50;font-size:10px;padding:3px 8px;margin-top:4px;" onclick="resolveSystemFinding(${f.id})">✓ Mark handled anyway</button>
+      </div>`).join('')}
+    </details>`;
+  }
   if(resolved.length){
     html += `<div style="font-size:10px;color:#aaa;margin-top:6px;">Recently handled: ${resolved.map(f=>`${f.title.slice(0,50)}… (by ${f.resolvedBy||'?'})`).join(' · ')}</div>`;
   }
@@ -10685,6 +10714,7 @@ function runAutoFixCycle(){
 
   mergeDuplicateFinishedRows().forEach(n=>applied.push('Stock row consolidation: '+n));
   drainReworkBaskets().forEach(n=>applied.push('Basket retirement: '+n));
+  { const sw = sweepStaleFindings(); if(sw>0) applied.push(`Findings shelf: ${sw} self-cleared finding${sw>1?'s':''} auto-archived (re-checking kind, silent 72h+)`); }
 
   const namePlan = planBatchNameFixes();
   const structural = collectStructuralFixes();
